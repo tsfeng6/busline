@@ -1,0 +1,6 @@
+{
+  "name": "BUS-Line (巴士线路图)",
+  "description": "北京公交线路覆盖地图，可视化展示道路上的公交密度。",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": []
+}
