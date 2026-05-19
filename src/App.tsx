@@ -19,14 +19,128 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapClickHandlerRef = useRef<any>(null);
   const [loading, setLoading] = useState(true);
-  const [zoomLevel, setZoomLevel] = useState(11);
+  const [zoomLevel, setZoomLevel] = useState(() => {
+    const saved = localStorage.getItem('map_zoom');
+    return saved ? parseFloat(saved) : 11;
+  });
   const [selectedSegmentLines, setSelectedSegmentLines] = useState<string[] | null>(null);
   const [selectedStop, setSelectedStop] = useState<any | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [showLargeAreaWarning, setShowLargeAreaWarning] = useState(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
-  const [showStations, setShowStations] = useState(true);
+  const [showStations, setShowStations] = useState(() => {
+    const saved = localStorage.getItem('app_show_stations');
+    return saved === null ? true : saved === 'true';
+  });
+  const [showBaseMap, setShowBaseMap] = useState(() => {
+    const saved = localStorage.getItem('app_show_basemap');
+    return saved === null ? true : saved === 'true';
+  });
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
+  const [language, setLanguage] = useState(() => {
+    return localStorage.getItem('app_lang') || 'zh-CN';
+  });
   const [showToolbox, setShowToolbox] = useState(false);
+  const [mapInstance, setMapInstance] = useState<any>(null);
+
+  // Translation dictionary
+  const translations: Record<string, any> = {
+    'zh-CN': {
+      settings: '设置',
+      general: '通用',
+      about: '关于',
+      language: '语言设置',
+      version: '当前版本',
+      startSearch: '检索',
+      searching: '检索中...',
+      showStations: '显示站点',
+      showBaseMap: '显示底图',
+      stats: '统计',
+      stops: '站点',
+      lines: '线路',
+      searchHint: '放大以进行检索',
+      locate: '定位',
+      level: '缩放',
+      title: '巴士线路图',
+      searchPlaceholder: '搜索公交站、线路...',
+      loadingDetails: '正在加载详情...',
+      connectivity: '查看通达度',
+      noDirection: '暂无方向信息',
+      warning: '线路加载较多，请等待...',
+      initializing: '系统初始化中',
+      lineLabel: '线路',
+    },
+    'zh-TW': {
+      settings: '設置',
+      general: '通用',
+      about: '關於',
+      language: '語言設置',
+      version: '當前版本',
+      startSearch: '檢索',
+      searching: '檢索中...',
+      showStations: '顯示站點',
+      showBaseMap: '顯示底圖',
+      stats: '統計',
+      stops: '站點',
+      lines: '線路',
+      searchHint: '放大以進行檢索',
+      locate: '定位',
+      level: '縮放',
+      title: '巴士線路圖',
+      searchPlaceholder: '搜索公交站、線路...',
+      loadingDetails: '正在加載詳情...',
+      connectivity: '查看通達度',
+      noDirection: '暫無方向信息',
+      warning: '線路加載較多，請等待...',
+      initializing: '系統初始化中',
+      lineLabel: '線路',
+    },
+    'en': {
+      settings: 'Settings',
+      general: 'General',
+      about: 'About',
+      language: 'Language',
+      version: 'Version',
+      startSearch: 'Search',
+      searching: 'Searching...',
+      showStations: 'Stations',
+      showBaseMap: 'Base Map',
+      stats: 'Stats',
+      stops: 'Stops',
+      lines: 'Lines',
+      searchHint: 'Zoom to search',
+      locate: 'Locate',
+      level: 'Level',
+      title: 'busline',
+      searchPlaceholder: 'Search stops, lines...',
+      loadingDetails: 'loading details...',
+      connectivity: 'connectivity',
+      noDirection: 'no direction data',
+      warning: 'high load, please wait...',
+      initializing: 'initializing system',
+      lineLabel: 'line',
+    }
+  };
+
+  const t = (key: string) => {
+    const val = translations[language]?.[key] || translations['zh-CN'][key];
+    if (language === 'en') {
+      // For English, ensure lowercase as requested for 'busline' and other labels
+      if (key === 'title') return 'busline';
+      if (key === 'lineLabel') return 'line';
+      if (key === 'loadingDetails') return 'loading details...';
+      if (key === 'noDirection') return 'no direction data';
+      if (key === 'warning') return 'high load, please wait...';
+      if (key === 'initializing') return 'initializing system';
+      if (key === 'connectivity') return 'connectivity';
+    }
+    return val;
+  };
+
+  useEffect(() => {
+    localStorage.setItem('app_lang', language);
+  }, [language]);
   const [baseMapVisible, setBaseMapVisible] = useState(true);
   const [selectionPos, setSelectionPos] = useState<[number, number] | null>(null);
   const [selectedSegmentName, setSelectedSegmentName] = useState<string | null>(null);
@@ -68,9 +182,13 @@ export default function App() {
       const polyline = new AMap.Polyline({
         path: path,
         strokeColor: clear ? '#3b82f6' : getRandomPastelColor(),
-        strokeWeight: 8,
+        strokeWeight: 5,
         strokeOpacity: 0.8,
         lineJoin: 'round',
+        lineCap: 'round',
+        isOutline: true,
+        outlineColor: '#ffffff',
+        borderWeight: 1.5,
         zIndex: 50
       });
       lineGroupRef.current.addOverlay(polyline);
@@ -81,10 +199,10 @@ export default function App() {
       const markers = line.via_stops.map((stop: any) => {
         const marker = new AMap.CircleMarker({
           center: [stop.location.lng, stop.location.lat],
-          radius: 8,
+          radius: 6,
           fillColor: '#3b82f6',
           strokeColor: '#fff',
-          strokeWeight: 2,
+          strokeWeight: 1.5,
           zIndex: 60,
           cursor: 'pointer'
         });
@@ -92,7 +210,7 @@ export default function App() {
           setSelectionPos([stop.location.lng, stop.location.lat]);
           setSelectedStop({
             name: stop.name,
-            address: '正在加载详情...',
+            address: t('loadingDetails'),
             lines: [],
             city: currentCity
           });
@@ -253,7 +371,7 @@ export default function App() {
               }
             }
 
-            const lines = (bestPoi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0);
+            const lines = (bestPoi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间'));
             if (lines.length > 0) {
               safeResolve({
                 name: bestPoi.name,
@@ -267,6 +385,51 @@ export default function App() {
         });
       });
     });
+  };
+
+  const onStopClick = async (item: any) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const AMap = (window as any).AMap;
+    if (!AMap) return;
+
+    if (item.location) {
+      map.setCenter([item.location.lng, item.location.lat]);
+      if (map.getZoom() < 16) map.setZoom(16);
+      setSelectionPos([item.location.lng, item.location.lat]);
+    }
+    
+    setSelectedStop({
+      name: item.name,
+      address: t('loadingDetails'),
+      lines: [],
+      city: currentCity
+    });
+
+    const pos = item.location ? [item.location.lng, item.location.lat] : (selectionPos || [0, 0]);
+    const details = await fetchStopDetails(item.name, pos as [number, number], AMap, currentCity);
+    if (details) {
+      setSelectedStop({ ...details, city: currentCity });
+    } else {
+      setSelectedStop({
+        name: item.name,
+        address: item.address,
+        lines: (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间')),
+        city: currentCity
+      });
+    }
+  };
+
+  const toggleStations = () => {
+    const next = !showStations;
+    setShowStations(next);
+    localStorage.setItem('app_show_stations', next.toString());
+  };
+
+  const toggleBaseMap = () => {
+    const next = !showBaseMap;
+    setShowBaseMap(next);
+    localStorage.setItem('app_show_basemap', next.toString());
   };
 
   const handleManualSearch = async (item: any) => {
@@ -322,7 +485,7 @@ export default function App() {
       
       setSelectedStop({
         name: item.name,
-        address: '正在加载详情...',
+        address: t('loadingDetails'),
         lines: [],
         city: currentCity
       });
@@ -335,7 +498,7 @@ export default function App() {
         setSelectedStop({
           name: item.name,
           address: item.address,
-          lines: (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0),
+          lines: (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间')),
           city: currentCity
         });
       }
@@ -363,15 +526,18 @@ export default function App() {
       return;
     }
 
+    const AMap = (window as any).AMap;
+    if (!AMap || !AMap.AutoComplete) return;
+
     const currentSearchId = ++searchIdRef.current;
 
     if (!autoCompleteRef.current) {
-      autoCompleteRef.current = new (window as any).AMap.AutoComplete({
+      autoCompleteRef.current = new AMap.AutoComplete({
         city: currentCity || '全国',
         citylimit: false
       });
     }
-
+    
     // Parallel search for better results
     const fetchTips = new Promise<any[]>((resolve) => {
       autoCompleteRef.current.search(val, (status: string, result: any) => {
@@ -386,7 +552,8 @@ export default function App() {
     const isLineQuery = (val.match(/^[A-Za-z0-9]+[路线环]$/) || (val.match(/^\d+$/)) || val.match(/^[兴通顺房门昌平大平]\d+/)) && 
                         !val.includes('站') && !val.includes('门') && !val.includes('口');
     const fetchLines = isLineQuery ? new Promise<any[]>((resolve) => {
-      const lineSearch = new (window as any).AMap.LineSearch({
+      if (!AMap.LineSearch) { resolve([]); return; }
+      const lineSearch = new AMap.LineSearch({
         pageIndex: 1,
         city: currentCity || '全国',
         pageSize: 10,
@@ -446,6 +613,10 @@ export default function App() {
     setLoading(true);
 
     const AMap = (window as any).AMap;
+    if (!AMap) {
+      setLoading(false);
+      return;
+    }
     const isLineQuery = (query.match(/^[A-Za-z0-9]+[路线环]$/) || (query.match(/^\d+$/)) || query.match(/^[兴通顺房门昌平大平]\d+/)) && 
                         !query.includes('站') && !query.includes('口');
 
@@ -564,20 +735,39 @@ export default function App() {
   useEffect(() => {
     let map: any;
 
+    const amapLang = language === 'zh-TW' ? 'zh_tw' : (language === 'en' ? 'en' : 'zh_cn');
+
     AMapLoader.load({
       key: AMAP_KEY,
       version: '2.0',
       plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation'],
     }).then((AMap) => {
+      const savedCenter = localStorage.getItem('map_center');
+      let initialCenter = [116.331398, 39.717646];
+      if (savedCenter) {
+        try {
+          initialCenter = JSON.parse(savedCenter);
+          if (!Array.isArray(initialCenter) || initialCenter.length < 2) {
+            initialCenter = [116.331398, 39.717646];
+          }
+        } catch (e) {
+          console.error('Invalid saved map center', e);
+        }
+      }
+      const savedZoom = localStorage.getItem('map_zoom');
+      const initialZoom = savedZoom ? parseFloat(savedZoom) : zoomLevel;
+
       map = new AMap.Map(containerRef.current, {
-        center: [116.331398, 39.717646], 
-        zoom: zoomLevel,
+        center: initialCenter, 
+        zoom: initialZoom,
         viewMode: '2D',
         mapStyle: 'amap://styles/light', 
-        features: ['bg', 'point', 'road', 'building']
+        features: ['bg', 'point', 'road', 'building'],
+        lang: amapLang
       });
 
       mapRef.current = map;
+      setMapInstance(map);
       
       map.getCity((res: any) => {
         if (res.city || res.province) {
@@ -591,34 +781,69 @@ export default function App() {
 
       setLoading(false);
 
+      const saveMapState = () => {
+        if (!map) return;
+        const center = map.getCenter();
+        const zoom = map.getZoom();
+        localStorage.setItem('map_center', JSON.stringify([center.lng, center.lat]));
+        localStorage.setItem('map_zoom', zoom.toString());
+      };
+
       map.on('moveend', () => {
         map.getCity((res: any) => {
           if (res.city || res.province) {
             setCurrentCity(res.city || res.province);
           }
         });
+        saveMapState();
       });
 
       map.on('zoomend', () => {
         const newZoom = map.getZoom();
         setZoomLevel((prevZoom) => {
-          // Lower threshold for auto-clear to prevent issues during fitView
           if (newZoom < 10) {
             handleClear();
           }
           return newZoom;
         });
+        saveMapState();
       });
+
+      mapClickHandlerRef.current = (e: any) => {
+        if (map.getZoom() < 14) return;
+        const [lng, lat] = [e.lnglat.getLng(), e.lnglat.getLat()];
+        
+        const geocoder = new AMap.Geocoder();
+        geocoder.getAddress([lng, lat], (status: string, result: any) => {
+          if (status === 'complete' && result.info === 'OK') {
+            const pois = result.regeocode.pois || [];
+            const busStop = pois.find((p: any) => p.type.includes('公交车站'));
+            if (busStop) {
+              onStopClick({
+                name: busStop.name,
+                location: busStop.location,
+                address: busStop.address
+              });
+            }
+          }
+        });
+      };
+      
+      map.on('click', mapClickHandlerRef.current);
     }).catch(e => {
       console.error(e);
       setLoading(false);
     });
 
     return () => {
-      if (map) map.destroy();
+      if (map) {
+        if (mapClickHandlerRef.current) map.off('click', mapClickHandlerRef.current);
+        map.destroy();
+      }
     };
-  }, []);
+  }, [language]);
 
+  // Controlling visibility of station markers
   useEffect(() => {
     if (markerGroupRef.current) {
       if (showStations) {
@@ -627,7 +852,48 @@ export default function App() {
         markerGroupRef.current.hide();
       }
     }
-  }, [showStations]);
+  }, [showStations, mapInstance]);
+
+  // Initial markers search if stations are shown on load could be handled here or just wait for map click/search button
+  // Removing the effect that called handleSearch on showStations toggle
+
+  // Recover selected stop and lines if map recreates
+  useEffect(() => {
+    if (mapInstance && selectedStop) {
+      // Normalize location: could be {lng, lat} or selectionPos [lng, lat]
+      const pos = selectedStop.location ? 
+        (Array.isArray(selectedStop.location) ? { lng: selectedStop.location[0], lat: selectedStop.location[1] } : selectedStop.location) : 
+        (selectionPos ? { lng: selectionPos[0], lat: selectionPos[1] } : null);
+        
+      if (pos) {
+        onStopClick({
+          name: selectedStop.name,
+          location: pos,
+          address: selectedStop.address
+        });
+      }
+    }
+  }, [mapInstance]);
+
+  // Handle Base Map Visibility using AMap features
+  useEffect(() => {
+    if (!mapInstance) return;
+    try {
+      const layers = mapInstance.getLayers();
+      if (showBaseMap) {
+        if (layers[0]) layers[0].setOpacity(1);
+        mapInstance.setFeatures(['bg', 'point', 'road', 'building']);
+        mapInstance.setMapStyle('amap://styles/light');
+      } else {
+        // Completely hidden features and tile layer for "blank" effect
+        if (layers[0]) layers[0].setOpacity(0);
+        mapInstance.setFeatures([]);
+        mapInstance.setMapStyle('amap://styles/whitesmoke');
+      }
+    } catch (e) {
+      // Ignore errors if map is being destroyed
+    }
+  }, [showBaseMap, mapInstance]);
 
   const handleSearch = async () => {
     const map = mapRef.current;
@@ -742,7 +1008,7 @@ export default function App() {
             setSelectedStop({
               name: poi.name,
               address: poi.address,
-              lines: (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0),
+              lines: (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间')),
               city: currentCity
             });
           });
@@ -754,7 +1020,7 @@ export default function App() {
         const lineNamesSet = new Set<string>();
         pois.forEach((poi: any) => {
           const linesString = poi.address || '';
-          const lines = linesString.split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0);
+          const lines = linesString.split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间'));
           lines.forEach((l: string) => lineNamesSet.add(l));
         });
 
@@ -1107,17 +1373,73 @@ export default function App() {
       colorGroups.get(color)!.push(displayPath);
     });
 
+    const joinSegments = (paths: Array<[number, number][]>) => {
+      if (paths.length === 0) return [];
+      const result: Array<[number, number][]> = [];
+      const remaining = new Set<number>();
+      for (let i = 0; i < paths.length; i++) remaining.add(i);
+      
+      while (remaining.size > 0) {
+        let firstIdx = -1;
+        for (const idx of remaining) { firstIdx = idx; break; }
+        remaining.delete(firstIdx);
+        const currentPath = [...paths[firstIdx]];
+        
+        let found = true;
+        while (found) {
+          found = false;
+          const start = currentPath[0];
+          const end = currentPath[currentPath.length - 1];
+          
+          for (const idx of remaining) {
+            const p = paths[idx];
+            const pStart = p[0];
+            const pEnd = p[p.length - 1];
+            
+            const epsilon = 1e-7;
+            if (Math.abs(pEnd[0] - start[0]) < epsilon && Math.abs(pEnd[1] - start[1]) < epsilon) {
+              currentPath.unshift(...p.slice(0, -1));
+              remaining.delete(idx);
+              found = true;
+              break;
+            } else if (Math.abs(pStart[0] - end[0]) < epsilon && Math.abs(pStart[1] - end[1]) < epsilon) {
+              currentPath.push(...p.slice(1));
+              remaining.delete(idx);
+              found = true;
+              break;
+            } else if (Math.abs(pStart[0] - start[0]) < epsilon && Math.abs(pStart[1] - start[1]) < epsilon) {
+              currentPath.unshift(...[...p].reverse().slice(0, -1));
+              remaining.delete(idx);
+              found = true;
+              break;
+            } else if (Math.abs(pEnd[0] - end[0]) < epsilon && Math.abs(pEnd[1] - end[1]) < epsilon) {
+              currentPath.push(...[...p].reverse().slice(1));
+              remaining.delete(idx);
+              found = true;
+              break;
+            }
+          }
+        }
+        result.push(currentPath);
+      }
+      return result;
+    };
+
     const allOverlays: any[] = [];
     colorGroups.forEach((paths, color) => {
+      const joinedPaths = joinSegments(paths);
       const polyline = new AMap.Polyline({
-        path: paths,
+        path: joinedPaths,
         strokeColor: color,
         strokeWeight: 6,
         strokeOpacity: 0.9,
         lineJoin: 'round',
         lineCap: 'round',
+        isOutline: true,
+        outlineColor: '#ffffff',
+        borderWeight: 1.5,
         bubble: true,
-        zIndex: 10
+        zIndex: color === '#ef4444' ? 15 : (color === '#eab308' ? 12 : 10)
       });
       allOverlays.push(polyline);
     });
@@ -1219,17 +1541,6 @@ export default function App() {
     }
   };
 
-  const toggleBaseMap = () => {
-    if (!mapRef.current) return;
-    const nextValue = !baseMapVisible;
-    setBaseMapVisible(nextValue);
-    if (nextValue) {
-      mapRef.current.setMapStyle('amap://styles/whitesmoke');
-    } else {
-      mapRef.current.setMapStyle('amap://styles/grey');
-    }
-  };
-
   const getDistSq = (p1: [number, number], p2: [number, number]) => {
     const dx = p1[0] - p2[0];
     const dy = p1[1] - p2[1];
@@ -1303,7 +1614,7 @@ export default function App() {
               </svg>
             </div>
             <div className="flex flex-col justify-center h-full">
-              <h1 className="text-base font-black tracking-tighter text-slate-800 leading-none">巴士线路图</h1>
+              <h1 className="text-base font-black tracking-tighter text-slate-800 leading-none">{t('title')}</h1>
             </div>
           </div>
 
@@ -1312,7 +1623,7 @@ export default function App() {
               <div className="backdrop-blur-xl bg-white border border-white px-4 py-2.5 rounded-l-2xl shadow-lg flex items-center gap-3 w-64 transition-all focus-within:w-80 group-focus-within:bg-white group-focus-within:ring-2 group-focus-within:ring-blue-500/20">
                 <input 
                   type="text" 
-                  placeholder="搜索公交站、线路..." 
+                  placeholder={t('searchPlaceholder')} 
                   className="bg-transparent border-none outline-none text-sm font-black text-slate-700 w-full placeholder:text-slate-400 placeholder:font-medium"
                   value={searchQuery}
                   onChange={(e) => onSearchInputChange(e.target.value)}
@@ -1359,7 +1670,7 @@ export default function App() {
                           <span className="text-xs font-black text-slate-800">{tip.name}</span>
                           {tip.type === 'busline' && (
                             <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-[8px] font-black text-blue-600 uppercase tracking-tighter shadow-sm border border-blue-100">
-                              线路
+                              {t('lineLabel')}
                             </span>
                           )}
                         </div>
@@ -1374,24 +1685,6 @@ export default function App() {
         </div>
 
         <AnimatePresence>
-          {zoomLevel < 12 && !loading && (
-            <motion.div 
-              initial={{ y: -10, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: -10, opacity: 0 }}
-              className="absolute top-24 space-y-4 right-6 z-20 pointer-events-auto"
-            >
-              <div className="backdrop-blur-xl bg-white/90 border border-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3 border-b-4 border-b-blue-500/50 w-full min-w-[200px]">
-                <div className="w-8 h-8 bg-blue-50 rounded-full flex items-center justify-center shrink-0">
-                  <ZoomIn className="w-4 h-4 text-blue-500" />
-                </div>
-                <h3 className="font-bold text-slate-800 text-[13px] whitespace-nowrap">请放大地图以开始检索</h3>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
           {showLargeAreaWarning && isSearching && (
             <motion.div 
               initial={{ y: -10, opacity: 0 }}
@@ -1403,7 +1696,7 @@ export default function App() {
                 <div className="w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center shrink-0">
                   <Loader2 className="w-4 h-4 text-amber-600 animate-spin" />
                 </div>
-                <h3 className="font-bold text-amber-800 text-[13px] whitespace-nowrap">警告！线路加载较多，请等待...</h3>
+                <h3 className="font-bold text-amber-800 text-[13px] whitespace-nowrap">{t('warning')}</h3>
               </div>
             </motion.div>
           )}
@@ -1411,7 +1704,7 @@ export default function App() {
       </header>
 
       <main className="relative flex-1">
-        <div ref={containerRef} className="w-full h-full" id="amap-container" />
+        <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
 
         {loading && (
           <div className="absolute inset-0 bg-white/40 backdrop-blur-md z-30 flex items-center justify-center">
@@ -1420,7 +1713,7 @@ export default function App() {
                 <Loader2 className="w-12 h-12 text-blue-600 animate-spin" />
                 <Bus className="w-5 h-5 text-blue-600 absolute inset-0 m-auto" />
               </div>
-              <p className="font-bold text-slate-600 tracking-widest uppercase text-xs">Initializing System</p>
+              <p className="font-bold text-slate-600 tracking-widest uppercase text-xs">{t('initializing')}</p>
             </div>
           </div>
         )}
@@ -1429,7 +1722,7 @@ export default function App() {
 
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4">
           <AnimatePresence>
-            {stats.lines > 0 && (
+            {(stats.stops > 0 || stats.lines > 0) && (
               <motion.div
                 initial={{ x: 20, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
@@ -1437,14 +1730,15 @@ export default function App() {
                 className="backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl flex items-center gap-3 pointer-events-auto h-14"
               >
                 <div className="flex flex-col">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">显示站点</span>
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showStations')}</span>
                   <span className="text-[10px] font-bold text-slate-800 leading-none">{showStations ? 'ON' : 'OFF'}</span>
                 </div>
                 <button 
-                  onClick={() => setShowStations(!showStations)}
+                  onClick={toggleStations}
                   className={`w-10 h-5 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
                 >
                   <motion.div 
+                    layout
                     animate={{ x: showStations ? 20 : 0 }}
                     className="w-3 h-3 bg-white rounded-full shadow-sm"
                   />
@@ -1453,20 +1747,82 @@ export default function App() {
             )}
           </AnimatePresence>
 
-          <button 
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl flex items-center gap-3 pointer-events-auto h-14"
+          >
+            <div className="flex flex-col">
+              <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showBaseMap')}</span>
+              <span className="text-[10px] font-bold text-slate-800 leading-none">{showBaseMap ? 'ON' : 'OFF'}</span>
+            </div>
+            <button 
+              onClick={toggleBaseMap}
+              className={`w-10 h-5 rounded-full transition-all relative flex items-center px-1 ${showBaseMap ? 'bg-blue-500' : 'bg-slate-300'}`}
+            >
+              <motion.div 
+                layout
+                animate={{ x: showBaseMap ? 20 : 0 }}
+                className="w-3 h-3 bg-white rounded-full shadow-sm"
+              />
+            </button>
+          </motion.div>
+
+          <motion.button 
+            layout
             onClick={handleSearch}
             disabled={isSearching || zoomLevel < 12}
-            className={`backdrop-blur-xl border px-10 py-4 rounded-3xl shadow-2xl flex items-center gap-3 text-sm font-black tracking-widest uppercase transition-all
-              ${isSearching ? 'bg-amber-500/10 border-amber-200 text-amber-600 cursor-wait' : 
-                zoomLevel < 12 ? 'bg-slate-50/50 border-slate-200 text-slate-400 cursor-not-allowed opacity-50 shadow-none' : 
-                'bg-blue-600 border-blue-500 text-white hover:bg-blue-700 active:scale-95 hover:shadow-blue-500/25'}`}
+            initial={false}
+            animate={{ 
+              scale: 1,
+              opacity: loading ? 0 : 1,
+              backgroundColor: isSearching ? 'rgba(245, 158, 11, 0.1)' : (zoomLevel < 12 ? 'rgba(241, 245, 241, 0.5)' : 'rgba(37, 99, 235, 1)')
+            }}
+            whileHover={!isSearching && zoomLevel >= 12 ? { scale: 1.02, backgroundColor: 'rgba(29, 78, 216, 1)' } : {}}
+            whileTap={!isSearching && zoomLevel >= 12 ? { scale: 0.98 } : {}}
+            className={`backdrop-blur-xl border px-8 py-4 rounded-3xl shadow-xl flex items-center gap-3 text-sm font-black tracking-tight uppercase transition-colors
+              ${isSearching ? 'border-amber-200 text-amber-600 cursor-wait' : 
+                zoomLevel < 12 ? 'border-slate-200 text-slate-400 cursor-not-allowed' : 
+                'border-blue-500 text-white shadow-blue-500/20'}`}
           >
-            {isSearching ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
-            {isSearching ? '检索中...' : '开始检索'}
-          </button>
+            <AnimatePresence mode="wait">
+              {isSearching ? (
+                <motion.div
+                  key="loader"
+                  initial={{ rotate: 0, opacity: 0 }}
+                  animate={{ rotate: 360, opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ rotate: { repeat: Infinity, duration: 1, ease: 'linear' } }}
+                >
+                  <Loader2 className="w-5 h-5" />
+                </motion.div>
+              ) : zoomLevel < 12 ? (
+                <motion.div
+                  key="zoom"
+                  initial={{ scale: 0.5, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.5, opacity: 0 }}
+                >
+                  <ZoomIn className="w-5 h-5" />
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="search"
+                  initial={{ scale: 0.5, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.5, opacity: 0 }}
+                >
+                  <Search className="w-5 h-5" />
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <motion.span layout className="whitespace-nowrap">
+              {isSearching ? t('searching') : (zoomLevel < 12 ? t('searchHint') : t('startSearch'))}
+            </motion.span>
+          </motion.button>
           
           <AnimatePresence>
-            {stats.lines > 0 && (
+            {(stats.stops > 0 || stats.lines > 0) && (
               <motion.button 
                 initial={{ scale: 0, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
@@ -1480,44 +1836,187 @@ export default function App() {
           </AnimatePresence>
         </div>
 
+        {/* Settings Toggle button */}
+        <div className="fixed right-6 top-1/2 -translate-y-1/2 z-50 pointer-events-none">
+          <button 
+            onClick={() => {
+              setSettingsTab('general');
+              setShowSettings(true);
+            }}
+            className="backdrop-blur-xl bg-white/90 border border-white/50 w-14 h-14 rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.15)] flex items-center justify-center text-slate-700 hover:text-blue-600 hover:bg-white transition-all active:scale-90 pointer-events-auto group"
+          >
+            <Settings className="w-6 h-6 transition-transform group-hover:rotate-90 duration-500" />
+          </button>
+        </div>
+
+        {/* Settings Modal */}
+        <AnimatePresence>
+          {showSettings && (
+            <>
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowSettings(false)}
+                className="fixed inset-0 z-[100] bg-slate-900/10 backdrop-blur-md pointer-events-auto"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[101] w-[460px] max-w-[90vw] h-[340px] backdrop-blur-3xl bg-white/80 border border-white/50 rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
+              >
+                <div className="flex h-full">
+                  <div className="w-36 bg-slate-50/50 border-r border-slate-100 flex flex-col p-3 gap-1">
+                    <div className="px-3 py-4 mb-2">
+                       <h2 className="text-[10px] font-black text-slate-900 uppercase tracking-[0.2em]">{t('settings')}</h2>
+                    </div>
+                    <button 
+                      onClick={() => setSettingsTab('general')}
+                      className={`px-4 py-2.5 rounded-xl text-left text-xs font-bold transition-all ${settingsTab === 'general' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:bg-slate-200/50'}`}
+                    >
+                      {t('general')}
+                    </button>
+                    <button 
+                      onClick={() => setSettingsTab('about')}
+                      className={`px-4 py-2.5 rounded-xl text-left text-xs font-bold transition-all ${settingsTab === 'about' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:bg-slate-200/50'}`}
+                    >
+                      {t('about')}
+                    </button>
+                    <div className="mt-auto p-2">
+                       <button 
+                         onClick={() => setShowSettings(false)}
+                         className="w-full py-2 bg-slate-200/50 hover:bg-slate-200 text-slate-600 rounded-xl text-[10px] font-black transition-colors uppercase tracking-widest"
+                       >
+                         CLOSE
+                       </button>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 p-8 overflow-y-auto">
+                    {settingsTab === 'general' ? (
+                      <div className="space-y-6">
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between p-1">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-slate-700">{t('showStations')}</span>
+                              <span className="text-[10px] text-slate-400">{showStations ? 'ON' : 'OFF'}</span>
+                            </div>
+                            <button 
+                              onClick={toggleStations}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: showStations ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-1">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-slate-700">{t('showBaseMap')}</span>
+                              <span className="text-[10px] text-slate-400">{showBaseMap ? 'ON' : 'OFF'}</span>
+                            </div>
+                            <button 
+                              onClick={toggleBaseMap}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showBaseMap ? 'bg-blue-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: showBaseMap ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="h-px bg-slate-100 w-full" />
+
+                        <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-4">{t('language')}</label>
+                          <div className="flex flex-col gap-2">
+                            {[
+                              { label: '简体中文', value: 'zh-CN' },
+                              { label: '繁體中文', value: 'zh-TW' },
+                              { label: 'English', value: 'en' },
+                            ].map((lang) => (
+                              <button
+                                key={lang.value}
+                                onClick={() => setLanguage(lang.value)}
+                                className={`w-full px-4 py-3 rounded-2xl border text-xs font-bold text-left transition-all flex items-center justify-between ${language === lang.value ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-slate-100 text-slate-500 hover:border-slate-300'}`}
+                              >
+                                {lang.label}
+                                {language === lang.value && <div className="w-1.5 h-1.5 rounded-full bg-blue-600 shadow-[0_0_8px_rgba(37,99,235,0.6)]" />}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center min-h-full py-4 gap-4">
+                        <div className="w-20 h-20 bg-white border border-slate-100 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-500/10 mb-2">
+                           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M4 17H20" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" />
+                            <path d="M17 4V20" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" />
+                            <path d="M8 20V13L13 8H22" stroke="#eab308" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </div>
+                        <h3 className="text-xl font-black text-slate-900 tracking-tight">{t('title')}</h3>
+                        <div className="px-4 py-1.5 bg-slate-100 rounded-full">
+                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t('version')} v2.0</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+
         {/* Removed duplicate UI elements */}
 
-        <div className="absolute bottom-4 left-4 z-10 flex flex-col gap-3 pointer-events-none">
+        <div className="absolute bottom-4 left-4 z-10 pointer-events-none">
           <motion.div 
-            initial={{ x: -20, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            className="backdrop-blur-xl bg-white/75 border border-white/50 px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-5 pointer-events-auto min-h-[44px]"
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="backdrop-blur-2xl bg-white/95 border border-white p-3 rounded-[2rem] shadow-[0_12px_40px_rgba(0,0,0,0.12)] flex flex-col gap-3 pointer-events-auto min-w-[140px]"
           >
-            <div className="flex items-center gap-1.5">
-              <div className="w-2.5 h-1.5 rounded-full bg-emerald-500 shadow-sm" />
-              <span className="text-[10px] font-black text-slate-500 uppercase">1-3 条</span>
+            {/* Legend Row */}
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" />
+                <span className="text-[10px] font-black text-slate-400">1-3</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full bg-yellow-500 shadow-sm" />
+                <span className="text-[10px] font-black text-slate-400">4-6</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <div className="w-2 h-2 rounded-full bg-rose-500 shadow-sm" />
+                <span className="text-[10px] font-black text-slate-400">7+</span>
+              </div>
             </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-2.5 h-1.5 rounded-full bg-yellow-500 shadow-sm" />
-              <span className="text-[10px] font-black text-slate-500 uppercase">4-6 条</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <div className="w-2.5 h-1.5 rounded-full bg-rose-500 shadow-sm" />
-              <span className="text-[10px] font-black text-slate-500 uppercase">7+ 条</span>
-            </div>
-          </motion.div>
 
-          <motion.div 
-            initial={{ x: -20, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            transition={{ delay: 0.1 }}
-            className="backdrop-blur-xl bg-slate-900/85 border border-slate-700 px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-5 text-white pointer-events-auto h-[44px]"
-          >
-            <div className="flex items-center gap-2">
-              <p className="text-base font-black leading-none">{stats.stops}</p>
-              <p className="text-[9px] uppercase font-bold text-slate-400 tracking-tighter leading-none mt-0.5">站点</p>
+            {/* Separator */}
+            <div className="h-px bg-slate-100 w-full" />
+            
+            {/* Stats row with pulsing indicator */}
+            <div className="flex items-center justify-between px-1">
+              <div className="flex gap-4">
+                <div className="flex flex-col">
+                  <span className="text-sm font-black text-slate-900 leading-none">{stats.stops}</span>
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{t('stops')}</span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-sm font-black text-slate-900 leading-none">{stats.lines}</span>
+                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{t('lines')}</span>
+                </div>
+              </div>
+              <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.4)]" />
             </div>
-            <div className="w-px h-4 bg-slate-700" />
-            <div className="flex items-center gap-2">
-              <p className="text-base font-black leading-none">{stats.lines}</p>
-              <p className="text-[9px] uppercase font-bold text-slate-400 tracking-tighter leading-none mt-0.5">线路</p>
-            </div>
-            <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse ml-1 shadow-glow shadow-blue-400/50" />
           </motion.div>
         </div>
 
@@ -1556,7 +2055,7 @@ export default function App() {
                     <div className="flex items-center gap-2">
                       <div className="w-1.5 h-3.5 rounded-full bg-blue-500" />
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">
-                        {(selectedStop ? selectedStop.lines.length : selectedSegmentLines?.length || 0)} 条线路通过
+                        {(selectedStop ? selectedStop.lines.length : selectedSegmentLines?.length || 0)} {t('lines')}
                       </p>
                     </div>
                     {selectedStop && selectedStop.lines.length > 0 && (
@@ -1564,7 +2063,7 @@ export default function App() {
                         onClick={() => showStopConnectivity(selectedStop.lines)}
                         className="text-[10px] font-bold text-blue-600 hover:text-blue-700 bg-blue-50 px-3 py-1.5 rounded-full border border-blue-100 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 active:shadow-sm"
                       >
-                        查看通达度
+                        {t('connectivity')}
                       </button>
                     )}
                   </div>
@@ -1600,7 +2099,7 @@ export default function App() {
                                 </>
                               ) : (
                                 <div className="text-[10px] font-bold text-slate-300 italic px-1">
-                                  暂无方向信息
+                                  {t('noDirection')}
                                 </div>
                               )}
                             </div>
@@ -1629,7 +2128,7 @@ export default function App() {
         </div>
         <div className="backdrop-blur-xl bg-white/70 border border-white/50 p-1 px-4 rounded-xl shadow-xl flex items-center gap-2 pointer-events-auto h-[44px]">
           <div className="py-2 flex items-center gap-3 text-slate-500">
-            <span className="text-[10px] font-black uppercase tracking-widest opacity-60">Level</span>
+            <span className="text-[10px] font-black uppercase tracking-widest opacity-60">{t('level')}</span>
             <span className="text-sm font-black text-slate-700 leading-none">{zoomLevel.toFixed(1)}</span>
             <div className="flex gap-1">
               {[1, 2, 3, 4, 5].map((i) => (
