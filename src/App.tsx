@@ -25,6 +25,7 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [showLargeAreaWarning, setShowLargeAreaWarning] = useState(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
+  const [showStations, setShowStations] = useState(true);
   const [showToolbox, setShowToolbox] = useState(false);
   const [baseMapVisible, setBaseMapVisible] = useState(true);
   const [selectionPos, setSelectionPos] = useState<[number, number] | null>(null);
@@ -80,15 +81,15 @@ export default function App() {
       const markers = line.via_stops.map((stop: any) => {
         const marker = new AMap.CircleMarker({
           center: [stop.location.lng, stop.location.lat],
-          radius: 6,
+          radius: 8,
           fillColor: '#3b82f6',
           strokeColor: '#fff',
           strokeWeight: 2,
           zIndex: 60,
           cursor: 'pointer'
         });
-        marker.on('click', async (e: any) => {
-          setSelectionPos([e.lnglat.lng, e.lnglat.lat]);
+        marker.on('click', async () => {
+          setSelectionPos([stop.location.lng, stop.location.lat]);
           setSelectedStop({
             name: stop.name,
             address: '正在加载详情...',
@@ -97,7 +98,7 @@ export default function App() {
           });
           
           // Fetch full details to show all lines
-          const details = await fetchStopDetails(stop.name, [e.lnglat.lng, e.lnglat.lat], AMap, currentCity);
+          const details = await fetchStopDetails(stop.name, [stop.location.lng, stop.location.lat], AMap, currentCity);
           if (details) {
             setSelectedStop({ ...details, city: currentCity });
           } else {
@@ -117,43 +118,70 @@ export default function App() {
   };
 
   const showStopConnectivity = async (stopLines: string[]) => {
-    if (!lineGroupRef.current || !markerGroupRef.current || !(window as any).AMap) return;
+    if (!lineGroupRef.current || !markerGroupRef.current || !(window as any).AMap || !stopLines.length) return;
     
+    setIsSearching(true);
     lineGroupRef.current.clearOverlays();
     markerGroupRef.current.clearOverlays();
     setStats(prev => ({ ...prev, lines: stopLines.length }));
     
     const AMap = (window as any).AMap;
     const lineSearch = new AMap.LineSearch({
-      city: currentCity || '北京市',
+      city: currentCity || '全国',
       pageIndex: 1,
       pageSize: 1,
       extensions: 'all'
     });
 
     let completed = 0;
-    for (const lineStr of stopLines) {
-      const { name: shortName } = parseLineInfo(lineStr);
-      lineSearch.search(shortName, (status: string, result: any) => {
-        completed++;
-        if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
-          let bestLine = result.lineInfo[0];
-          if (lineStr.includes('--')) {
-            const match = lineStr.match(/\((.+?)--(.+?)\)/);
-            if (match) {
-              const start = match[1];
-              const end = match[2];
-              const found = result.lineInfo.find((l: any) => l.name.includes(start) && l.name.includes(end));
-              if (found) bestLine = found;
+    const total = stopLines.length;
+    
+    // Batch processing to avoid overwhelming the API and UI
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < stopLines.length; i += BATCH_SIZE) {
+      const batch = stopLines.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(async (lineStr) => {
+        return new Promise<void>((resolve) => {
+          const { name: shortName } = parseLineInfo(lineStr);
+          
+          // Add a safety timeout for each search
+          const timeout = setTimeout(() => {
+            completed++;
+            if (completed === total) {
+              mapRef.current?.setFitView();
+              setIsSearching(false);
             }
-          }
-          renderBusLine(bestLine, AMap, mapRef.current, false, false, false);
-        }
-        
-        if (completed === stopLines.length) {
-          mapRef.current?.setFitView();
-        }
-      });
+            resolve();
+          }, 8000);
+
+          lineSearch.search(shortName, (status: string, result: any) => {
+            clearTimeout(timeout);
+            completed++;
+            if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
+              let bestLine = result.lineInfo[0];
+              if (lineStr.includes('--')) {
+                const match = lineStr.match(/\((.+?)--(.+?)\)/);
+                if (match) {
+                  const start = match[1];
+                  const end = match[2];
+                  const found = result.lineInfo.find((l: any) => 
+                    (l.name.includes(start) && l.name.includes(end)) || 
+                    l.name.includes(shortName)
+                  );
+                  if (found) bestLine = found;
+                }
+              }
+              renderBusLine(bestLine, AMap, mapRef.current, false, false, false);
+            }
+            
+            if (completed === total) {
+              mapRef.current?.setFitView();
+              setIsSearching(false);
+            }
+            resolve();
+          });
+        });
+      }));
     }
   };
 
@@ -163,6 +191,12 @@ export default function App() {
     };
 
     return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), 15000);
+      const safeResolve = (val: any) => {
+        clearTimeout(timer);
+        resolve(val);
+      };
+
       // 1. Try StationSearch (Most accurate for lines)
       const stationSearch = new AMap.StationSearch({
         pageIndex: 1,
@@ -184,7 +218,7 @@ export default function App() {
           }
 
           if (bestStation.buslines && bestStation.buslines.length > 0) {
-            resolve({
+            safeResolve({
               name: bestStation.name,
               address: bestStation.adcode ? `区域代码: ${bestStation.adcode}` : '',
               lines: bestStation.buslines.map((l: any) => l.name)
@@ -221,7 +255,7 @@ export default function App() {
 
             const lines = (bestPoi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0);
             if (lines.length > 0) {
-              resolve({
+              safeResolve({
                 name: bestPoi.name,
                 address: bestPoi.address || bestPoi.district,
                 lines: lines
@@ -229,7 +263,7 @@ export default function App() {
               return;
             }
           }
-          resolve(null);
+          safeResolve(null);
         });
       });
     });
@@ -261,7 +295,11 @@ export default function App() {
       
       setLoading(true);
       const { name: shortName } = parseLineInfo(item.name);
+      
+      const timeout = setTimeout(() => setLoading(false), 10000);
+      
       lineSearch.search(shortName, (status: string, result: any) => {
+        clearTimeout(timeout);
         setLoading(false);
         if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
           let targetLine = result.lineInfo[0];
@@ -421,7 +459,9 @@ export default function App() {
       });
       
       const status = await new Promise<string>((resolve) => {
+        const timeout = setTimeout(() => resolve('fail'), 10000);
         lineSearch.search(query, (s: string, result: any) => {
+          clearTimeout(timeout);
           if (s === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
             renderBusLine(result.lineInfo[0], AMap, mapRef.current);
             resolve('done');
@@ -430,9 +470,11 @@ export default function App() {
           }
         });
       });
-      if (status === 'done') {
-        setLoading(false);
-        return;
+      if (status === 'done' || status === 'fail') {
+        if (status === 'done') {
+          setLoading(false);
+          return;
+        }
       }
     }
 
@@ -531,7 +573,8 @@ export default function App() {
         center: [116.331398, 39.717646], 
         zoom: zoomLevel,
         viewMode: '2D',
-        mapStyle: 'amap://styles/whitesmoke', 
+        mapStyle: 'amap://styles/light', 
+        features: ['bg', 'point', 'road', 'building']
       });
 
       mapRef.current = map;
@@ -576,6 +619,16 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (markerGroupRef.current) {
+      if (showStations) {
+        markerGroupRef.current.show();
+      } else {
+        markerGroupRef.current.hide();
+      }
+    }
+  }, [showStations]);
+
   const handleSearch = async () => {
     const map = mapRef.current;
     if (!map) return;
@@ -619,8 +672,8 @@ export default function App() {
       const latDiff = ne.lat - sw.lat;
 
       const expandedBounds = new AMap.Bounds(
-        [boundCenter.lng - lngDiff * 3.0, boundCenter.lat - latDiff * 3.0],
-        [boundCenter.lng + lngDiff * 3.0, boundCenter.lat + latDiff * 3.0]
+        [boundCenter.lng - lngDiff * 5.0, boundCenter.lat - latDiff * 5.0],
+        [boundCenter.lng + lngDiff * 5.0, boundCenter.lat + latDiff * 5.0]
       );
       
       const placeSearch = new AMap.PlaceSearch({
@@ -633,12 +686,13 @@ export default function App() {
 
       const allPois: any[] = [];
       let pageIndex = 1;
-      const MAX_PAGES = 10; 
-
+      const MAX_PAGES = 30; // Increased to 30 to fetch more stations in expanded area
       const fetchPage = async (page: number): Promise<boolean> => {
         return new Promise((resolve) => {
+          const timeout = setTimeout(() => resolve(false), 10000);
           placeSearch.setPageIndex(page);
           placeSearch.searchInBounds('', expandedBounds, (status: string, result: any) => {
+            clearTimeout(timeout);
             if (status === 'complete' && result.poiList && result.poiList.pois.length > 0) {
               allPois.push(...result.poiList.pois);
               const totalCount = result.poiList.count || 0;
@@ -672,7 +726,7 @@ export default function App() {
         pois.forEach((poi: any) => {
           const marker = new AMap.CircleMarker({
             center: [poi.location.lng, poi.location.lat],
-            radius: 6,
+            radius: 8,
             fillColor: '#3b82f6',
             strokeColor: '#fff',
             strokeWeight: 2,
@@ -681,8 +735,8 @@ export default function App() {
             cursor: 'pointer'
           });
 
-          marker.on('click', (e: any) => {
-            setSelectionPos([e.lnglat.lng, e.lnglat.lat]);
+          marker.on('click', () => {
+            setSelectionPos([poi.location.lng, poi.location.lat]);
             setSelectedSegmentLines(null);
             setSelectedSegmentName(null);
             setSelectedStop({
@@ -728,7 +782,9 @@ export default function App() {
       for (let i = 0; i < linesToFetch.length; i += batchSize) {
         const batch = linesToFetch.slice(i, i + batchSize);
         await Promise.all(batch.map(name => new Promise<void>((resolve) => {
+          const timeout = setTimeout(() => resolve(), 8000);
           lineSearch.search(name, (status: string, result: any) => {
+            clearTimeout(timeout);
             if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
               result.lineInfo.forEach((info: any, index: number) => {
                 const uniqueName = info.name || `${name}#${index}`;
@@ -1078,7 +1134,7 @@ export default function App() {
       const gX = (clickLngLat[0] * GRID_SIZE) | 0;
       const gY = (clickLngLat[1] * GRID_SIZE) | 0;
       
-      const foundSegments: { dist: number; lines: Set<string> }[] = [];
+      const foundSegments: { dist: number; lines: Set<string>; data: any }[] = [];
       const SEARCH_DIST = 0.00025; 
 
       for (let dx = -1; dx <= 1; dx++) {
@@ -1090,7 +1146,7 @@ export default function App() {
             const data = segmentCounts.get(key)!;
             const dist = distToSegment(clickLngLat, data.offsetStart, data.offsetEnd);
             if (dist < SEARCH_DIST) {
-              foundSegments.push({ dist, lines: data.lines });
+              foundSegments.push({ dist, lines: data.lines, data });
             }
           });
         }
@@ -1098,16 +1154,26 @@ export default function App() {
 
       if (foundSegments.length > 0) {
         foundSegments.sort((a, b) => a.dist - b.dist);
-        const minDist = foundSegments[0].dist;
+        const closest = foundSegments[0];
+        const minDist = closest.dist;
         
         if (minDist > 0.00018) return;
 
         const selectionThreshold = Math.max(minDist + 0.000045, minDist * 1.6);
         const linesSet = new Set<string>();
         
+        // Calculate direction of the closest segment to filter out opposite directions
+        const v1x = closest.data.end[0] - closest.data.start[0];
+        const v1y = closest.data.end[1] - closest.data.start[1];
+
         foundSegments.forEach(s => {
           if (s.dist <= selectionThreshold) {
-            s.lines.forEach(l => linesSet.add(l));
+            const v2x = s.data.end[0] - s.data.start[0];
+            const v2y = s.data.end[1] - s.data.start[1];
+            // Use dot product to ensure same general direction
+            if (v1x * v2x + v1y * v2y >= 0) {
+              s.lines.forEach(l => linesSet.add(l));
+            }
           }
         });
 
@@ -1362,6 +1428,31 @@ export default function App() {
 
 
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4">
+          <AnimatePresence>
+            {stats.lines > 0 && (
+              <motion.div
+                initial={{ x: 20, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: 20, opacity: 0 }}
+                className="backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl flex items-center gap-3 pointer-events-auto h-14"
+              >
+                <div className="flex flex-col">
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">显示站点</span>
+                  <span className="text-[10px] font-bold text-slate-800 leading-none">{showStations ? 'ON' : 'OFF'}</span>
+                </div>
+                <button 
+                  onClick={() => setShowStations(!showStations)}
+                  className={`w-10 h-5 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
+                >
+                  <motion.div 
+                    animate={{ x: showStations ? 20 : 0 }}
+                    className="w-3 h-3 bg-white rounded-full shadow-sm"
+                  />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <button 
             onClick={handleSearch}
             disabled={isSearching || zoomLevel < 12}
