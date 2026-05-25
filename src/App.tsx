@@ -28,6 +28,7 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [showLargeAreaWarning, setShowLargeAreaWarning] = useState(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
+  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [showStations, setShowStations] = useState(() => {
     const saved = localStorage.getItem('app_show_stations');
     return saved === null ? true : saved === 'true';
@@ -801,9 +802,6 @@ export default function App() {
       map.on('zoomend', () => {
         const newZoom = map.getZoom();
         setZoomLevel((prevZoom) => {
-          if (newZoom < 10) {
-            handleClear();
-          }
           return newZoom;
         });
         saveMapState();
@@ -1605,7 +1603,7 @@ export default function App() {
     <div className="flex flex-col h-screen w-full bg-[#f8f9fa] font-sans text-slate-900 overflow-hidden relative">
       <header className="fixed top-0 left-0 right-0 z-20 px-4 pt-6 pb-0 pointer-events-none">
         <div className="flex items-start justify-between gap-4 w-full pointer-events-auto">
-          <div className="backdrop-blur-xl bg-white/70 border border-white/50 pl-3 pr-5 py-2.5 rounded-2xl shadow-lg flex items-center gap-3 transition-all hover:bg-white/80 h-[56px]">
+          <div className="backdrop-blur-xl bg-white/70 border border-white/50 pl-3 pr-3 md:pr-5 py-2.5 rounded-2xl shadow-lg flex items-center gap-3 transition-all hover:bg-white/80 h-[56px]">
             <div className="bg-white w-10 h-10 rounded-xl shadow-sm border border-slate-100 flex items-center justify-center shrink-0 relative overflow-hidden">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M4 17H20" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" />
@@ -1613,14 +1611,23 @@ export default function App() {
                 <path d="M8 20V13L13 8H22" stroke="#eab308" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </div>
-            <div className="flex flex-col justify-center h-full">
+            <div className="hidden md:flex flex-col justify-center h-full">
               <h1 className="text-base font-black tracking-tighter text-slate-800 leading-none">{t('title')}</h1>
             </div>
           </div>
 
           <div className="flex items-center gap-3 relative pointer-events-auto">
-            <div className="relative group flex items-center pointer-events-auto">
-              <div className="backdrop-blur-xl bg-white border border-white px-4 py-2.5 rounded-l-2xl shadow-lg flex items-center gap-3 w-64 transition-all focus-within:w-80 group-focus-within:bg-white group-focus-within:ring-2 group-focus-within:ring-blue-500/20">
+            {!isMobileSearchOpen && (
+              <button
+                onClick={() => setIsMobileSearchOpen(true)}
+                className="md:hidden w-[46px] h-[46px] rounded-2xl bg-blue-600 shadow-lg flex items-center justify-center text-white hover:bg-blue-700 transition-colors"
+              >
+                <Search className="w-5 h-5" />
+              </button>
+            )}
+
+            <div className={`${isMobileSearchOpen ? 'flex' : 'hidden md:flex'} relative group items-center pointer-events-auto`}>
+              <div className="backdrop-blur-xl bg-white border border-white px-4 py-2.5 rounded-l-2xl shadow-lg flex items-center gap-3 w-[60vw] md:w-64 transition-all focus-within:w-[70vw] md:focus-within:w-80 group-focus-within:bg-white group-focus-within:ring-2 group-focus-within:ring-blue-500/20">
                 <input 
                   type="text" 
                   placeholder={t('searchPlaceholder')} 
@@ -1628,7 +1635,7 @@ export default function App() {
                   value={searchQuery}
                   onChange={(e) => onSearchInputChange(e.target.value)}
                   onFocus={() => searchQuery && suggestions.length > 0 && setShowSuggestions(true)}
-                  onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+                  onBlur={() => setTimeout(() => { setShowSuggestions(false); setIsMobileSearchOpen(false); }, 200)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       if (suggestions.length > 0 && showSuggestions) {
@@ -1636,8 +1643,10 @@ export default function App() {
                       } else {
                         performFullSearch(searchQuery);
                       }
+                      setIsMobileSearchOpen(false);
                     }
                   }}
+                  autoFocus={isMobileSearchOpen}
                 />
                 {searchQuery && (
                   <button onClick={() => { setSearchQuery(''); setSuggestions([]); setShowSuggestions(false); }}>
@@ -1646,8 +1655,11 @@ export default function App() {
                 )}
               </div>
               <button 
-                onClick={() => performFullSearch(searchQuery)}
-                className="bg-blue-600 h-[46px] px-5 rounded-r-2xl shadow-lg flex items-center justify-center text-white hover:bg-blue-700 transition-colors"
+                onClick={() => {
+                  performFullSearch(searchQuery);
+                  setIsMobileSearchOpen(false);
+                }}
+                className="bg-blue-600 h-[46px] px-4 md:px-5 rounded-r-2xl shadow-lg flex items-center justify-center text-white hover:bg-blue-700 transition-colors"
               >
                 <Search className="w-5 h-5" />
               </button>
@@ -1727,7 +1739,7 @@ export default function App() {
                 initial={{ x: 20, opacity: 0 }}
                 animate={{ x: 0, opacity: 1 }}
                 exit={{ x: 20, opacity: 0 }}
-                className="backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl flex items-center gap-3 pointer-events-auto h-14"
+                className="hidden md:flex backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl items-center gap-3 pointer-events-auto h-14"
               >
                 <div className="flex flex-col">
                   <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showStations')}</span>
@@ -1750,7 +1762,7 @@ export default function App() {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl flex items-center gap-3 pointer-events-auto h-14"
+            className="hidden md:flex backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl items-center gap-3 pointer-events-auto h-14"
           >
             <div className="flex flex-col">
               <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showBaseMap')}</span>
@@ -1978,14 +1990,14 @@ export default function App() {
 
         {/* Removed duplicate UI elements */}
 
-        <div className="absolute bottom-4 left-4 z-10 pointer-events-none">
+        <div className="hidden md:block absolute bottom-4 left-4 z-10 pointer-events-none">
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             className="backdrop-blur-2xl bg-white/95 border border-white p-3 rounded-[2rem] shadow-[0_12px_40px_rgba(0,0,0,0.12)] flex flex-col gap-3 pointer-events-auto min-w-[140px]"
           >
             {/* Legend Row */}
-            <div className="flex items-center justify-between px-1">
+            <div className="hidden md:flex items-center justify-between px-1">
               <div className="flex items-center gap-1.5">
                 <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" />
                 <span className="text-[10px] font-black text-slate-400">1-3</span>
@@ -2001,7 +2013,7 @@ export default function App() {
             </div>
 
             {/* Separator */}
-            <div className="h-px bg-slate-100 w-full" />
+            <div className="hidden md:block h-px bg-slate-100 w-full" />
             
             {/* Stats row with pulsing indicator */}
             <div className="flex items-center justify-between px-1">
@@ -2126,7 +2138,7 @@ export default function App() {
         <div className="mr-2">
           <span className="text-[9px] font-bold text-slate-400 opacity-60 uppercase tracking-widest leading-none">@TsFeng</span>
         </div>
-        <div className="backdrop-blur-xl bg-white/70 border border-white/50 p-1 px-4 rounded-xl shadow-xl flex items-center gap-2 pointer-events-auto h-[44px]">
+        <div className="hidden md:flex backdrop-blur-xl bg-white/70 border border-white/50 p-1 px-4 rounded-xl shadow-xl items-center gap-2 pointer-events-auto h-[44px]">
           <div className="py-2 flex items-center gap-3 text-slate-500">
             <span className="text-[10px] font-black uppercase tracking-widest opacity-60">{t('level')}</span>
             <span className="text-sm font-black text-slate-700 leading-none">{zoomLevel.toFixed(1)}</span>
