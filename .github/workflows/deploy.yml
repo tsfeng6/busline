@@ -32,9 +32,7 @@ jobs:
           VITE_AMAP_KEY: ${{ secrets.VITE_AMAP_KEY }}
           VITE_AMAP_SECURITY_CODE: ${{ secrets.VITE_AMAP_SECURITY_CODE }}
 
-      - name: Deploy
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: dist
-          branch: gh-pages
-          clean: true
+      - name: Debug - Check dist
+        run: |
+          ls -la dist
+          echo "Build completed, files above"
