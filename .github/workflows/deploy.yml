@@ -1,38 +1,24 @@
 name: Deploy to GitHub Pages
-
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch:   
-
-permissions:
-  contents: write   
-
+    branches: [main]
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0   
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: 'npm'
 
       - name: Install and Build
         run: |
-          npm ci
+          npm install
           npm run build
         env:
           VITE_AMAP_KEY: ${{ secrets.VITE_AMAP_KEY }}
           VITE_AMAP_SECURITY_CODE: ${{ secrets.VITE_AMAP_SECURITY_CODE }}
 
-      - name: Debug - Check dist
-        run: |
-          ls -la dist
-          echo "Build completed, files above"
+      - name: Deploy
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: dist
+          branch: gh-pages
