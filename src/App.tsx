@@ -37,19 +37,43 @@ export default function App() {
     const saved = localStorage.getItem('app_show_basemap');
     return saved === null ? true : saved === 'true';
   });
+  const [showMoreInfo, setShowMoreInfo] = useState(() => {
+    const saved = localStorage.getItem('app_show_more_info');
+    return saved === null ? false : saved === 'true';
+  });
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
+  const [settingsTab, setSettingsTab] = useState<'general' | 'experimental' | 'about' | 'dataFilter'>('general');
+  const [filterAirportBus, setFilterAirportBus] = useState(() => {
+    const saved = localStorage.getItem('app_filter_airport_bus');
+    return saved === null ? false : saved === 'true';
+  });
+  const filterAirportBusRef = useRef(filterAirportBus);
+  useEffect(() => {
+    filterAirportBusRef.current = filterAirportBus;
+  }, [filterAirportBus]);
+
+  const [enableCityWideSearch, setEnableCityWideSearch] = useState(() => {
+    return localStorage.getItem('app_experimental_citywide') === 'true';
+  });
+  const [showCityWideConfirm, setShowCityWideConfirm] = useState(false);
   const [language, setLanguage] = useState(() => {
     return localStorage.getItem('app_lang') || 'zh-CN';
   });
+  const [lineThickness, setLineThickness] = useState<'thick' | 'thin'>(() => {
+    const saved = localStorage.getItem('app_line_thickness');
+    return (saved === 'thin' || saved === 'thick') ? saved : 'thick';
+  });
   const [showToolbox, setShowToolbox] = useState(false);
   const [mapInstance, setMapInstance] = useState<any>(null);
+  const [activeBusLine, setActiveBusLine] = useState<any | null>(null);
 
   // Translation dictionary
   const translations: Record<string, any> = {
     'zh-CN': {
       settings: '设置',
       general: '通用',
+      dataFilter: '数据筛选',
+      filterAirportBus: '过滤机场巴士',
       about: '关于',
       language: '语言设置',
       version: '当前版本',
@@ -57,6 +81,15 @@ export default function App() {
       searching: '检索中...',
       showStations: '显示站点',
       showBaseMap: '显示底图',
+      showMoreInfo: '详细信息',
+      lineThickness: '线条粗细',
+      thick: '粗线条',
+      thin: '细线条',
+      experimental: '实验功能',
+      cityWideSearch: '全市搜索',
+      cityWideSearchWarning: '警告！全市搜索性能消耗较大，可能会导致设备极度不稳定，请知悉',
+      cancel: '取消',
+      confirmEnable: '确认开启',
       stats: '统计',
       stops: '站点',
       lines: '线路',
@@ -75,6 +108,8 @@ export default function App() {
     'zh-TW': {
       settings: '設置',
       general: '通用',
+      dataFilter: '數據篩選',
+      filterAirportBus: '過濾機場巴士',
       about: '關於',
       language: '語言設置',
       version: '當前版本',
@@ -82,6 +117,15 @@ export default function App() {
       searching: '檢索中...',
       showStations: '顯示站點',
       showBaseMap: '顯示底圖',
+      showMoreInfo: '詳細資訊',
+      lineThickness: '線條粗細',
+      thick: '粗線條',
+      thin: '細線條',
+      experimental: '實驗功能',
+      cityWideSearch: '全市搜索',
+      cityWideSearchWarning: '警告！全市搜索性能消耗較大，可能會導致設備極度不穩定，請知悉',
+      cancel: '取消',
+      confirmEnable: '確認開啟',
       stats: '統計',
       stops: '站點',
       lines: '線路',
@@ -100,6 +144,8 @@ export default function App() {
     'en': {
       settings: 'Settings',
       general: 'General',
+      dataFilter: 'Data Filter',
+      filterAirportBus: 'Filter Airport Bus',
       about: 'About',
       language: 'Language',
       version: 'Version',
@@ -107,6 +153,15 @@ export default function App() {
       searching: 'Searching...',
       showStations: 'Stations',
       showBaseMap: 'Base Map',
+      showMoreInfo: 'Details',
+      lineThickness: 'Line Thickness',
+      thick: 'Thick',
+      thin: 'Thin',
+      experimental: 'Experimental',
+      cityWideSearch: 'City-wide Search',
+      cityWideSearchWarning: 'Warning! City-wide search consumes significant performance and may cause severe device instability. Please be aware.',
+      cancel: 'Cancel',
+      confirmEnable: 'Confirm Enable',
       stats: 'Stats',
       stops: 'Stops',
       lines: 'Lines',
@@ -142,9 +197,25 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('app_lang', language);
   }, [language]);
+  
+  useEffect(() => {
+    localStorage.setItem('app_line_thickness', lineThickness);
+    
+    // Auto-redraw lines after changing thickness
+    if (mapInstance) {
+      if (activeBusLine) {
+        renderBusLine(activeBusLine, (window as any).AMap, mapInstance, true, true, false);
+      } else if (selectedSegmentLines && selectedSegmentLines.length > 0) {
+        const AMap = (window as any).AMap;
+        aggregateAndVisualize(selectedSegmentLines, mapInstance, AMap);
+      }
+    }
+  }, [lineThickness]);
+
   const [baseMapVisible, setBaseMapVisible] = useState(true);
   const [selectionPos, setSelectionPos] = useState<[number, number] | null>(null);
   const [selectedSegmentName, setSelectedSegmentName] = useState<string | null>(null);
+  const [selectedSegmentAddress, setSelectedSegmentAddress] = useState<string | null>(null);
   const [currentCity, setCurrentCity] = useState<string>('全国');
   const [searchQuery, setSearchQuery] = useState('');
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -183,15 +254,102 @@ export default function App() {
       const polyline = new AMap.Polyline({
         path: path,
         strokeColor: clear ? '#3b82f6' : getRandomPastelColor(),
-        strokeWeight: 5,
+        strokeWeight: lineThickness === 'thin' ? 2.5 : 5,
         strokeOpacity: 0.8,
         lineJoin: 'round',
         lineCap: 'round',
         isOutline: true,
         outlineColor: '#ffffff',
-        borderWeight: 1.5,
+        borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
         zIndex: 50
       });
+      if (clear) {
+        setActiveBusLine(line);
+        polyline.on('click', (e: any) => {
+          const clickLngLat = [e.lnglat.getLng(), e.lnglat.getLat()];
+          
+          if (!(window as any).AMap.GeometryUtil) return;
+          const GeometryUtil = (window as any).AMap.GeometryUtil;
+          
+          // Map stops to path indices
+          const stopIndices = line.via_stops.map((stop: any) => {
+            let minDist = Infinity;
+            let minIdx = 0;
+            for (let i = 0; i < path.length; i++) {
+              const d = GeometryUtil.distance(
+                [stop.location.lng, stop.location.lat],
+                path[i]
+              );
+              if (d < minDist) {
+                minDist = d;
+                minIdx = i;
+              }
+            }
+            return minIdx;
+          });
+
+          // Ensure stopIndices are strictly monotonically increasing to avoid overlapping
+          for (let i = 1; i < stopIndices.length; i++) {
+            if (stopIndices[i] <= stopIndices[i - 1]) {
+              stopIndices[i] = stopIndices[i - 1] + 1;
+            }
+          }
+
+          // Find click nearest path index
+          let clickMinDist = Infinity;
+          let clickMinIdx = 0;
+          for (let i = 0; i < path.length; i++) {
+            const d = GeometryUtil.distance(clickLngLat, path[i]);
+            if (d < clickMinDist) {
+              clickMinDist = d;
+              clickMinIdx = i;
+            }
+          }
+
+          // Find surrounding stops
+          let prevStopIdx = 0;
+          for (let i = 0; i < stopIndices.length - 1; i++) {
+            if (clickMinIdx >= stopIndices[i] && clickMinIdx <= stopIndices[i+1]) {
+              prevStopIdx = i;
+              break;
+            }
+          }
+          if (clickMinIdx > stopIndices[stopIndices.length - 1]) prevStopIdx = stopIndices.length - 2;
+          
+          let nextStopIdx = prevStopIdx + 1;
+          if (nextStopIdx >= line.via_stops.length) nextStopIdx = line.via_stops.length - 1;
+
+          setSelectionPos(clickLngLat);
+          setSelectedSegmentName(null);
+          setSelectedSegmentLines(null);
+          
+          const geocoder = new AMap.Geocoder({ radius: 1000, extensions: 'all' });
+          geocoder.getAddress(clickLngLat, (status: string, result: any) => {
+            if (status === 'complete' && result.info === 'OK') {
+              const comp = result.regeocode.addressComponent;
+              const preciseLocation = [
+                comp.province,
+                comp.city !== comp.province ? comp.city : '',
+                comp.district,
+                comp.township
+              ].filter(Boolean).join('');
+              
+              const nearestRoad = result.regeocode.roads && result.regeocode.roads.length > 0 ? result.regeocode.roads[0].name : '';
+              const genericPoi = result.regeocode.pois && result.regeocode.pois.length > 0 ? result.regeocode.pois[0].name : '当前位置';
+              const fallbackName = nearestRoad || genericPoi;
+              
+              setSelectedStop({
+                name: fallbackName,
+                address: preciseLocation || result.regeocode.formattedAddress,
+                lines: [],
+                city: currentCity,
+                isBusStop: false,
+                segmentName: `${line.via_stops[prevStopIdx].name} - ${line.via_stops[nextStopIdx].name}`
+              });
+            }
+          });
+        });
+      }
       lineGroupRef.current.addOverlay(polyline);
     }
 
@@ -276,6 +434,9 @@ export default function App() {
           lineSearch.search(shortName, (status: string, result: any) => {
             clearTimeout(timeout);
             completed++;
+            if (result.lineInfo && filterAirportBusRef.current) {
+              result.lineInfo = result.lineInfo.filter((l: any) => !/机场(巴士|大巴|专线|快线)/.test(l.name));
+            }
             if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
               let bestLine = result.lineInfo[0];
               if (lineStr.includes('--')) {
@@ -319,11 +480,12 @@ export default function App() {
       // 1. Try StationSearch (Most accurate for lines)
       const stationSearch = new AMap.StationSearch({
         pageIndex: 1,
-        pageSize: 10,
+        pageSize: 50,
         city: city || '全国'
       });
 
       stationSearch.search(name, (status: string, result: any) => {
+        let foundStation = false;
         if (status === 'complete' && result.stationInfo && result.stationInfo.length > 0) {
           let bestStation = result.stationInfo[0];
           let minDist = getDistSq([bestStation.location.lng, bestStation.location.lat], location);
@@ -336,53 +498,101 @@ export default function App() {
             }
           }
 
-          if (bestStation.buslines && bestStation.buslines.length > 0) {
+          // Require reasonable proximity (e.g., < 0.001 ~ 3km) to avoid picking completely wrong places
+          if (minDist < 0.001 && bestStation.buslines && bestStation.buslines.length > 0) {
+            foundStation = true;
             safeResolve({
               name: bestStation.name,
               address: bestStation.adcode ? `区域代码: ${bestStation.adcode}` : '',
-              lines: bestStation.buslines.map((l: any) => l.name)
+              lines: bestStation.buslines.map((l: any) => l.name),
+              isBusStop: true
             });
             return;
           }
         }
 
-        // 2. Fallback to PlaceSearch (Great for POI station data)
+        if (foundStation) return;
+
+        // 2. Fallback to PlaceSearch searchNearBy (Great for exact location matching)
         const ps = new AMap.PlaceSearch({
-          pageSize: 10,
+          pageSize: 50,
           extensions: 'all',
+          type: '公交车站', // Force it to only return bus stations!
           city: city || '全国'
         });
         
-        // Search by name but filtered to public transport types
-        ps.search(name, (pStatus: string, pResult: any) => {
+        // Search strictly nearby the bus stop coordinate
+        ps.searchNearBy(name.replace(/\(.*\)/, ''), location, 1000, (pStatus: string, pResult: any) => {
           if (pStatus === 'complete' && pResult.poiList && pResult.poiList.pois.length > 0) {
             // Filter to actual bus stations if possible
             const pois = pResult.poiList.pois;
-            const stationPois = pois.filter((p: any) => p.type.includes('公交') || p.type.includes('车站'));
-            const targetPois = stationPois.length > 0 ? stationPois : pois;
-
-            let bestPoi = targetPois[0];
-            let minDist = getDistSq([bestPoi.location.lng, bestPoi.location.lat], location);
+            const stationPois = pois.filter((p: any) => p.type && (p.type.includes('公交') || p.type.includes('车站') || p.type.includes('交通设施') || p.type.includes('地铁站')));
             
-            for(let i = 1; i < targetPois.length; i++) {
-              const d = getDistSq([targetPois[i].location.lng, targetPois[i].location.lat], location);
-              if (d < minDist) {
-                minDist = d;
-                bestPoi = targetPois[i];
+            if (stationPois.length > 0) {
+              let bestPoi = stationPois[0];
+              let minDist = getDistSq([bestPoi.location.lng, bestPoi.location.lat], location);
+              
+              for(let i = 1; i < stationPois.length; i++) {
+                const d = getDistSq([stationPois[i].location.lng, stationPois[i].location.lat], location);
+                if (d < minDist) {
+                  minDist = d;
+                  bestPoi = stationPois[i];
+                }
+              }
+
+              const isTransitPOI = bestPoi.type && (bestPoi.type.includes('公交') || bestPoi.type.includes('车站') || bestPoi.type.includes('交通设施') || bestPoi.type.includes('地铁'));
+              // Only parse address as lines if it's a transit POI
+              if (isTransitPOI) {
+                const addressStr = bestPoi.address || '';
+                // Genuine bus station addresses usually contain multiple lines separated by ;
+                const lines = addressStr.split(';').map((s: string) => s.trim()).filter((s: string) => 
+                  s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
+                );
+                // Protect against pure street addresses
+                // If it has a semicolon, it's definitely bus lines. If no semicolon, ensure it has "路", "线", etc., and no explicit street keywords indicating it's just a road.
+                const looksLikeBusLines = addressStr.includes(';') || (lines.length === 1 && (/\d+路|\d+路|专线|临线|快速公交/.test(lines[0]) || lines[0].length < 15));
+                if (looksLikeBusLines) {
+                  safeResolve({
+                    name: bestPoi.name,
+                    address: addressStr || bestPoi.district,
+                    lines: lines,
+                    isBusStop: true
+                  });
+                  return;
+                }
               }
             }
-
-            const lines = (bestPoi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间'));
-            if (lines.length > 0) {
-              safeResolve({
-                name: bestPoi.name,
-                address: bestPoi.address || bestPoi.district,
-                lines: lines
-              });
-              return;
-            }
           }
-          safeResolve(null);
+          
+          // 3. Ultimate fallback: try to search without keyword near the location if it completely failed
+          ps.searchNearBy('公交站', location, 300, (pStatus2: string, pResult2: any) => {
+            if (pStatus2 === 'complete' && pResult2.poiList && pResult2.poiList.pois.length > 0) {
+               // Find closest
+               let bestPoi = pResult2.poiList.pois[0];
+               let minDist = getDistSq([bestPoi.location.lng, bestPoi.location.lat], location);
+               for(let i = 1; i < pResult2.poiList.pois.length; i++) {
+                 const d = getDistSq([pResult2.poiList.pois[i].location.lng, pResult2.poiList.pois[i].location.lat], location);
+                 if (d < minDist) {
+                   minDist = d;
+                   bestPoi = pResult2.poiList.pois[i];
+                 }
+               }
+               const addressStr = bestPoi.address || '';
+               const lines = addressStr.split(';').map((s: string) => s.trim()).filter((s: string) => 
+                 s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
+               );
+               const looksLikeBusLines = addressStr.includes(';') || (lines.length === 1 && (/\d+路|\d+线|专线|临线|快速公交/.test(lines[0]) || lines[0].length < 15));
+               if (looksLikeBusLines) {
+                 safeResolve({
+                   name: bestPoi.name,
+                   address: addressStr || bestPoi.district,
+                   lines: lines
+                 });
+                 return;
+               }
+            }
+            safeResolve(null);
+          });
         });
       });
     });
@@ -415,7 +625,9 @@ export default function App() {
       setSelectedStop({
         name: item.name,
         address: item.address,
-        lines: (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间')),
+        lines: (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
+          s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
+        ),
         city: currentCity
       });
     }
@@ -431,6 +643,37 @@ export default function App() {
     const next = !showBaseMap;
     setShowBaseMap(next);
     localStorage.setItem('app_show_basemap', next.toString());
+  };
+
+  const toggleFilterAirportBus = () => {
+    const next = !filterAirportBus;
+    setFilterAirportBus(next);
+    localStorage.setItem('app_filter_airport_bus', next.toString());
+  };
+
+  const toggleMoreInfo = () => {
+    const next = !showMoreInfo;
+    setShowMoreInfo(next);
+    localStorage.setItem('app_show_more_info', next.toString());
+  };
+
+  const toggleCityWideSearch = () => {
+    if (!enableCityWideSearch) {
+      setShowCityWideConfirm(true);
+    } else {
+      setEnableCityWideSearch(false);
+      localStorage.setItem('app_experimental_citywide', 'false');
+    }
+  };
+
+  const confirmCityWideSearch = () => {
+    setEnableCityWideSearch(true);
+    localStorage.setItem('app_experimental_citywide', 'true');
+    setShowCityWideConfirm(false);
+  };
+
+  const cancelCityWideSearch = () => {
+    setShowCityWideConfirm(false);
   };
 
   const handleManualSearch = async (item: any) => {
@@ -465,6 +708,9 @@ export default function App() {
       lineSearch.search(shortName, (status: string, result: any) => {
         clearTimeout(timeout);
         setLoading(false);
+        if (result.lineInfo && filterAirportBusRef.current) {
+          result.lineInfo = result.lineInfo.filter((l: any) => !/机场(巴士|大巴|专线|快线)/.test(l.name));
+        }
         if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
           let targetLine = result.lineInfo[0];
           if (item.name.includes('--')) {
@@ -496,11 +742,21 @@ export default function App() {
       if (details) {
         setSelectedStop({ ...details, city: currentCity });
       } else {
+        const isTransitPOI = item.type && (item.type.includes('公交') || item.type.includes('车站') || item.type.includes('交通设施') || item.type.includes('地铁'));
+        let lines: string[] = [];
+        
+        if (isTransitPOI) {
+           lines = (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
+             s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
+           ).filter((s: string) => /\d+路|\d+线|专线|临线|快速公交/.test(s));
+        }
+
         setSelectedStop({
           name: item.name,
           address: item.address,
-          lines: (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间')),
-          city: currentCity
+          lines: lines,
+          city: currentCity,
+          isBusStop: !!isTransitPOI
         });
       }
     } else {
@@ -561,6 +817,9 @@ export default function App() {
         extensions: 'all'
       });
       lineSearch.search(val, (status: string, result: any) => {
+        if (result.lineInfo && filterAirportBusRef.current) {
+          result.lineInfo = result.lineInfo.filter((l: any) => !/机场(巴士|大巴|专线|快线)/.test(l.name));
+        }
         if (status === 'complete' && result.lineInfo) {
           resolve(result.lineInfo.map((l: any) => ({
             name: l.name,
@@ -634,6 +893,9 @@ export default function App() {
         const timeout = setTimeout(() => resolve('fail'), 10000);
         lineSearch.search(query, (s: string, result: any) => {
           clearTimeout(timeout);
+          if (result.lineInfo && filterAirportBusRef.current) {
+            result.lineInfo = result.lineInfo.filter((l: any) => !/机场(巴士|大巴|专线|快线)/.test(l.name));
+          }
           if (s === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
             renderBusLine(result.lineInfo[0], AMap, mapRef.current);
             resolve('done');
@@ -814,13 +1076,51 @@ export default function App() {
         const geocoder = new AMap.Geocoder();
         geocoder.getAddress([lng, lat], (status: string, result: any) => {
           if (status === 'complete' && result.info === 'OK') {
-            const pois = result.regeocode.pois || [];
+            const regeocode = result.regeocode;
+            const pois = regeocode.pois || [];
+            
+            // Build the precise locality string
+            const comp = regeocode.addressComponent;
+            const preciseLocation = [
+              comp.province,
+              comp.city !== comp.province ? comp.city : '',
+              comp.district,
+              comp.township
+            ].filter(Boolean).join('');
+            
             const busStop = pois.find((p: any) => p.type.includes('公交车站'));
+            
             if (busStop) {
-              onStopClick({
+              setSelectionPos([busStop.location.lng, busStop.location.lat]);
+              setSelectedSegmentName(null);
+              setSelectedSegmentLines(null);
+              setSelectedStop({
                 name: busStop.name,
                 location: busStop.location,
-                address: busStop.address
+                address: preciseLocation || busStop.address,
+                lines: (busStop.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
+                  s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
+                ).filter((s: string) => /\d+路|\d+线|专线|临线|快速公交/.test(s)),
+                city: currentCity,
+                isBusStop: true
+              });
+            } else {
+              // Clicked elsewhere, set selection but check if it's a road
+              setSelectionPos([lng, lat]);
+              setSelectedSegmentName(null);
+              setSelectedSegmentLines(null);
+              
+              const nearestRoad = regeocode.roads && regeocode.roads.length > 0 ? regeocode.roads[0].name : '';
+              const genericPoi = pois.length > 0 ? pois[0].name : '当前位置';
+              const displayName = nearestRoad || genericPoi;
+
+              setSelectedStop({
+                name: displayName,
+                location: { lng, lat },
+                address: preciseLocation || regeocode.formattedAddress,
+                lines: [],
+                city: currentCity,
+                isBusStop: false
               });
             }
           }
@@ -898,7 +1198,7 @@ export default function App() {
     if (!map) return;
 
     const currentZoom = map.getZoom();
-    if (currentZoom < 12) {
+    if (!enableCityWideSearch && currentZoom < 12) {
       return;
     }
 
@@ -950,12 +1250,13 @@ export default function App() {
 
       const allPois: any[] = [];
       let pageIndex = 1;
-      const MAX_PAGES = 30; // Increased to 30 to fetch more stations in expanded area
+      const MAX_PAGES = enableCityWideSearch ? 100 : 30; // Increased when city wide
       const fetchPage = async (page: number): Promise<boolean> => {
         return new Promise((resolve) => {
           const timeout = setTimeout(() => resolve(false), 10000);
           placeSearch.setPageIndex(page);
-          placeSearch.searchInBounds('', expandedBounds, (status: string, result: any) => {
+          
+          const callback = (status: string, result: any) => {
             clearTimeout(timeout);
             if (status === 'complete' && result.poiList && result.poiList.pois.length > 0) {
               allPois.push(...result.poiList.pois);
@@ -969,7 +1270,13 @@ export default function App() {
             } else {
               resolve(false);
             }
-          });
+          };
+
+          if (enableCityWideSearch) {
+             placeSearch.search('', callback);
+          } else {
+             placeSearch.searchInBounds('', expandedBounds, callback);
+          }
         });
       };
 
@@ -1049,6 +1356,9 @@ export default function App() {
           const timeout = setTimeout(() => resolve(), 8000);
           lineSearch.search(name, (status: string, result: any) => {
             clearTimeout(timeout);
+            if (result.lineInfo && filterAirportBusRef.current) {
+              result.lineInfo = result.lineInfo.filter((l: any) => !/机场(巴士|大巴|专线|快线)/.test(l.name));
+            }
             if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
               result.lineInfo.forEach((info: any, index: number) => {
                 const uniqueName = info.name || `${name}#${index}`;
@@ -1080,6 +1390,7 @@ export default function App() {
     setSelectedStop(null);
     setSelectionPos(null);
     setSelectedSegmentName(null);
+    setSelectedSegmentAddress(null);
   };
 
   const aggregateAndVisualize = (activeLineSet: string[], map: any, AMap: any) => {
@@ -1360,11 +1671,17 @@ export default function App() {
 
     const colorGroups = new Map<string, Array<[number, number][]>>();
     
+    const isCityWide = localStorage.getItem('app_experimental_citywide') === 'true';
+    
     finalSegments.forEach((data) => {
       const count = data.lines.size;
       let color = '#22c55e'; 
-      if (count >= 4 && count <= 6) color = '#eab308'; 
-      if (count >= 7) color = '#ef4444'; 
+      if (isCityWide) {
+        color = '#3b82f6';
+      } else {
+        if (count >= 4 && count <= 6) color = '#eab308'; 
+        if (count >= 7) color = '#ef4444'; 
+      }
 
       const displayPath: [number, number][] = [data.offsetStart, data.offsetEnd];
       if (!colorGroups.has(color)) colorGroups.set(color, []);
@@ -1429,13 +1746,13 @@ export default function App() {
       const polyline = new AMap.Polyline({
         path: joinedPaths,
         strokeColor: color,
-        strokeWeight: 6,
+        strokeWeight: lineThickness === 'thin' ? 3 : 6,
         strokeOpacity: 0.9,
         lineJoin: 'round',
         lineCap: 'round',
         isOutline: true,
         outlineColor: '#ffffff',
-        borderWeight: 1.5,
+        borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
         bubble: true,
         zIndex: color === '#ef4444' ? 15 : (color === '#eab308' ? 12 : 10)
       });
@@ -1507,10 +1824,21 @@ export default function App() {
             geocoderRef.current.getAddress(clickLngLat, (status: string, result: any) => {
               if (status === 'complete' && result.regeocode) {
                 const comp = result.regeocode.addressComponent;
-                const road = comp.street || comp.township || comp.district;
-                setSelectedSegmentName(road || "当前位置");
+                const preciseLocation = [
+                  comp.province,
+                  comp.city !== comp.province ? comp.city : '',
+                  comp.district,
+                  comp.township
+                ].filter(Boolean).join('');
+                const nearestRoad = result.regeocode.roads && result.regeocode.roads.length > 0 ? result.regeocode.roads[0].name : '';
+                const genericPoi = result.regeocode.pois && result.regeocode.pois.length > 0 ? result.regeocode.pois[0].name : '';
+                const fallbackName = nearestRoad || genericPoi || comp.street || comp.township || comp.district;
+                
+                setSelectedSegmentName(fallbackName || "当前位置");
+                setSelectedSegmentAddress(preciseLocation || result.regeocode.formattedAddress);
               } else {
                 setSelectedSegmentName("当前路段");
+                setSelectedSegmentAddress(null);
               }
             });
           }
@@ -1783,19 +2111,21 @@ export default function App() {
           <motion.button 
             layout
             onClick={handleSearch}
-            disabled={isSearching || zoomLevel < 12}
+            disabled={isSearching || (!enableCityWideSearch && zoomLevel < 12)}
             initial={false}
             animate={{ 
               scale: 1,
               opacity: loading ? 0 : 1,
-              backgroundColor: isSearching ? 'rgba(245, 158, 11, 0.1)' : (zoomLevel < 12 ? 'rgba(241, 245, 241, 0.5)' : 'rgba(37, 99, 235, 1)')
+              backgroundColor: isSearching ? 'rgba(245, 158, 11, 0.1)' : 
+                (enableCityWideSearch ? 'rgba(239, 68, 68, 1)' : (zoomLevel < 12 ? 'rgba(241, 245, 241, 0.5)' : 'rgba(37, 99, 235, 1)'))
             }}
-            whileHover={!isSearching && zoomLevel >= 12 ? { scale: 1.02, backgroundColor: 'rgba(29, 78, 216, 1)' } : {}}
-            whileTap={!isSearching && zoomLevel >= 12 ? { scale: 0.98 } : {}}
+            whileHover={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 1.02, backgroundColor: enableCityWideSearch ? 'rgba(220, 38, 38, 1)' : 'rgba(29, 78, 216, 1)' } : {}}
+            whileTap={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 0.98 } : {}}
             className={`backdrop-blur-xl border px-8 py-4 rounded-3xl shadow-xl flex items-center gap-3 text-sm font-black tracking-tight uppercase transition-colors
               ${isSearching ? 'border-amber-200 text-amber-600 cursor-wait' : 
-                zoomLevel < 12 ? 'border-slate-200 text-slate-400 cursor-not-allowed' : 
-                'border-blue-500 text-white shadow-blue-500/20'}`}
+                enableCityWideSearch ? 'border-red-500 text-white shadow-red-500/20' :
+                (zoomLevel < 12 ? 'border-slate-200 text-slate-400 cursor-not-allowed' : 
+                'border-blue-500 text-white shadow-blue-500/20')}`}
           >
             <AnimatePresence mode="wait">
               {isSearching ? (
@@ -1808,7 +2138,7 @@ export default function App() {
                 >
                   <Loader2 className="w-5 h-5" />
                 </motion.div>
-              ) : zoomLevel < 12 ? (
+              ) : (!enableCityWideSearch && zoomLevel < 12) ? (
                 <motion.div
                   key="zoom"
                   initial={{ scale: 0.5, opacity: 0 }}
@@ -1829,7 +2159,7 @@ export default function App() {
               )}
             </AnimatePresence>
             <motion.span layout className="whitespace-nowrap">
-              {isSearching ? t('searching') : (zoomLevel < 12 ? t('searchHint') : t('startSearch'))}
+              {isSearching ? t('searching') : (enableCityWideSearch ? t('cityWideSearch') : (zoomLevel < 12 ? t('searchHint') : t('startSearch')))}
             </motion.span>
           </motion.button>
           
@@ -1890,6 +2220,18 @@ export default function App() {
                       {t('general')}
                     </button>
                     <button 
+                      onClick={() => setSettingsTab('dataFilter')}
+                      className={`px-4 py-2.5 rounded-xl text-left text-xs font-bold transition-all ${settingsTab === 'dataFilter' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:bg-slate-200/50'}`}
+                    >
+                      {t('dataFilter')}
+                    </button>
+                    <button 
+                      onClick={() => setSettingsTab('experimental')}
+                      className={`px-4 py-2.5 rounded-xl text-left text-xs font-bold transition-all ${settingsTab === 'experimental' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:bg-slate-200/50'}`}
+                    >
+                      {t('experimental')}
+                    </button>
+                    <button 
                       onClick={() => setSettingsTab('about')}
                       className={`px-4 py-2.5 rounded-xl text-left text-xs font-bold transition-all ${settingsTab === 'about' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-500 hover:bg-slate-200/50'}`}
                     >
@@ -1910,36 +2252,36 @@ export default function App() {
                       <div className="space-y-6">
                         <div className="space-y-4">
                           <div className="flex items-center justify-between p-1">
-                            <div className="flex flex-col">
-                              <span className="text-xs font-bold text-slate-700">{t('showStations')}</span>
-                              <span className="text-[10px] text-slate-400">{showStations ? 'ON' : 'OFF'}</span>
-                            </div>
+                            <span className="text-xs font-bold text-slate-700">{t('showMoreInfo')}</span>
                             <button 
-                              onClick={toggleStations}
-                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
+                              onClick={toggleMoreInfo}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showMoreInfo ? 'bg-blue-500' : 'bg-slate-300'}`}
                             >
                               <motion.div 
                                 layout
-                                animate={{ x: showStations ? 24 : 0 }}
+                                animate={{ x: showMoreInfo ? 24 : 0 }}
                                 className="w-4 h-4 bg-white rounded-full shadow-sm"
                               />
                             </button>
                           </div>
+                        </div>
 
-                          <div className="flex items-center justify-between p-1">
-                            <div className="flex flex-col">
-                              <span className="text-xs font-bold text-slate-700">{t('showBaseMap')}</span>
-                              <span className="text-[10px] text-slate-400">{showBaseMap ? 'ON' : 'OFF'}</span>
-                            </div>
-                            <button 
-                              onClick={toggleBaseMap}
-                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showBaseMap ? 'bg-blue-500' : 'bg-slate-300'}`}
+                        <div className="h-px bg-slate-100 w-full" />
+
+                        <div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-4">{t('lineThickness')}</label>
+                          <div className="flex bg-slate-100 p-1 rounded-2xl">
+                            <button
+                              onClick={() => setLineThickness('thick')}
+                              className={`flex-1 py-2 text-xs font-bold transition-all rounded-xl ${lineThickness === 'thick' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                             >
-                              <motion.div 
-                                layout
-                                animate={{ x: showBaseMap ? 24 : 0 }}
-                                className="w-4 h-4 bg-white rounded-full shadow-sm"
-                              />
+                              {t('thick')}
+                            </button>
+                            <button
+                              onClick={() => setLineThickness('thin')}
+                              className={`flex-1 py-2 text-xs font-bold transition-all rounded-xl ${lineThickness === 'thin' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                            >
+                              {t('thin')}
                             </button>
                           </div>
                         </div>
@@ -1966,6 +2308,73 @@ export default function App() {
                           </div>
                         </div>
                       </div>
+                    ) : settingsTab === 'dataFilter' ? (
+                      <div className="space-y-6">
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between p-1">
+                            <span className="text-xs font-bold text-slate-700">{t('showStations')}</span>
+                            <button 
+                              onClick={toggleStations}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: showStations ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-1">
+                            <span className="text-xs font-bold text-slate-700">{t('showBaseMap')}</span>
+                            <button 
+                              onClick={toggleBaseMap}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showBaseMap ? 'bg-blue-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: showBaseMap ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-1">
+                            <span className="text-xs font-bold text-slate-700">{t('filterAirportBus')}</span>
+                            <button 
+                              onClick={toggleFilterAirportBus}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${filterAirportBus ? 'bg-blue-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: filterAirportBus ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : settingsTab === 'experimental' ? (
+                      <div className="space-y-6">
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between p-1">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-slate-700">{t('cityWideSearch')}</span>
+                              <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight">实验性功能：可能导致设备极度卡顿</span>
+                            </div>
+                            <button 
+                              onClick={toggleCityWideSearch}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 shrink-0 ${enableCityWideSearch ? 'bg-red-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: enableCityWideSearch ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     ) : (
                       <div className="flex flex-col items-center justify-center min-h-full py-4 gap-4">
                         <div className="w-20 h-20 bg-white border border-slate-100 rounded-3xl flex items-center justify-center shadow-2xl shadow-blue-500/10 mb-2">
@@ -1977,7 +2386,7 @@ export default function App() {
                         </div>
                         <h3 className="text-xl font-black text-slate-900 tracking-tight">{t('title')}</h3>
                         <div className="px-4 py-1.5 bg-slate-100 rounded-full">
-                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t('version')} v2.0</span>
+                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t('version')} V2.1</span>
                         </div>
                       </div>
                     )}
@@ -1988,60 +2397,106 @@ export default function App() {
           )}
         </AnimatePresence>
 
+        {/* City Wide Search Warning Modal */}
+        <AnimatePresence>
+          {showCityWideConfirm && (
+            <>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-[110] bg-slate-900/40 backdrop-blur-sm pointer-events-auto"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[111] w-[340px] bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col pointer-events-auto border border-red-100"
+              >
+                <div className="p-6 pb-2">
+                  <div className="w-12 h-12 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center mb-4">
+                    <Info className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-xl font-black text-slate-900 mb-2">{t('cityWideSearch')}</h3>
+                  <p className="text-sm font-medium text-slate-500 leading-relaxed">
+                    {t('cityWideSearchWarning')}
+                  </p>
+                </div>
+                <div className="p-4 flex gap-3 mt-2">
+                  <button
+                    onClick={cancelCityWideSearch}
+                    className="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
+                  >
+                    {t('cancel')}
+                  </button>
+                  <button
+                    onClick={confirmCityWideSearch}
+                    className="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-white bg-red-500 hover:bg-red-600 shadow-lg shadow-red-500/20 transition-all hover:scale-105 active:scale-95"
+                  >
+                    {t('confirmEnable')}
+                  </button>
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+
         {/* Removed duplicate UI elements */}
 
-        <div className="hidden md:block absolute bottom-4 left-4 z-10 pointer-events-none">
-          <motion.div 
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="backdrop-blur-2xl bg-white/95 border border-white p-3 rounded-[2rem] shadow-[0_12px_40px_rgba(0,0,0,0.12)] flex flex-col gap-3 pointer-events-auto min-w-[140px]"
-          >
-            {/* Legend Row */}
-            <div className="hidden md:flex items-center justify-between px-1">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" />
-                <span className="text-[10px] font-black text-slate-400">1-3</span>
+        {showMoreInfo && (
+          <div className="hidden md:block absolute bottom-4 left-4 z-10 pointer-events-none">
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="backdrop-blur-2xl bg-white/95 border border-white p-3 rounded-[2rem] shadow-[0_12px_40px_rgba(0,0,0,0.12)] flex flex-col gap-3 pointer-events-auto min-w-[140px]"
+            >
+              {/* Legend Row */}
+              <div className="hidden md:flex items-center justify-between px-1">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" />
+                  <span className="text-[10px] font-black text-slate-400">1-3</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-yellow-500 shadow-sm" />
+                  <span className="text-[10px] font-black text-slate-400">4-6</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-2 h-2 rounded-full bg-rose-500 shadow-sm" />
+                  <span className="text-[10px] font-black text-slate-400">7+</span>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-yellow-500 shadow-sm" />
-                <span className="text-[10px] font-black text-slate-400">4-6</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-rose-500 shadow-sm" />
-                <span className="text-[10px] font-black text-slate-400">7+</span>
-              </div>
-            </div>
 
-            {/* Separator */}
-            <div className="hidden md:block h-px bg-slate-100 w-full" />
-            
-            {/* Stats row with pulsing indicator */}
-            <div className="flex items-center justify-between px-1">
-              <div className="flex gap-4">
-                <div className="flex flex-col">
-                  <span className="text-sm font-black text-slate-900 leading-none">{stats.stops}</span>
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{t('stops')}</span>
+              {/* Separator */}
+              <div className="hidden md:block h-px bg-slate-100 w-full" />
+              
+              {/* Stats row with pulsing indicator */}
+              <div className="flex items-center justify-between px-1">
+                <div className="flex gap-4">
+                  <div className="flex flex-col">
+                    <span className="text-sm font-black text-slate-900 leading-none">{stats.stops}</span>
+                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{t('stops')}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-sm font-black text-slate-900 leading-none">{stats.lines}</span>
+                    <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{t('lines')}</span>
+                  </div>
                 </div>
-                <div className="flex flex-col">
-                  <span className="text-sm font-black text-slate-900 leading-none">{stats.lines}</span>
-                  <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tighter mt-1">{t('lines')}</span>
-                </div>
+                <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.4)]" />
               </div>
-              <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse shadow-[0_0_8px_rgba(59,130,246,0.4)]" />
-            </div>
-          </motion.div>
-        </div>
+            </motion.div>
+          </div>
+        )}
 
 
         <AnimatePresence>
           {(selectedStop || selectedSegmentLines) && (
             <motion.div
-              initial={{ opacity: 0, x: -30 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -30 }}
-              className="fixed left-4 top-[96px] z-40 pointer-events-auto"
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 30 }}
+              className={`fixed bottom-[100px] left-4 right-4 md:top-[96px] md:bottom-auto md:left-4 md:right-auto z-50 pointer-events-auto transition-all duration-300`}
             >
-              <div className="backdrop-blur-2xl bg-white/95 border border-white/50 p-6 rounded-[2.5rem] shadow-2xl w-[360px] max-h-[calc(100vh-220px)] overflow-hidden flex flex-col border-t-4 border-t-blue-500 relative">
+              <div className="backdrop-blur-2xl bg-white/95 border border-white/50 p-3 md:p-6 rounded-3xl md:rounded-[2.5rem] shadow-2xl w-full md:w-[360px] md:max-h-[calc(100vh-220px)] overflow-hidden flex flex-col md:border-t-4 md:border-t-blue-500 relative">
                 <button 
                   onClick={() => {
                     setSelectedStop(null);
@@ -2049,72 +2504,154 @@ export default function App() {
                     setSelectionPos(null);
                     setSelectedSegmentName(null);
                   }}
-                  className="absolute top-5 right-5 p-2.5 hover:bg-slate-100 rounded-2xl transition-colors bg-white shadow-sm border border-slate-100 z-10"
+                  className="absolute top-3 right-3 md:top-5 md:right-5 p-1.5 md:p-2.5 hover:bg-slate-100 rounded-xl md:rounded-2xl transition-colors bg-white shadow-sm border border-slate-100 z-10"
                 >
-                  <X className="w-5 h-5 text-slate-400" />
+                  <X className="w-4 h-4 md:w-5 md:h-5 text-slate-400" />
                 </button>
 
-                <div className="mb-6 flex flex-col">
-                  <h3 className="text-2xl font-black text-slate-800 tracking-tighter leading-tight">
-                    {selectedStop ? selectedStop.name : (selectedSegmentName === "正在获取路段信息..." ? "当前位置" : (selectedSegmentName || "当前位置"))}
-                  </h3>
-                  {selectedStop && selectedStop.address && (
-                    <p className="text-[11px] font-medium text-slate-400 mt-1 truncate max-w-full">
-                      {selectedStop.address}
-                    </p>
-                  )}
-                  <div className="flex items-center justify-between gap-2 mt-2">
-                    <div className="flex items-center gap-2">
-                      <div className="w-1.5 h-3.5 rounded-full bg-blue-500" />
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest leading-none">
+                <div className="mb-2 md:mb-6 pr-8">
+                  <div className="flex items-center gap-2 mb-1">
+                    <h3 className="text-base md:text-2xl font-black text-slate-800 tracking-tighter truncate">
+                      {selectedStop ? selectedStop.name : (selectedSegmentName === "正在获取路段信息..." ? "当前位置" : (selectedSegmentName || "当前位置"))}
+                    </h3>
+                    {((selectedStop && selectedStop.lines && selectedStop.lines.length > 0) || (selectedSegmentLines && selectedSegmentLines.length > 0 && selectedStop === null)) && (
+                      <div className="bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded text-[9px] font-black tracking-wider shrink-0">
                         {(selectedStop ? selectedStop.lines.length : selectedSegmentLines?.length || 0)} {t('lines')}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between">
+                    {(selectedStop?.address || selectedSegmentAddress) && (
+                      <p className="text-[9px] md:text-[11px] font-medium text-slate-400 truncate max-w-[65%]">
+                        {selectedStop?.address || selectedSegmentAddress}
                       </p>
-                    </div>
-                    {selectedStop && selectedStop.lines.length > 0 && (
+                    )}
+                    {selectedStop && selectedStop.lines && selectedStop.lines.length > 0 && selectedStop.isBusStop !== false && (
                       <button 
                         onClick={() => showStopConnectivity(selectedStop.lines)}
-                        className="text-[10px] font-bold text-blue-600 hover:text-blue-700 bg-blue-50 px-3 py-1.5 rounded-full border border-blue-100 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 active:translate-y-0 active:shadow-sm"
+                        className="text-[9px] md:text-[10px] font-bold text-blue-600 hover:text-blue-700 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100 shadow-sm transition-all absolute right-12 top-3 md:relative md:top-auto md:right-auto"
                       >
                         {t('connectivity')}
                       </button>
                     )}
                   </div>
+                  {selectedStop?.segmentName && (
+                    <div className="mt-2 text-[12px] md:text-[14px] font-black text-slate-700 bg-slate-50 border border-slate-200 shadow-sm px-3 md:px-4 py-1.5 md:py-2 rounded-lg flex items-center justify-center truncate">
+                      {selectedStop.segmentName}
+                    </div>
+                  )}
                 </div>
 
-                <div className="overflow-y-auto pr-2 custom-scrollbar flex-1 -mr-2">
-                  <div className="flex flex-col gap-3 pb-4">
-                    {(selectedStop ? selectedStop.lines : selectedSegmentLines || []).sort().map((line: string, idx: number) => {
-                      const { name, start, end } = parseLineInfo(line);
+                <div className="overflow-x-auto md:overflow-y-auto custom-scrollbar flex-1 pb-1 md:pb-0 px-1 -mx-1 md:mx-0 md:pr-2 gap-1.5 md:gap-3 flex md:flex-col items-center md:items-stretch h-[32px] md:h-auto snap-x snap-mandatory">
+                  {(selectedStop ? selectedStop.lines : selectedSegmentLines || []).sort().map((line: string, idx: number) => {
+                    const { name, start, end } = parseLineInfo(line);
+                    return (
+                      <div 
+                        key={line + idx}
+                        onClick={() => handleManualSearch({ name: line, type: 'busline' })}
+                        className="md:bg-white md:border md:border-slate-100 md:rounded-2xl md:p-3 bg-slate-100 rounded p-1.5 px-2.5 flex md:gap-4 items-center md:hover:bg-slate-50 md:hover:border-blue-100 md:hover:shadow-lg transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[120px] md:max-w-none md:w-auto md:h-[72px]"
+                      >
+                        <div className="hidden md:block absolute left-0 top-0 bottom-0 w-1 bg-blue-500/0 md:group-hover:bg-blue-500 transition-all" />
+                        
+                        <div className="md:bg-slate-900 md:text-white text-slate-800 font-black text-[11px] md:text-[10px] md:w-12 md:h-12 md:rounded-2xl shrink-0 flex items-center justify-center md:shadow-md md:group-hover:bg-blue-600 transition-colors whitespace-nowrap">
+                          {name.replace('路', '')}
+                        </div>
+                        <div className="hidden md:flex flex-col min-w-0 flex-1 justify-center h-full">
+                          <div className="flex flex-col gap-1.5">
+                            {start !== '-' ? (
+                              <>
+                                <div className="flex items-center gap-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                                  <span className="text-[11px] font-black text-slate-700 truncate leading-none">{start}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+                                  <span className="text-[11px] font-medium text-slate-400 truncate leading-none">{end}</span>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="text-[10px] font-bold text-slate-300 italic px-1">
+                                {t('noDirection')}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {activeBusLine && (
+            <motion.div
+              initial={{ opacity: 0, x: -30 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -30 }}
+              className={`fixed ${selectedStop || selectedSegmentName ? 'bottom-[220px]' : 'bottom-[100px]'} md:bottom-auto left-4 right-4 md:top-24 md:left-4 z-40 md:w-64 pointer-events-auto transition-all duration-300 md:h-[calc(100vh-220px)]`}
+            >
+              <div className="backdrop-blur-2xl bg-white/95 border border-white/50 rounded-3xl md:rounded-[2rem] shadow-2xl h-[100px] md:h-full flex flex-col overflow-hidden relative md:border-t-4 md:border-t-blue-500">
+                <button 
+                  onClick={() => {
+                    setActiveBusLine(null);
+                    handleClear();
+                  }}
+                  className="absolute top-2.5 right-2.5 md:top-3 md:right-3 p-1.5 md:p-2 hover:bg-slate-100 rounded-xl transition-colors bg-white shadow-sm border border-slate-100 z-10"
+                >
+                  <X className="w-3 h-3 md:w-4 md:h-4 text-slate-400" />
+                </button>
+                <div className="p-2.5 px-4 md:p-4 md:py-5 border-b border-slate-100 shrink-0 flex flex-row md:flex-col items-center md:items-start gap-2 md:gap-0">
+                  <span className="font-black text-slate-800 text-sm md:text-lg pr-2 md:pr-6 whitespace-nowrap">{parseLineInfo(activeBusLine.name).name.replace('路','')}</span>
+                  <span className="text-[10px] md:text-xs text-slate-500 font-medium md:mt-1 truncate hidden md:block">
+                    {parseLineInfo(activeBusLine.name).start !== '-' ? `${parseLineInfo(activeBusLine.name).start} - ${parseLineInfo(activeBusLine.name).end}` : '环线 / 方向未知'}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-medium truncate md:hidden">
+                    {parseLineInfo(activeBusLine.name).start !== '-' ? `${parseLineInfo(activeBusLine.name).start} - ${parseLineInfo(activeBusLine.name).end}` : '环线'}
+                  </span>
+                </div>
+                <div className="flex-1 overflow-x-auto md:overflow-x-hidden md:overflow-y-auto custom-scrollbar p-0 md:p-4 md:pr-2 flex flex-row md:flex-col items-center md:items-stretch snap-x snap-mandatory mt-1 md:mt-0">
+                  <div className="relative flex flex-row md:flex-col items-center md:items-stretch md:pl-1 h-full md:h-auto w-max md:w-auto px-4 md:px-0">
+                    <div className="hidden md:block absolute left-[9px] top-4 bottom-4 w-0.5 bg-slate-200" />
+                    <div className="md:hidden absolute top-[14px] left-8 right-8 h-0.5 bg-slate-200" />
+                    {activeBusLine.via_stops.map((stop: any, idx: number) => {
+                      const isSelected = selectedStop?.name === stop.name;
                       return (
                         <div 
-                          key={line + idx}
-                          onClick={() => handleManualSearch({ name: line, type: 'busline' })}
-                          className="bg-white border border-slate-100 rounded-2xl p-3 flex gap-4 items-center hover:bg-slate-50 hover:border-blue-100 hover:shadow-lg transition-all group relative overflow-hidden h-[72px] shrink-0 cursor-pointer"
+                          key={idx} 
+                          className="flex flex-col md:flex-row items-center md:items-start md:mb-4 relative cursor-pointer group px-2 md:px-0 shrink-0 snap-center min-w-[72px] md:min-w-0"
+                          onClick={async () => {
+                            if (!mapRef.current) return;
+                            mapRef.current.setCenter([stop.location.lng, stop.location.lat]);
+                            mapRef.current.setZoom(17);
+                            setSelectionPos([stop.location.lng, stop.location.lat]);
+                            setSelectedStop({
+                              name: stop.name,
+                              address: t('loadingDetails'),
+                              lines: [],
+                              city: currentCity
+                            });
+                            const details = await fetchStopDetails(stop.name, [stop.location.lng, stop.location.lat], (window as any).AMap, currentCity);
+                            if (details) {
+                              setSelectedStop({ ...details, city: currentCity });
+                            } else {
+                              setSelectedStop({
+                                name: stop.name,
+                                address: '无详细线路数据',
+                                lines: [activeBusLine.name.split('(')[0]],
+                                city: currentCity,
+                                isBusStop: true
+                              });
+                            }
+                          }}
                         >
-                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500/0 group-hover:bg-blue-500 transition-all" />
-                          
-                          <div className="bg-slate-900 text-white font-black text-[10px] w-12 h-12 rounded-2xl shrink-0 flex items-center justify-center shadow-md group-hover:bg-blue-600 transition-colors">
-                            {name.replace('路', '')}
+                          <div className={`flex flex-col items-center shrink-0 pt-0.5 my-2 md:my-0 md:mr-3 ${isSelected ? 'scale-125' : 'group-hover:scale-125'} transition-transform`}>
+                            <div className="w-[12px] h-[12px] md:w-[14px] md:h-[14px] rounded-full border-2 md:border-4 border-white shadow-[0_0_0_1px_rgba(59,130,246,0.3)] bg-blue-500 z-10" />
                           </div>
-                          <div className="flex flex-col min-w-0 flex-1 justify-center h-full">
-                            <div className="flex flex-col gap-1.5">
-                              {start !== '-' ? (
-                                <>
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                                    <span className="text-[11px] font-black text-slate-700 truncate leading-none">{start}</span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
-                                    <span className="text-[11px] font-medium text-slate-400 truncate leading-none">{end}</span>
-                                  </div>
-                                </>
-                              ) : (
-                                <div className="text-[10px] font-bold text-slate-300 italic px-1">
-                                  {t('noDirection')}
-                                </div>
-                              )}
-                            </div>
+                          <div className={`text-[10px] md:text-sm font-bold leading-tight md:pt-0.5 transition-colors w-full text-center md:text-left truncate px-1 md:px-0 ${isSelected ? 'text-blue-600' : 'text-slate-700 group-hover:text-blue-600'}`}>
+                            {stop.name}
                           </div>
                         </div>
                       );
@@ -2138,19 +2675,21 @@ export default function App() {
         <div className="mr-2">
           <span className="text-[9px] font-bold text-slate-400 opacity-60 uppercase tracking-widest leading-none">@TsFeng</span>
         </div>
-        <div className="hidden md:flex backdrop-blur-xl bg-white/70 border border-white/50 p-1 px-4 rounded-xl shadow-xl items-center gap-2 pointer-events-auto h-[44px]">
-          <div className="py-2 flex items-center gap-3 text-slate-500">
-            <span className="text-[10px] font-black uppercase tracking-widest opacity-60">{t('level')}</span>
-            <span className="text-sm font-black text-slate-700 leading-none">{zoomLevel.toFixed(1)}</span>
-            <div className="flex gap-1">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className={`w-1 h-1 rounded-full transition-all ${
-                  (zoomLevel - 13) * 2 >= i ? 'bg-blue-500' : 'bg-slate-200'
-                }`} />
-              ))}
+        {showMoreInfo && (
+          <div className="hidden md:flex backdrop-blur-xl bg-white/70 border border-white/50 p-1 px-4 rounded-xl shadow-xl items-center gap-2 pointer-events-auto h-[44px]">
+            <div className="py-2 flex items-center gap-3 text-slate-500">
+              <span className="text-[10px] font-black uppercase tracking-widest opacity-60">{t('level')}</span>
+              <span className="text-sm font-black text-slate-700 leading-none">{zoomLevel.toFixed(1)}</span>
+              <div className="flex gap-1">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className={`w-1 h-1 rounded-full transition-all ${
+                    (zoomLevel - 13) * 2 >= i ? 'bg-blue-500' : 'bg-slate-200'
+                  }`} />
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </footer>
     </div>
   );
