@@ -26,6 +26,8 @@ var import_express = __toESM(require("express"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_fs = __toESM(require("fs"), 1);
 var import_vite = require("vite");
+var import_app = require("firebase/app");
+var import_firestore = require("firebase/firestore");
 async function startServer() {
   const app = (0, import_express.default)();
   const PORT = 3e3;
@@ -36,18 +38,31 @@ async function startServer() {
   if (!import_fs.default.existsSync(DATA_DIR)) import_fs.default.mkdirSync(DATA_DIR, { recursive: true });
   if (!import_fs.default.existsSync(PENDING_DIR)) import_fs.default.mkdirSync(PENDING_DIR, { recursive: true });
   if (!import_fs.default.existsSync(APPROVED_DIR)) import_fs.default.mkdirSync(APPROVED_DIR, { recursive: true });
+  let db = null;
+  try {
+    const configPath = import_path.default.join(process.cwd(), "firebase-applet-config.json");
+    if (import_fs.default.existsSync(configPath)) {
+      const config = JSON.parse(import_fs.default.readFileSync(configPath, "utf-8"));
+      if (config && config.apiKey && config.apiKey.trim() !== "") {
+        const firebaseApp = (0, import_app.getApps)().length === 0 ? (0, import_app.initializeApp)(config) : (0, import_app.getApp)();
+        db = config.firestoreDatabaseId ? (0, import_firestore.getFirestore)(firebaseApp, config.firestoreDatabaseId) : (0, import_firestore.getFirestore)(firebaseApp);
+        console.log("Firebase Firestore successfully initialized on Cloud Run Server proxy!");
+      }
+    }
+  } catch (e) {
+    console.error("Failed to initialize server-side Firebase Firestore proxy:", e);
+  }
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok" });
+    res.json({ status: "ok", firebaseProxyActive: !!db });
   });
   const sanitizeId = (id) => id.replace(/[^a-zA-Z0-9_\-]/g, "");
-  app.post("/api/submissions/submit", (req, res) => {
+  app.post("/api/submissions/submit", async (req, res) => {
     try {
-      const { id, name, creatorNickname, city, district, path: linePath, via_stops } = req.body;
+      const { id, name, creatorNickname, city, district, path: linePath, via_stops, status, timestamp } = req.body;
       if (!id || !name || !creatorNickname || !city) {
         return res.status(400).json({ error: "Missing required fields" });
       }
       const fileId = sanitizeId(id);
-      const filePath = import_path.default.join(PENDING_DIR, `${fileId}.json`);
       const data = {
         id: fileId,
         name,
@@ -56,17 +71,23 @@ async function startServer() {
         district: district || "",
         path: linePath || [],
         via_stops: via_stops || [],
-        status: "pending",
-        timestamp: Date.now()
+        status: status || "pending",
+        timestamp: timestamp || Date.now()
       };
-      import_fs.default.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+      if (db) {
+        await (0, import_firestore.setDoc)((0, import_firestore.doc)(db, "submissions", fileId), data);
+        console.log(`[SQL/Firestore Proxy] Saved submission "${fileId}" directly to Cloud Firestore.`);
+      } else {
+        const filePath = import_path.default.join(PENDING_DIR, `${fileId}.json`);
+        import_fs.default.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+      }
       res.json({ success: true, message: "Submitted successfully, awaiting audit." });
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: err.message });
     }
   });
-  app.get("/api/submissions/status", (req, res) => {
+  app.get("/api/submissions/status", async (req, res) => {
     try {
       const idsStr = req.query.ids;
       if (!idsStr) {
@@ -74,6 +95,29 @@ async function startServer() {
       }
       const ids = idsStr.split(",").map(sanitizeId);
       const statuses = {};
+      if (db && ids.length > 0) {
+        const batches = [];
+        for (let i = 0; i < ids.length; i += 10) {
+          batches.push(ids.slice(i, i + 10));
+        }
+        for (const batch of batches) {
+          if (batch.length === 0) continue;
+          const q = (0, import_firestore.query)((0, import_firestore.collection)(db, "submissions"), (0, import_firestore.where)("id", "in", batch));
+          const querySnapshot = await (0, import_firestore.getDocs)(q);
+          querySnapshot.forEach((docSnap) => {
+            const data = docSnap.data();
+            if (data && data.id) {
+              statuses[data.id] = data.status;
+            }
+          });
+        }
+        ids.forEach((id) => {
+          if (!statuses[id]) {
+            statuses[id] = "rejected";
+          }
+        });
+        return res.json(statuses);
+      }
       ids.forEach((id) => {
         const approvedPath = import_path.default.join(APPROVED_DIR, `${id}.json`);
         const pendingPath = import_path.default.join(PENDING_DIR, `${id}.json`);
@@ -91,8 +135,31 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.get("/api/submissions/approved", (req, res) => {
+  app.get("/api/submissions/approved", async (req, res) => {
     try {
+      if (db) {
+        let lines2 = [];
+        try {
+          const q = (0, import_firestore.query)(
+            (0, import_firestore.collection)(db, "submissions"),
+            (0, import_firestore.where)("status", "==", "approved"),
+            (0, import_firestore.orderBy)("timestamp", "desc")
+          );
+          const querySnapshot = await (0, import_firestore.getDocs)(q);
+          querySnapshot.forEach((docSnap) => {
+            lines2.push(docSnap.data());
+          });
+        } catch (error) {
+          const q = (0, import_firestore.query)((0, import_firestore.collection)(db, "submissions"), (0, import_firestore.where)("status", "==", "approved"));
+          const querySnapshot = await (0, import_firestore.getDocs)(q);
+          const approvedLines = [];
+          querySnapshot.forEach((docSnap) => {
+            approvedLines.push(docSnap.data());
+          });
+          lines2 = approvedLines.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        }
+        return res.json(lines2);
+      }
       if (!import_fs.default.existsSync(APPROVED_DIR)) {
         return res.json([]);
       }
@@ -110,8 +177,31 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.get("/api/admin/pending", (req, res) => {
+  app.get("/api/admin/pending", async (req, res) => {
     try {
+      if (db) {
+        let pendingLines = [];
+        try {
+          const q = (0, import_firestore.query)(
+            (0, import_firestore.collection)(db, "submissions"),
+            (0, import_firestore.where)("status", "==", "pending"),
+            (0, import_firestore.orderBy)("timestamp", "desc")
+          );
+          const querySnapshot = await (0, import_firestore.getDocs)(q);
+          querySnapshot.forEach((docSnap) => {
+            pendingLines.push(docSnap.data());
+          });
+        } catch (error) {
+          const q = (0, import_firestore.query)((0, import_firestore.collection)(db, "submissions"), (0, import_firestore.where)("status", "==", "pending"));
+          const querySnapshot = await (0, import_firestore.getDocs)(q);
+          const rawLines = [];
+          querySnapshot.forEach((docSnap) => {
+            rawLines.push(docSnap.data());
+          });
+          pendingLines = rawLines.sort((a, b) => b.timestamp - a.timestamp);
+        }
+        return res.json(pendingLines);
+      }
       if (!import_fs.default.existsSync(PENDING_DIR)) {
         return res.json([]);
       }
@@ -129,11 +219,15 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post("/api/admin/approve", (req, res) => {
+  app.post("/api/admin/approve", async (req, res) => {
     try {
       const { id } = req.body;
       if (!id) return res.status(400).json({ error: "Missing Id" });
       const fileId = sanitizeId(id);
+      if (db) {
+        await (0, import_firestore.updateDoc)((0, import_firestore.doc)(db, "submissions", fileId), { status: "approved" });
+        return res.json({ success: true, message: "Submission approved and published" });
+      }
       const pendingPath = import_path.default.join(PENDING_DIR, `${fileId}.json`);
       const approvedPath = import_path.default.join(APPROVED_DIR, `${fileId}.json`);
       if (!import_fs.default.existsSync(pendingPath)) {
@@ -149,11 +243,15 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post("/api/admin/reject", (req, res) => {
+  app.post("/api/admin/reject", async (req, res) => {
     try {
       const { id } = req.body;
       if (!id) return res.status(400).json({ error: "Missing Id" });
       const fileId = sanitizeId(id);
+      if (db) {
+        await (0, import_firestore.deleteDoc)((0, import_firestore.doc)(db, "submissions", fileId));
+        return res.json({ success: true, message: "Submission rejected and deleted" });
+      }
       const pendingPath = import_path.default.join(PENDING_DIR, `${fileId}.json`);
       if (!import_fs.default.existsSync(pendingPath)) {
         return res.status(404).json({ error: "Pending submission not found" });
@@ -165,11 +263,15 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post("/api/admin/edit-approved", (req, res) => {
+  app.post("/api/admin/edit-approved", async (req, res) => {
     try {
       const { id, name } = req.body;
       if (!id || !name) return res.status(400).json({ error: "Missing required fields" });
       const fileId = sanitizeId(id);
+      if (db) {
+        await (0, import_firestore.updateDoc)((0, import_firestore.doc)(db, "submissions", fileId), { name });
+        return res.json({ success: true, message: "Submission name updated successfully" });
+      }
       const approvedPath = import_path.default.join(APPROVED_DIR, `${fileId}.json`);
       if (!import_fs.default.existsSync(approvedPath)) {
         return res.status(404).json({ error: "Approved submission not found" });
@@ -183,11 +285,15 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post("/api/admin/delete-approved", (req, res) => {
+  app.post("/api/admin/delete-approved", async (req, res) => {
     try {
       const { id } = req.body;
       if (!id) return res.status(400).json({ error: "Missing Id" });
       const fileId = sanitizeId(id);
+      if (db) {
+        await (0, import_firestore.deleteDoc)((0, import_firestore.doc)(db, "submissions", fileId));
+        return res.json({ success: true, message: "Approved submission deleted successfully" });
+      }
       const approvedPath = import_path.default.join(APPROVED_DIR, `${fileId}.json`);
       if (!import_fs.default.existsSync(approvedPath)) {
         return res.status(404).json({ error: "Approved submission not found" });
