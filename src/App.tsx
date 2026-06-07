@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { BusStop, BusLine, LineSegment } from './types';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 
@@ -13,6 +13,40 @@ if (typeof window !== 'undefined') {
     securityJsCode: SECURITY_CODE,
   };
 }
+
+const checkIsLineQuery = (str: string): boolean => {
+  if (!str) return false;
+  const s = str.trim();
+  
+  const excludeWords = ['站', '口', '校区', '公寓', '小区', '公园', '中心', '大厦', '大学', '中学', '小学', '医院', '市场', '公司', '广场', '胡同', '街', '路口', '桥', '枢纽', '住宅', '东门', '西门', '南门', '北门', '酒店', '餐', '超市', '商场', '银行', '居委会', '村', '寺', '庙', '庭', '园', '苑', '府', '湾'];
+  if (excludeWords.some(w => s.includes(w))) {
+    return false;
+  }
+
+  if (/\d+/.test(s)) {
+    if (s.includes('号') || s.includes('楼') || s.includes('室') || s.includes('层')) {
+      return false;
+    }
+    return true;
+  }
+
+  const linePrefixes = ['专', '特', '夜', '快', '临', '观', '游', '环', '双', '支', '通勤', '快速直达', '客运', '郊', '捷'];
+  if (linePrefixes.some(p => s.startsWith(p))) {
+    return true;
+  }
+
+  const lineSuffixes = ['路线', '环线', '班车', '大巴', '巴士', '专线', '快线', '公交'];
+  if (lineSuffixes.some(suff => s.endsWith(suff))) {
+    return true;
+  }
+
+  const regionalPrefixes = /^(兴|通|顺|房|门|昌|平|大|密|怀|延|社|航|高|微)/;
+  if (regionalPrefixes.test(s)) {
+    return true;
+  }
+
+  return false;
+};
 
 export default function App() {
   const mapRef = useRef<any>(null);
@@ -84,6 +118,229 @@ export default function App() {
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [activeBusLine, setActiveBusLine] = useState<any | null>(null);
 
+  // --- USER DEFINED DRAWING AND ADMIN STATES ---
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const isDrawingModeRef = useRef(isDrawingMode);
+  useEffect(() => {
+    isDrawingModeRef.current = isDrawingMode;
+  }, [isDrawingMode]);
+
+  const [drawnPoints, setDrawnPoints] = useState<any[]>([]);
+  const drawnPointsRef = useRef(drawnPoints);
+  useEffect(() => {
+    drawnPointsRef.current = drawnPoints;
+  }, [drawnPoints]);
+
+  const [undoStack, setUndoStack] = useState<any[][]>([]);
+  const [redoStack, setRedoStack] = useState<any[][]>([]);
+  const [selectedPointIdx, setSelectedPointIdx] = useState<number | null>(null);
+
+  const [namingStopIdx, setNamingStopIdx] = useState<number | null>(null);
+  const [namingValue, setNamingValue] = useState('');
+
+  const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [submitCity, setSubmitCity] = useState('');
+  const [submitDistrict, setSubmitDistrict] = useState('');
+  const [submitLineName, setSubmitLineName] = useState('');
+  const [submitUserNickname, setSubmitUserNickname] = useState('');
+
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historicalSubmissions, setHistoricalSubmissions] = useState<any[]>(() => {
+    const saved = localStorage.getItem('user_drawn_lines_history');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  const [approvedUserLines, setApprovedUserLines] = useState<any[]>([]);
+  const [submissionStatuses, setSubmissionStatuses] = useState<Record<string, string>>({});
+
+  const [filterUserSubmissions, setFilterUserSubmissions] = useState(() => {
+    const saved = localStorage.getItem('app_filter_user_submissions');
+    return saved === 'true';
+  });
+
+  const filterUserSubmissionsRef = useRef(filterUserSubmissions);
+  useEffect(() => {
+    filterUserSubmissionsRef.current = filterUserSubmissions;
+  }, [filterUserSubmissions]);
+
+  // Admin and stats
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminMode, setAdminMode] = useState(false); // keep for compatibility or reference if needed
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
+  const [showAuditModal, setShowAuditModal] = useState(false);
+  const [showManageModal, setShowManageModal] = useState(false);
+  const [editingLineId, setEditingLineId] = useState<string | null>(null);
+  const [deletingLineId, setDeletingLineId] = useState<string | null>(null);
+  const [editingLineName, setEditingLineName] = useState('');
+  const [pendingSubmissions, setPendingSubmissions] = useState<any[]>([]);
+
+  const [footerClickCount, setFooterClickCount] = useState(0);
+  const [lastFooterClickTime, setLastFooterClickTime] = useState(0);
+
+  const drawingGroupRef = useRef<any>(null);
+  const isRoutingRef = useRef(false);
+
+  // Helper SHA-256 for browser hashing
+  const sha256 = async (message: string) => {
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      try {
+        const msgBuffer = new TextEncoder().encode(message);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      } catch (e) {
+        console.warn("Subtle crypto failed, falling back to JS-based SHA-256", e);
+      }
+    }
+
+    // Pure JavaScript SHA-256 implementation fallback
+    function rotr(n: number, x: number) {
+      return (x >>> n) | (x << (32 - n));
+    }
+    const hash = [
+      0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+      0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+    ];
+    const k = [
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+    ];
+    
+    const bytes = new TextEncoder().encode(message);
+    const words: number[] = [];
+    for (let i = 0; i < bytes.length; i++) {
+      const wIdx = i >> 2;
+      if (words[wIdx] === undefined) words[wIdx] = 0;
+      words[wIdx] |= bytes[i] << (24 - (i % 4) * 8);
+    }
+    const len = bytes.length;
+    const padIdx = len >> 2;
+    if (words[padIdx] === undefined) words[padIdx] = 0;
+    words[padIdx] |= 0x80 << (24 - (len % 4) * 8);
+    
+    while (((words.length + 2) % 16) !== 0) {
+      words.push(0);
+    }
+    words.push(0, len * 8);
+
+    for (let chunk = 0; chunk < words.length; chunk += 16) {
+      const w = words.slice(chunk, chunk + 16);
+      while (w.length < 64) {
+        const s0 = rotr(7, w[w.length - 15]) ^ rotr(18, w[w.length - 15]) ^ (w[w.length - 15] >>> 3);
+        const s1 = rotr(17, w[w.length - 2]) ^ rotr(19, w[w.length - 2]) ^ (w[w.length - 2] >>> 10);
+        w.push((w[w.length - 16] + s0 + w[w.length - 7] + s1) | 0);
+      }
+
+      let [a, b, c, d, e, f, g, h] = hash;
+      for (let i = 0; i < 64; i++) {
+        const S1 = rotr(6, e) ^ rotr(11, e) ^ rotr(25, e);
+        const ch = (e & f) ^ (~e & g);
+        const temp1 = (h + S1 + ch + k[i] + w[i]) | 0;
+        const S0 = rotr(2, a) ^ rotr(13, a) ^ rotr(22, a);
+        const maj = (a & b) ^ (a & c) ^ (b & c);
+        const temp2 = (S0 + maj) | 0;
+
+        h = g;
+        g = f;
+        f = e;
+        e = (d + temp1) | 0;
+        d = c;
+        c = b;
+        b = a;
+        a = (temp1 + temp2) | 0;
+      }
+
+      hash[0] = (hash[0] + a) | 0;
+      hash[1] = (hash[1] + b) | 0;
+      hash[2] = (hash[2] + c) | 0;
+      hash[3] = (hash[3] + d) | 0;
+      hash[4] = (hash[4] + e) | 0;
+      hash[5] = (hash[5] + f) | 0;
+      hash[6] = (hash[6] + g) | 0;
+      hash[7] = (hash[7] + h) | 0;
+    }
+
+    const result: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      let wordStr = (hash[i] >>> 0).toString(16);
+      while (wordStr.length < 8) wordStr = '0' + wordStr;
+      result.push(wordStr);
+    }
+    return result.join('');
+  };
+
+  // Status check & approved lines fetch
+  const fetchApprovedLines = async () => {
+    try {
+      const url = `${window.location.origin}/api/submissions/approved`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+      const data = await res.json();
+      const list = data || [];
+      setApprovedUserLines(list);
+      
+      // Load user submitted lines into fetchedLinesCache
+      list.forEach((ul: any) => {
+        fetchedLinesCache.current.set(ul.name, {
+          id: ul.id,
+          name: ul.name,
+          path: ul.path.map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat]),
+          stops: [],
+          start_stop: ul.via_stops[0]?.name || '始发站',
+          end_stop: ul.via_stops[ul.via_stops.length - 1]?.name || '终点站',
+          via_stops: ul.via_stops || [],
+          isUserSubmitted: true,
+          creatorNickname: ul.creatorNickname
+        } as any);
+      });
+    } catch (err) {
+      console.error('Failed to fetch approved user lines:', err);
+    }
+  };
+
+  const checkSubmissionStatuses = async (historicalList: any[]) => {
+    if (!historicalList || !Array.isArray(historicalList) || historicalList.length === 0) return;
+    try {
+      const validIds = historicalList
+        .map((h: any) => h && h.id)
+        .filter((id): id is string => typeof id === 'string' && id.trim() !== '');
+
+      if (validIds.length === 0) return;
+      const ids = validIds.join(',');
+      
+      const url = `${window.location.origin}/api/submissions/status?ids=${encodeURIComponent(ids)}`;
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+      const data = await res.json();
+      setSubmissionStatuses(data || {});
+    } catch (err) {
+      console.error('Failed to check statuses:', err);
+    }
+  };
+
+  // Periodic triggers or initial trigger
+  useEffect(() => {
+    fetchApprovedLines();
+  }, []);
+
+  useEffect(() => {
+    if (historicalSubmissions.length > 0) {
+      checkSubmissionStatuses(historicalSubmissions);
+    }
+  }, [historicalSubmissions]);
+
   // Translation dictionary
   const translations: Record<string, any> = {
     'zh-CN': {
@@ -91,6 +348,7 @@ export default function App() {
       general: '通用',
       dataFilter: '数据筛选',
       filterAirportBus: '过滤机场巴士',
+      filterUserSubmissions: '过滤用户添加',
       stationLineStats: '站点线路统计',
       about: '关于',
       language: '语言设置',
@@ -128,6 +386,7 @@ export default function App() {
       general: '通用',
       dataFilter: '數據篩選',
       filterAirportBus: '過濾機場巴士',
+      filterUserSubmissions: '過濾用戶添加',
       stationLineStats: '站點線路統計',
       about: '關於',
       language: '語言設置',
@@ -165,6 +424,7 @@ export default function App() {
       general: 'General',
       dataFilter: 'Data Filter',
       filterAirportBus: 'Filter Airport Bus',
+      filterUserSubmissions: 'Filter User Submitted',
       stationLineStats: 'Station Line Stats',
       about: 'About',
       language: 'Language',
@@ -267,13 +527,13 @@ export default function App() {
   };
 
   const renderBusLine = (line: any, AMap: any, map: any, clear = true, showMarkers = true, shouldFitView = true) => {
-    const path = line.path.map((p: any) => [p.lng, p.lat]);
+    const path = line.path.map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat]);
     
     if (lineGroupRef.current) {
       if (clear) lineGroupRef.current.clearOverlays();
       const polyline = new AMap.Polyline({
         path: path,
-        strokeColor: clear ? '#3b82f6' : getRandomPastelColor(),
+        strokeColor: line.isUserSubmitted ? '#BA55D3' : (clear ? '#3b82f6' : getRandomPastelColor()),
         strokeWeight: lineThickness === 'thin' ? 2.5 : 5,
         strokeOpacity: 0.8,
         lineJoin: 'round',
@@ -541,6 +801,21 @@ export default function App() {
       const timer = setTimeout(() => resolve(null), 15000);
       const safeResolve = (val: any) => {
         clearTimeout(timer);
+        if (val && val.lines) {
+          const cleanStopName = name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').replace(/\s*-\s*\d+$/, '').trim();
+          const matchUserLines = approvedUserLines
+            .filter(ul => {
+              if (localStorage.getItem('app_filter_user_submissions') === 'true') {
+                return false;
+              }
+              return ul.via_stops.some((vs: any) => {
+                const cleanVs = vs.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').trim();
+                return cleanVs === cleanStopName;
+              });
+            })
+            .map(ul => ul.name);
+          val.lines = Array.from(new Set([...val.lines, ...matchUserLines]));
+        }
         resolve(val);
       };
 
@@ -735,6 +1010,25 @@ export default function App() {
     localStorage.setItem('app_filter_airport_bus', next.toString());
   };
 
+  const toggleFilterUserSubmissions = () => {
+    const next = !filterUserSubmissions;
+    setFilterUserSubmissions(next);
+    localStorage.setItem('app_filter_user_submissions', next.toString());
+    setCacheUpdateTick(v => v + 1);
+    
+    // Auto re-aggregate lines if needed
+    if (mapInstance) {
+      if (activeBusLine) {
+        renderBusLine(activeBusLine, (window as any).AMap, mapInstance, true, true, false);
+      } else if (selectedSegmentLines && selectedSegmentLines.length > 0) {
+        const AMap = (window as any).AMap;
+        aggregateAndVisualize(selectedSegmentLines, mapInstance, AMap);
+      } else {
+        handleSearch();
+      }
+    }
+  };
+
   const toggleStationLineStats = () => {
     const next = !stationLineStats;
     setStationLineStats(next);
@@ -764,6 +1058,499 @@ export default function App() {
     localStorage.setItem('app_show_more_info', next.toString());
   };
 
+  // --- USER DRAWING OPERATIONS AND ROUTING HANDLERS ---
+  const handleDrawingMapClick = useCallback((e: any) => {
+    const AMap = (window as any).AMap;
+    if (!AMap) return;
+
+    if (isRoutingRef.current) {
+      console.log("路由搜索中，忽略重复点击");
+      return;
+    }
+
+    const clickedLngLat = { lng: e.lnglat.lng, lat: e.lnglat.lat };
+    const currentPoints = drawnPointsRef.current;
+
+    // 1. First point
+    if (currentPoints.length === 0) {
+      const firstPt = {
+        id: 'pt_' + Date.now(),
+        lng: clickedLngLat.lng,
+        lat: clickedLngLat.lat,
+        name: '',
+        isStop: true,
+        pathFromPrev: []
+      };
+      setUndoStack(u => [...u, currentPoints]);
+      setRedoStack([]);
+      setDrawnPoints([firstPt]);
+      
+      // Immediately trigger naming modal for first stop
+      setTimeout(() => {
+        setNamingStopIdx(0);
+        setNamingValue('');
+      }, 100);
+      return;
+    }
+
+    // 2. Subsequent points (limit distance <= 5km)
+    const lastPt = currentPoints[currentPoints.length - 1];
+    const p1 = new AMap.LngLat(lastPt.lng, lastPt.lat);
+    const p2 = new AMap.LngLat(clickedLngLat.lng, clickedLngLat.lat);
+    const dist = AMap.GeometryUtil.distance(p1, p2);
+
+    if (dist > 5000) {
+      alert('两点之间的距离不能超过 5 千米！当前距离: ' + (dist / 1000).toFixed(2) + ' km');
+      return;
+    }
+
+    isRoutingRef.current = true;
+    setLoading(true);
+    const driving = new AMap.Driving({
+      policy: AMap.DrivingPolicy.LEAST_TIME,
+      map: null
+    });
+
+    driving.search(p1, p2, (status: string, result: any) => {
+      isRoutingRef.current = false;
+      setLoading(false);
+      if (status === 'complete' && result.routes && result.routes[0]) {
+        const pathStepCoordinates: { lng: number, lat: number }[] = [];
+        
+        result.routes[0].steps.forEach((step: any) => {
+          step.path.forEach((p: any) => {
+            const lastPathPt = pathStepCoordinates[pathStepCoordinates.length - 1];
+            if (!lastPathPt || lastPathPt.lng !== p.lng || lastPathPt.lat !== p.lat) {
+              pathStepCoordinates.push({ lng: p.lng, lat: p.lat });
+            }
+          });
+        });
+
+        if (pathStepCoordinates.length > 0) {
+          const snappedStart = pathStepCoordinates[0];
+          const snappedEnd = pathStepCoordinates[pathStepCoordinates.length - 1];
+
+          const newPt = {
+            id: 'pt_' + Date.now(),
+            lng: snappedEnd.lng,
+            lat: snappedEnd.lat,
+            name: '',
+            isStop: false,
+            pathFromPrev: pathStepCoordinates
+          };
+
+          const currentSnapshot = drawnPointsRef.current;
+          setUndoStack(u => [...u, currentSnapshot]);
+          setRedoStack([]);
+          
+          // Align previous point coordinate to snappedStart and Append newPt at snappedEnd
+          setDrawnPoints(curr => {
+            const updated = [...curr];
+            if (updated.length > 0) {
+              updated[updated.length - 1] = {
+                ...updated[updated.length - 1],
+                lng: snappedStart.lng,
+                lat: snappedStart.lat
+              };
+            }
+            return [...updated, newPt];
+          });
+          setSelectedPointIdx(currentSnapshot.length);
+        } else {
+          alert('该路段无法通行或未找到可行路线，无法在此绘制线路！');
+        }
+      } else {
+        alert('该路段无法通行或未找到可行路线，无法在此绘制线路！');
+      }
+    });
+  }, []);
+
+  const handleAddStopAtSelected = () => {
+    if (selectedPointIdx === null) return;
+    setNamingStopIdx(selectedPointIdx);
+    setNamingValue(drawnPoints[selectedPointIdx].name || '');
+  };
+
+  const handleSaveStopName = () => {
+    if (namingStopIdx === null) return;
+    const value = namingValue.trim();
+    if (!value) {
+      alert('站点名称不能为空！');
+      return;
+    }
+
+    setUndoStack(u => [...u, drawnPoints]);
+    setRedoStack([]);
+
+    setDrawnPoints(prev => prev.map((pt, idx) => {
+      if (idx === namingStopIdx) {
+        return {
+          ...pt,
+          isStop: true,
+          name: value
+        };
+      }
+      return pt;
+    }));
+
+    setNamingStopIdx(null);
+    setNamingValue('');
+  };
+
+  const handleUndo = () => {
+    if (undoStack.length === 0) return;
+    const prev = undoStack[undoStack.length - 1];
+    setUndoStack(u => u.slice(0, -1));
+    setRedoStack(r => [...r, drawnPoints]);
+    setDrawnPoints(prev);
+    setSelectedPointIdx(prev.length > 0 ? prev.length - 1 : null);
+  };
+
+  const handleRedo = () => {
+    if (redoStack.length === 0) return;
+    const next = redoStack[redoStack.length - 1];
+    setRedoStack(r => r.slice(0, -1));
+    setUndoStack(u => [...u, drawnPoints]);
+    setDrawnPoints(next);
+    setSelectedPointIdx(next.length > 0 ? next.length - 1 : null);
+  };
+
+  const handleOpenSubmitDialog = () => {
+    if (drawnPoints.length < 2) return;
+
+    const AMap = (window as any).AMap;
+    if (AMap && AMap.Geocoder) {
+      const geocoder = new AMap.Geocoder();
+      setLoading(true);
+      geocoder.getAddress([drawnPoints[0].lng, drawnPoints[0].lat], (status: string, result: any) => {
+        setLoading(false);
+        if (status === 'complete' && result.regeocode) {
+          const ac = result.regeocode.addressComponent;
+          setSubmitCity(ac.city || ac.province || currentCity || '未知城市');
+          setSubmitDistrict(ac.district || '未知区域');
+        } else {
+          setSubmitCity(currentCity || '未知城市');
+          setSubmitDistrict('');
+        }
+        setShowSubmitModal(true);
+      });
+    } else {
+      setSubmitCity(currentCity || '未知城市');
+      setSubmitDistrict('');
+      setShowSubmitModal(true);
+    }
+  };
+
+  const handleSubmitSubmission = async () => {
+    const lineName = submitLineName.trim();
+    const nickname = submitUserNickname.trim();
+
+    if (!lineName || !nickname) {
+      alert('全部文本字段（线路名称、绘图者昵称）均为必填项！');
+      return;
+    }
+
+    // Connect sequential nodes to form the full path
+    const fullPolyline: { lng: number, lat: number }[] = [];
+    drawnPoints.forEach((pt, idx) => {
+      if (idx === 0) {
+        fullPolyline.push({ lng: pt.lng, lat: pt.lat });
+      } else {
+        if (pt.pathFromPrev && pt.pathFromPrev.length > 0) {
+          pt.pathFromPrev.forEach((p: any) => {
+            const last = fullPolyline[fullPolyline.length - 1];
+            if (!last || last.lng !== p.lng || last.lat !== p.lat) {
+              fullPolyline.push({ lng: p.lng, lat: p.lat });
+            }
+          });
+        }
+        fullPolyline.push({ lng: pt.lng, lat: pt.lat });
+      }
+    });
+
+    const stops = drawnPoints
+      .filter(pt => pt.isStop)
+      .map(pt => ({
+        name: pt.name,
+        location: { lng: pt.lng, lat: pt.lat }
+      }));
+
+    const submissionId = 'line_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+
+    const submissionData = {
+      id: submissionId,
+      name: lineName,
+      creatorNickname: nickname,
+      city: submitCity,
+      district: submitDistrict,
+      path: fullPolyline,
+      via_stops: stops,
+      status: 'pending',
+      timestamp: Date.now()
+    };
+
+    // Save locally
+    const updatedHistory = [submissionData, ...historicalSubmissions];
+    setHistoricalSubmissions(updatedHistory);
+    localStorage.setItem('user_drawn_lines_history', JSON.stringify(updatedHistory));
+
+    // Submit to Express backend folder
+    try {
+      setLoading(true);
+      const res = await fetch('/api/submissions/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(submissionData)
+      });
+      const resData = await res.json();
+      setLoading(false);
+
+      if (resData.success) {
+        alert('您的自绘线路已成功提交至“审核”文件夹！后续可在“查看历史提交”中查看审核结果状态。');
+        setDrawnPoints([]);
+        setUndoStack([]);
+        setRedoStack([]);
+        setSelectedPointIdx(null);
+        setIsDrawingMode(false);
+        setShowSubmitModal(false);
+        setSubmitLineName('');
+      } else {
+        alert('提交失败: ' + (resData.error || '未知错误'));
+      }
+    } catch (err: any) {
+      setLoading(false);
+      alert('连接网络服务错误: ' + err.message);
+    }
+  };
+
+  const handleFooterClick = () => {
+    const now = Date.now();
+    if (now - lastFooterClickTime < 800) {
+      const nextCount = footerClickCount + 1;
+      if (nextCount >= 3) {
+        if (isAdminVerified) {
+          setIsAdminVerified(false);
+          setShowAuditModal(false);
+          setShowManageModal(false);
+          alert('管理员模式已退出！');
+        } else {
+          setShowAdminLogin(true);
+          setAdminPassword('');
+        }
+        setFooterClickCount(0);
+      } else {
+        setFooterClickCount(nextCount);
+      }
+    } else {
+      setFooterClickCount(1);
+    }
+    setLastFooterClickTime(now);
+  };
+
+  const handleAdminLoginVerify = async () => {
+    const trimmed = adminPassword.trim();
+    const hashed = await sha256(trimmed);
+    // faedebd79ac7e61e058a5f36e6b5a3746bd7a13dff63daceece4bd0135d97fbd matches SHA-256 for 'buslineadmin'
+    if (hashed === 'faedebd79ac7e61e058a5f36e6b5a3746bd7a13dff63daceece4bd0135d97fbd' || trimmed === 'buslineadmin') {
+      setIsAdminVerified(true);
+      setShowAdminLogin(false);
+      setAdminPassword('');
+      fetchPendingSubmissions();
+      alert('密码验证成功！管理员模式已激活。');
+    } else {
+      alert('密码验证失败！请确定输入正确的安全私钥凭据。');
+    }
+  };
+
+  const fetchPendingSubmissions = async () => {
+    try {
+      const res = await fetch('/api/admin/pending');
+      const data = await res.json();
+      setPendingSubmissions(data || []);
+    } catch (err) {
+      console.error('Failed to query pending registrations:', err);
+    }
+  };
+
+  const handleAdminAction = async (id: string, action: 'approve' | 'reject') => {
+    try {
+      setLoading(true);
+      const pathUrl = action === 'approve' ? '/api/admin/approve' : '/api/admin/reject';
+      const res = await fetch(pathUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      setLoading(false);
+
+      if (data.success) {
+        alert(action === 'approve' ? '审核通过，已将该线路从“审核”文件夹移至正式发布的“用户提交”文件夹！' : '线路已被拒绝并已自动删除服务器文件数据。');
+        fetchPendingSubmissions();
+        fetchApprovedLines();
+        checkSubmissionStatuses(historicalSubmissions);
+      } else {
+        alert('管理员执行操作发生错误: ' + (data.error || '未知错误'));
+      }
+    } catch (err: any) {
+      setLoading(false);
+      alert('请求网络发生网络错误: ' + err.message);
+    }
+  };
+
+  const handleEditApprovedLine = async (id: string, newName: string) => {
+    if (!newName.trim()) {
+      alert('线路名称不能为空！');
+      return;
+    }
+    try {
+      setLoading(true);
+      const res = await fetch('/api/admin/edit-approved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, name: newName.trim() })
+      });
+      const data = await res.json();
+      setLoading(false);
+      if (data.success) {
+        alert('线路名称已更新成功！');
+        setEditingLineId(null);
+        fetchApprovedLines();
+      } else {
+        alert('修改名称失败: ' + (data.error || '未知错误'));
+      }
+    } catch (err: any) {
+      setLoading(false);
+      alert('网络连接错误: ' + err.message);
+    }
+  };
+
+  const handleDeleteApprovedLine = async (id: string) => {
+    try {
+      setLoading(true);
+      const res = await fetch('/api/admin/delete-approved', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      setLoading(false);
+      if (data.success) {
+        setDeletingLineId(null);
+        fetchApprovedLines();
+        checkSubmissionStatuses(historicalSubmissions);
+      } else {
+        alert('删除线路失败: ' + (data.error || '未知错误'));
+      }
+    } catch (err: any) {
+      setLoading(false);
+      alert('网络连接错误: ' + err.message);
+    }
+  };
+
+  const handlePreviewLineOnMap = (line: any) => {
+    const AMap = (window as any).AMap;
+    if (AMap && mapInstance) {
+      const lineToRender = {
+        ...line,
+        isUserSubmitted: true
+      };
+      renderBusLine(lineToRender, AMap, mapInstance, true, true, true);
+    }
+  };
+
+  // Synchronize drawn points on active map instance
+  useEffect(() => {
+    const map = mapInstance;
+    if (!map) return;
+    const AMap = (window as any).AMap;
+    if (!AMap) return;
+
+    if (!drawingGroupRef.current) {
+      drawingGroupRef.current = new AMap.OverlayGroup();
+      map.add(drawingGroupRef.current);
+    }
+
+    drawingGroupRef.current.clearOverlays();
+
+    if (!isDrawingMode) {
+      return;
+    }
+
+    const polylines: any[] = [];
+    drawnPoints.forEach((pt, idx) => {
+      if (idx > 0 && pt.pathFromPrev && pt.pathFromPrev.length > 0) {
+        const poly = new AMap.Polyline({
+          path: pt.pathFromPrev.map((p: any) => [p.lng, p.lat]),
+          strokeColor: '#3b82f6',
+          strokeWeight: 4,
+          strokeOpacity: 0.82,
+          lineJoin: 'round',
+          lineCap: 'round',
+          isOutline: true,
+          outlineColor: '#ffffff',
+          borderWeight: 1,
+          zIndex: 80
+        });
+        polylines.push(poly);
+      }
+    });
+
+    const markers: any[] = [];
+    drawnPoints.forEach((pt, idx) => {
+      const isSelected = selectedPointIdx === idx;
+      
+      if (pt.isStop) {
+        const nameLabel = pt.name || `未命名站点`;
+        const marker = new AMap.Marker({
+          position: [pt.lng, pt.lat],
+          anchor: 'center',
+          offset: new AMap.Pixel(0, 0),
+          content: `
+            <div class="relative flex items-center justify-center" style="width: 18px; height: 18px;">
+              <!-- Absolute centered text label positioned above the station node -->
+              <div class="absolute bottom-full mb-1.5 left-1/2 transform -translate-x-1/2 px-2 py-0.5 bg-emerald-600 text-white font-bold text-[9px] rounded-lg shadow-xl whitespace-nowrap border border-emerald-500 z-10">
+                ${nameLabel}
+              </div>
+              <!-- Station Node Circle -->
+              <div class="w-4.5 h-4.5 rounded-full bg-emerald-500 border-2 border-white shadow-lg flex items-center justify-center ${isSelected ? 'ring-4 ring-blue-500' : ''}">
+                <div class="w-1.5 h-1.5 rounded-full bg-white"></div>
+              </div>
+            </div>
+          `,
+          zIndex: 95
+        });
+
+        marker.on('click', () => {
+          setSelectedPointIdx(idx);
+        });
+
+        markers.push(marker);
+      } else {
+        const marker = new AMap.Marker({
+          position: [pt.lng, pt.lat],
+          anchor: 'center',
+          offset: new AMap.Pixel(0, 0),
+          content: `
+            <div class="w-3.5 h-3.5 rounded-full bg-blue-500 border-2 border-white shadow-md flex items-center justify-center cursor-pointer ${isSelected ? 'ring-4 ring-blue-400' : ''}">
+              <div class="w-1 h-1 rounded-full bg-white"></div>
+            </div>
+          `,
+          zIndex: 90
+        });
+
+        marker.on('click', () => {
+          setSelectedPointIdx(idx);
+        });
+
+        markers.push(marker);
+      }
+    });
+
+    drawingGroupRef.current.addOverlays([...polylines, ...markers]);
+
+  }, [drawnPoints, isDrawingMode, selectedPointIdx, mapInstance]);
+
   const toggleCityWideSearch = () => {
     if (!enableCityWideSearch) {
       setShowCityWideConfirm(true);
@@ -790,9 +1577,24 @@ export default function App() {
     setShowSuggestions(false);
     setSearchQuery(item.name);
 
-    const isActuallyLine = item.type === 'busline' || 
-                          ((item.name.match(/^[A-Za-z0-9]+[路线环]$/) || item.name.match(/^\d+$/) || item.name.match(/^[兴通顺房门昌平大平]\d+/)) && 
-                           !item.name.includes('站') && !item.name.includes('口'));
+    // Intercept search for approved user custom lines
+    const isFilteredOut = localStorage.getItem('app_filter_user_submissions') === 'true';
+    const userLine = !isFilteredOut ? approvedUserLines.find(ul => ul.name === item.name || ul.id === item.id) : null;
+    if (userLine) {
+      const formattedLine = {
+         ...userLine,
+         isUserSubmitted: true
+      };
+      setActiveBusLine(formattedLine);
+      renderBusLine(formattedLine, AMap, map);
+      if (userLine.path && userLine.path[0]) {
+        map.setCenter([userLine.path[0].lng, userLine.path[0].lat]);
+        map.setZoom(14);
+      }
+      return;
+    }
+
+    const isActuallyLine = item.type === 'busline' || checkIsLineQuery(item.name);
 
     if (isActuallyLine) {
       if (item.lineData) {
@@ -918,8 +1720,7 @@ export default function App() {
       });
     });
 
-    const isLineQuery = (val.match(/^[A-Za-z0-9]+[路线环]$/) || (val.match(/^\d+$/)) || val.match(/^[兴通顺房门昌平大平]\d+/)) && 
-                        !val.includes('站') && !val.includes('门') && !val.includes('口');
+    const isLineQuery = checkIsLineQuery(val);
     const fetchLines = isLineQuery ? new Promise<any[]>((resolve) => {
       if (!AMap.LineSearch) { resolve([]); return; }
       const lineSearch = new AMap.LineSearch({
@@ -962,11 +1763,7 @@ export default function App() {
                          tip.name.includes('口') || 
                          tip.name.includes('枢纽');
                          
-        const isLine = !isStation && (
-          tip.name.match(/^[A-Za-z0-9]+[路线环]$/) || 
-          tip.name.match(/^\d+$/) || 
-          tip.name.match(/^[兴通顺房门昌平大平]\d+/)
-        );
+        const isLine = !isStation && checkIsLineQuery(tip.name);
         
         if (isLine) {
            if (!combined.some(c => c.name.startsWith(tip.name))) {
@@ -1012,6 +1809,27 @@ export default function App() {
       
       otherTips.forEach(t => combined.push(t));
 
+      // Include approved user custom lines matching description
+      const q = val.toLowerCase().trim();
+      const isFilteredOut = localStorage.getItem('app_filter_user_submissions') === 'true';
+      if (q.length > 0 && !isFilteredOut) {
+        approvedUserLines.forEach(ul => {
+          if (ul.name.toLowerCase().includes(q)) {
+            // Avoid duplicate additions
+            if (!combined.some(c => c.name === ul.name)) {
+              combined.unshift({
+                name: ul.name,
+                type: 'userLine',
+                isUserSubmitted: true,
+                 id: ul.id,
+                 creatorNickname: ul.creatorNickname,
+                location: ul.path[0] ? { lng: ul.path[0].lng, lat: ul.path[0].lat } : null
+              });
+            }
+          }
+        });
+      }
+
       setSuggestions(combined.slice(0, 12));
       setShowSuggestions(true);
     });
@@ -1027,8 +1845,7 @@ export default function App() {
       setLoading(false);
       return;
     }
-    const isLineQuery = (query.match(/^[A-Za-z0-9]+[路线环]$/) || (query.match(/^\d+$/)) || query.match(/^[兴通顺房门昌平大平]\d+/)) && 
-                        !query.includes('站') && !query.includes('口');
+    const isLineQuery = checkIsLineQuery(query);
 
     // 1. Try Line Search first if it looks like a line
     if (isLineQuery) {
@@ -1161,7 +1978,7 @@ export default function App() {
     AMapLoader.load({
       key: AMAP_KEY,
       version: '2.0',
-      plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation'],
+      plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking'],
     }).then((AMap) => {
       const savedCenter = localStorage.getItem('map_center');
       let initialCenter = [116.331398, 39.717646];
@@ -1228,6 +2045,10 @@ export default function App() {
       });
 
       mapClickHandlerRef.current = (e: any) => {
+        if (isDrawingModeRef.current) {
+          handleDrawingMapClick(e);
+          return;
+        }
         if (map.getZoom() < 14) return;
         const [lng, lat] = [e.lnglat.getLng(), e.lnglat.getLat()];
         
@@ -1662,6 +2483,31 @@ export default function App() {
       }
     });
 
+    // Add approved user-submitted lines if not filtered out
+    const isFilteredOut = localStorage.getItem('app_filter_user_submissions') === 'true';
+    if (!isFilteredOut) {
+      const currentBounds = map.getBounds();
+      if (currentBounds) {
+        const sw = currentBounds.getSouthWest();
+        const ne = currentBounds.getNorthEast();
+        approvedUserLines.forEach(ul => {
+          const inBounds = ul.path && ul.path.some((pt: any) => {
+            const lng = pt.lng !== undefined ? pt.lng : pt[0];
+            const lat = pt.lat !== undefined ? pt.lat : pt[1];
+            return lng >= sw.lng - 0.05 && lng <= ne.lng + 0.05 && lat >= sw.lat - 0.05 && lat <= ne.lat + 0.05;
+          });
+          if (inBounds) {
+            const matches = cacheKeys.filter(key => key === ul.name);
+            matches.forEach(m => {
+              if (!expandedLineNames.includes(m)) {
+                expandedLineNames.push(m);
+              }
+            });
+          }
+        });
+      }
+    }
+
     const pointsGrid = new Map<string, [number, number][]>();
     const getGridKey = (lng: number, lat: number) => 
       `${(lng * 1000) | 0},${(lat * 1000) | 0}`; 
@@ -1932,18 +2778,34 @@ export default function App() {
     const isCityWide = localStorage.getItem('app_experimental_citywide') === 'true';
     
     finalSegments.forEach((data) => {
-      const count = data.lines.size;
-      let color = '#22c55e'; 
-      if (isCityWide) {
-        color = '#3b82f6';
-      } else {
-        if (count >= 4 && count <= 9) color = '#eab308'; 
-        if (count >= 10) color = '#ef4444'; 
+      // Helper to check if a line name is user-submitted
+      const isLineUserSubmitted = (lineName: string) => {
+        const cached = fetchedLinesCache.current.get(lineName);
+        return cached?.isUserSubmitted === true;
+      };
+
+      const regularLines = Array.from(data.lines).filter(l => !isLineUserSubmitted(l));
+      const regularCount = regularLines.length;
+
+      let color = '';
+      if (regularCount > 0) {
+        if (isCityWide) {
+          color = '#3b82f6';
+        } else {
+          if (regularCount < 4) color = '#22c55e';
+          else if (regularCount >= 4 && regularCount <= 9) color = '#eab308';
+          else color = '#ef4444';
+        }
+      } else if (data.lines.size > 0) {
+        // Only user-submitted lines pass through here!
+        color = '#BA55D3'; // Pale purple
       }
 
-      const displayPath: [number, number][] = [data.offsetStart, data.offsetEnd];
-      if (!colorGroups.has(color)) colorGroups.set(color, []);
-      colorGroups.get(color)!.push(displayPath);
+      if (color) {
+        const displayPath: [number, number][] = [data.offsetStart, data.offsetEnd];
+        if (!colorGroups.has(color)) colorGroups.set(color, []);
+        colorGroups.get(color)!.push(displayPath);
+      }
     });
 
     const joinSegments = (paths: Array<[number, number][]>) => {
@@ -2025,6 +2887,10 @@ export default function App() {
     }
 
     const onMapClick = (e: any) => {
+      if (isDrawingModeRef.current) {
+        handleDrawingMapClick(e);
+        return;
+      }
       const clickLngLat = [e.lnglat.lng, e.lnglat.lat] as [number, number];
       const gX = (clickLngLat[0] * GRID_SIZE) | 0;
       const gY = (clickLngLat[1] * GRID_SIZE) | 0;
@@ -2179,6 +3045,18 @@ export default function App() {
   };
 
   const parseLineInfo = (lineStr: string) => {
+    // Check if it's an approved user-submitted line
+    const userLine = approvedUserLines.find(ul => ul.name === lineStr);
+    if (userLine) {
+      const firstStop = userLine.via_stops[0]?.name || '始发站';
+      const lastStop = userLine.via_stops[userLine.via_stops.length - 1]?.name || '终点站';
+      return {
+        name: userLine.name,
+        start: firstStop,
+        end: lastStop
+      };
+    }
+
     const match = lineStr.match(/^(.+?)\((.+?)--(.+?)\)$/);
     if (match) {
       return { name: match[1].trim(), start: match[2].trim(), end: match[3].trim() };
@@ -2375,119 +3253,180 @@ export default function App() {
   return (
     <div className="flex flex-col h-screen w-full bg-[#f8f9fa] font-sans text-slate-900 overflow-hidden relative">
       <header className="fixed top-0 left-0 right-0 z-20 px-4 pt-6 pb-0 pointer-events-none">
-        <div className="flex items-start justify-between gap-4 w-full h-[52px]">
-          {/* Combined Logo/Search Bar */}
-          <div className={`backdrop-blur-xl bg-white border border-slate-200/50 shadow-xl flex items-center h-[52px] pointer-events-auto transition-all duration-500 ease-out relative overflow-visible ${isMobileSearchOpen ? 'w-[calc(100vw-5rem)] md:w-[340px] rounded-2xl' : 'w-[104px] md:w-[340px] rounded-[26px] md:rounded-2xl'}`}>
-            
-            {/* Logo Area */}
-            <div className="flex items-center justify-center pl-4 pr-2 shrink-0 h-full">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
-                <path d="M4 17H20" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" />
-                <path d="M17 4V20" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" />
-                <path d="M8 20V13L13 8H22" stroke="#eab308" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </div>
+        {!isDrawingMode && (
+          <div className="flex items-start justify-between gap-4 w-full h-[52px]">
+            {/* Combined Logo/Search Bar */}
+            <div className={`backdrop-blur-xl bg-white border border-slate-200/50 shadow-xl flex items-center h-[52px] pointer-events-auto transition-all duration-500 ease-out relative overflow-visible ${isMobileSearchOpen ? 'w-[calc(100vw-5rem)] md:w-[340px] rounded-2xl' : 'w-[104px] md:w-[340px] rounded-[26px] md:rounded-2xl'}`}>
+              
+              {/* Logo Area */}
+              <div className="flex items-center justify-center pl-4 pr-2 shrink-0 h-full">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
+                  <path d="M4 17H20" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" />
+                  <path d="M17 4V20" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" />
+                  <path d="M8 20V13L13 8H22" stroke="#eab308" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
 
-            {/* Separator - visible only when expanded or on desktop */}
-            <div className={`w-[1px] h-6 bg-slate-200 shrink-0 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-100' : 'opacity-0 md:opacity-100 hidden md:block'}`} />
+              {/* Separator - visible only when expanded or on desktop */}
+              <div className={`w-[1px] h-6 bg-slate-200 shrink-0 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-100' : 'opacity-0 md:opacity-100 hidden md:block'}`} />
 
-            {/* Input Field Area */}
-            <div className={`flex-1 flex items-center overflow-hidden transition-all duration-500 ease-out h-full ${isMobileSearchOpen ? 'opacity-100 pl-3 w-full' : 'opacity-0 pl-0 w-0 md:opacity-100 md:pl-3 md:w-full'}`}>
-              <input 
-                type="text" 
-                placeholder={t('searchPlaceholder')} 
-                className="bg-transparent border-none outline-none text-sm font-black text-slate-700 w-full placeholder:text-slate-400 placeholder:font-medium h-full"
-                value={searchQuery}
-                onChange={(e) => onSearchInputChange(e.target.value)}
-                onFocus={() => searchQuery && suggestions.length > 0 && setShowSuggestions(true)}
-                onBlur={() => setTimeout(() => { setShowSuggestions(false); setIsMobileSearchOpen(false); }, 200)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    if (suggestions.length > 0 && showSuggestions) {
-                      handleManualSearch(suggestions[0]);
-                    } else {
-                      performFullSearch(searchQuery);
+              {/* Input Field Area */}
+              <div className={`flex-1 flex items-center overflow-hidden transition-all duration-500 ease-out h-full ${isMobileSearchOpen ? 'opacity-100 pl-3 w-full' : 'opacity-0 pl-0 w-0 md:opacity-100 md:pl-3 md:w-full'}`}>
+                <input 
+                  type="text" 
+                  placeholder={t('searchPlaceholder')} 
+                  className="bg-transparent border-none outline-none text-sm font-black text-slate-700 w-full placeholder:text-slate-400 placeholder:font-medium h-full"
+                  value={searchQuery}
+                  onChange={(e) => onSearchInputChange(e.target.value)}
+                  onFocus={() => searchQuery && suggestions.length > 0 && setShowSuggestions(true)}
+                  onBlur={() => setTimeout(() => { setShowSuggestions(false); setIsMobileSearchOpen(false); }, 200)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      if (suggestions.length > 0 && showSuggestions) {
+                        handleManualSearch(suggestions[0]);
+                      } else {
+                        performFullSearch(searchQuery);
+                      }
+                      setIsMobileSearchOpen(false);
                     }
-                    setIsMobileSearchOpen(false);
+                  }}
+                  autoFocus={isMobileSearchOpen}
+                />
+                {searchQuery && (
+                  <button onMouseDown={() => { setSearchQuery(''); setSuggestions([]); setShowSuggestions(false); }} className="px-2 shrink-0 h-full flex items-center">
+                    <X className="w-4 h-4 text-slate-300 hover:text-slate-500" />
+                  </button>
+                )}
+              </div>
+
+              {/* Search Button / Mobile Toggle Button */}
+              <button 
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  if (!isMobileSearchOpen && window.innerWidth < 768) {
+                    setIsMobileSearchOpen(true);
+                  } else {
+                     performFullSearch(searchQuery);
+                     setIsMobileSearchOpen(false);
                   }
                 }}
-                autoFocus={isMobileSearchOpen}
-              />
-              {searchQuery && (
-                <button onMouseDown={() => { setSearchQuery(''); setSuggestions([]); setShowSuggestions(false); }} className="px-2 shrink-0 h-full flex items-center">
-                  <X className="w-4 h-4 text-slate-300 hover:text-slate-500" />
-                </button>
-              )}
+                className={`w-[40px] h-[40px] shrink-0 mx-1.5 md:mr-1.5 md:ml-0 rounded-full flex items-center justify-center transition-colors ${searchQuery || !isMobileSearchOpen ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-transparent text-slate-600 hover:bg-slate-100'}`}
+              >
+                <Search className="w-4 h-4" />
+              </button>
+
+              {/* Suggestions Dropdown */}
+              <AnimatePresence>
+                {showSuggestions && suggestions.length > 0 && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                    className="absolute top-[calc(100%+8px)] left-0 right-0 bg-white/95 backdrop-blur-xl border border-slate-100 rounded-2xl shadow-2xl overflow-hidden py-2 z-50 pointer-events-auto"
+                  >
+                    {suggestions.slice(0, 6).map((tip, idx) => (
+                      <button
+                        key={idx}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          handleManualSearch(tip);
+                        }}
+                        className="w-full px-4 py-3 text-left hover:bg-slate-50 transition-colors flex flex-col gap-0.5 relative"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-slate-800">{tip.name}</span>
+                          {tip.isAggregated && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-purple-50 text-[8px] font-black text-purple-600 tracking-tighter shadow-sm border border-purple-100">
+                              汇总
+                            </span>
+                          )}
+                          {tip.type === 'busline' && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-[8px] font-black text-blue-600 uppercase tracking-tighter shadow-sm border border-blue-100">
+                              {t('lineLabel')}
+                            </span>
+                          )}
+                          {(tip.isUserSubmitted || tip.type === 'userLine') && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-purple-50 text-[8px] font-black text-purple-400 tracking-tighter shadow-sm border border-purple-100 whitespace-nowrap">
+                              用户
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] font-medium text-slate-400">{tip.district || tip.address}</span>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
 
-            {/* Search Button / Mobile Toggle Button */}
-            <button 
-              onMouseDown={(e) => {
-                e.preventDefault();
-                if (!isMobileSearchOpen && window.innerWidth < 768) {
-                   setIsMobileSearchOpen(true);
-                } else {
-                   performFullSearch(searchQuery);
-                   setIsMobileSearchOpen(false);
-                }
-              }}
-              className={`w-[40px] h-[40px] shrink-0 mx-1.5 md:mr-1.5 md:ml-0 rounded-full flex items-center justify-center transition-colors ${searchQuery || !isMobileSearchOpen ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-transparent text-slate-600 hover:bg-slate-100'}`}
-            >
-              <Search className="w-4 h-4" />
-            </button>
-
-            {/* Suggestions Dropdown */}
-            <AnimatePresence>
-              {showSuggestions && suggestions.length > 0 && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: 10 }}
-                  className="absolute top-[calc(100%+8px)] left-0 right-0 bg-white/95 backdrop-blur-xl border border-slate-100 rounded-2xl shadow-2xl overflow-hidden py-2 z-50 pointer-events-auto"
+            {/* Quick Actions Container */}
+            <div className="flex items-center gap-3">
+              {/* Custom Draw Mode Paintbrush Button */}
+              <div className="pointer-events-auto shrink-0 transition-opacity duration-300 opacity-100 mt-1">
+                <button 
+                  onClick={() => {
+                    setIsDrawingMode(true);
+                    setDrawnPoints([]);
+                    setUndoStack([]);
+                    setRedoStack([]);
+                    setSelectedPointIdx(null);
+                    setShowExitConfirm(false);
+                  }}
+                  className="backdrop-blur-xl bg-white/90 border border-white/50 w-[42px] h-[42px] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex items-center justify-center text-slate-700 hover:text-emerald-600 hover:bg-white transition-all active:scale-95 group"
+                  title="进入线路自绘模式"
                 >
-                  {suggestions.slice(0, 6).map((tip, idx) => (
-                    <button
-                      key={idx}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        handleManualSearch(tip);
-                      }}
-                      className="w-full px-4 py-3 text-left hover:bg-slate-50 transition-colors flex flex-col gap-0.5 relative"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-black text-slate-800">{tip.name}</span>
-                        {tip.isAggregated && (
-                          <span className="px-1.5 py-0.5 rounded-md bg-purple-50 text-[8px] font-black text-purple-600 tracking-tighter shadow-sm border border-purple-100">
-                            汇总
-                          </span>
-                        )}
-                        {tip.type === 'busline' && (
-                          <span className="px-1.5 py-0.5 rounded-md bg-blue-50 text-[8px] font-black text-blue-600 uppercase tracking-tighter shadow-sm border border-blue-100">
-                            {t('lineLabel')}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[10px] font-medium text-slate-400">{tip.district || tip.address}</span>
-                    </button>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+                  <Paintbrush className="w-5 h-5 text-slate-700 group-hover:text-emerald-600 transition-transform group-hover:scale-110" />
+                </button>
+              </div>
 
-          {/* Settings Toggle button moved to Right */}
-          <div className="pointer-events-auto shrink-0 transition-opacity duration-300 opacity-100 md:opacity-100 mt-1">
-            <button 
-              onClick={() => {
-                setSettingsTab('general');
-                setShowSettings(true);
-              }}
-              className="backdrop-blur-xl bg-white/90 border border-white/50 w-[42px] h-[42px] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex items-center justify-center text-slate-700 hover:text-blue-600 hover:bg-white transition-all active:scale-90 group"
-            >
-              <Settings className="w-5 h-5 transition-transform group-hover:rotate-90 duration-500" />
-            </button>
+              {/* Admin-only buttons if verified */}
+              {isAdminVerified && (
+                <>
+                  <div className="pointer-events-auto shrink-0 transition-opacity duration-300 opacity-100 mt-1">
+                    <button 
+                      onClick={() => {
+                        setShowAuditModal(p => !p);
+                        setShowManageModal(false);
+                        fetchPendingSubmissions();
+                      }}
+                      className={`backdrop-blur-xl border border-white/50 w-[42px] h-[42px] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex items-center justify-center transition-all active:scale-95 group ${showAuditModal ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-white/90 text-amber-600 hover:bg-white hover:text-amber-700'}`}
+                      title="自绘线路待审核中心"
+                    >
+                      <ClipboardCheck className="w-5 h-5 transition-transform group-hover:scale-110" />
+                    </button>
+                  </div>
+
+                  <div className="pointer-events-auto shrink-0 transition-opacity duration-300 opacity-100 mt-1">
+                    <button 
+                      onClick={() => {
+                        setShowManageModal(p => !p);
+                        setShowAuditModal(false);
+                        fetchApprovedLines();
+                      }}
+                      className={`backdrop-blur-xl border border-white/50 w-[42px] h-[42px] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex items-center justify-center transition-all active:scale-95 group ${showManageModal ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-white/90 text-purple-600 hover:bg-white hover:text-purple-700'}`}
+                      title="批量管理已发布的用户数据"
+                    >
+                      <Database className="w-5 h-5 transition-transform group-hover:scale-110" />
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Settings Toggle button */}
+              <div className="pointer-events-auto shrink-0 transition-opacity duration-300 opacity-100 mt-1">
+                <button 
+                  onClick={() => {
+                    setSettingsTab('general');
+                    setShowSettings(true);
+                  }}
+                  className="backdrop-blur-xl bg-white/90 border border-white/50 w-[42px] h-[42px] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex items-center justify-center text-slate-700 hover:text-blue-600 hover:bg-white transition-all active:scale-90 group"
+                >
+                  <Settings className="w-5 h-5 transition-transform group-hover:rotate-90 duration-500" />
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
 
         <AnimatePresence>
           {showLargeAreaWarning && isSearching && (
@@ -2525,123 +3464,700 @@ export default function App() {
 
 
 
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4">
-          <AnimatePresence>
-            {(stats.stops > 0 || stats.lines > 0) && (
-              <motion.div
-                initial={{ x: 20, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: 20, opacity: 0 }}
-                className="hidden md:flex backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl items-center gap-3 pointer-events-auto h-14"
-              >
-                <div className="flex flex-col">
-                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showStations')}</span>
-                  <span className="text-[10px] font-bold text-slate-800 leading-none">{showStations ? 'ON' : 'OFF'}</span>
-                </div>
-                <button 
-                  onClick={toggleStations}
-                  className={`w-10 h-5 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
-                >
-                  <motion.div 
-                    layout
-                    animate={{ x: showStations ? 20 : 0 }}
-                    className="w-3 h-3 bg-white rounded-full shadow-sm"
-                  />
-                </button>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="hidden md:flex backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl items-center gap-3 pointer-events-auto h-14"
-          >
-            <div className="flex flex-col">
-              <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showBaseMap')}</span>
-              <span className="text-[10px] font-bold text-slate-800 leading-none">{showBaseMap ? 'ON' : 'OFF'}</span>
-            </div>
-            <button 
-              onClick={toggleBaseMap}
-              className={`w-10 h-5 rounded-full transition-all relative flex items-center px-1 ${showBaseMap ? 'bg-blue-500' : 'bg-slate-300'}`}
-            >
-              <motion.div 
-                layout
-                animate={{ x: showBaseMap ? 20 : 0 }}
-                className="w-3 h-3 bg-white rounded-full shadow-sm"
-              />
-            </button>
-          </motion.div>
-
-          <motion.button 
-            layout
-            onClick={handleSearch}
-            disabled={isSearching || (!enableCityWideSearch && zoomLevel < 12)}
-            initial={false}
-            animate={{ 
-              scale: 1,
-              opacity: loading ? 0 : 1,
-              backgroundColor: isSearching ? 'rgba(245, 158, 11, 0.1)' : 
-                (enableCityWideSearch ? 'rgba(239, 68, 68, 1)' : (zoomLevel < 12 ? 'rgba(241, 245, 241, 0.5)' : 'rgba(37, 99, 235, 1)'))
-            }}
-            whileHover={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 1.02, backgroundColor: enableCityWideSearch ? 'rgba(220, 38, 38, 1)' : 'rgba(29, 78, 216, 1)' } : {}}
-            whileTap={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 0.98 } : {}}
-            className={`backdrop-blur-xl border px-8 py-4 rounded-3xl shadow-xl flex items-center gap-3 text-sm font-black tracking-tight uppercase transition-colors
-              ${isSearching ? 'border-amber-200 text-amber-600 cursor-wait' : 
-                enableCityWideSearch ? 'border-red-500 text-white shadow-red-500/20' :
-                (zoomLevel < 12 ? 'border-slate-200 text-slate-400 cursor-not-allowed' : 
-                'border-blue-500 text-white shadow-blue-500/20')}`}
-          >
-            <AnimatePresence mode="wait">
-              {isSearching ? (
+        {!isDrawingMode && (
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4">
+            <AnimatePresence>
+              {(stats.stops > 0 || stats.lines > 0) && (
                 <motion.div
-                  key="loader"
-                  initial={{ rotate: 0, opacity: 0 }}
-                  animate={{ rotate: 360, opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ rotate: { repeat: Infinity, duration: 1, ease: 'linear' } }}
+                  initial={{ x: 20, opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: 20, opacity: 0 }}
+                  className="hidden md:flex backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl items-center gap-3 pointer-events-auto h-14"
                 >
-                  <Loader2 className="w-5 h-5" />
-                </motion.div>
-              ) : (!enableCityWideSearch && zoomLevel < 12) ? (
-                <motion.div
-                  key="zoom"
-                  initial={{ scale: 0.5, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={{ scale: 0.5, opacity: 0 }}
-                >
-                  <ZoomIn className="w-5 h-5" />
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="search"
-                  initial={{ scale: 0.5, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={{ scale: 0.5, opacity: 0 }}
-                >
-                  <Search className="w-5 h-5" />
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showStations')}</span>
+                    <span className="text-[10px] font-bold text-slate-800 leading-none">{showStations ? 'ON' : 'OFF'}</span>
+                  </div>
+                  <button 
+                    onClick={toggleStations}
+                    className={`w-10 h-5 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
+                  >
+                    <motion.div 
+                      layout
+                      animate={{ x: showStations ? 20 : 0 }}
+                      className="w-3 h-3 bg-white rounded-full shadow-sm"
+                    />
+                  </button>
                 </motion.div>
               )}
             </AnimatePresence>
-            <motion.span layout className="whitespace-nowrap">
-              {isSearching ? t('searching') : (enableCityWideSearch ? t('cityWideSearch') : (zoomLevel < 12 ? t('searchHint') : t('startSearch')))}
-            </motion.span>
-          </motion.button>
-          
-          <AnimatePresence>
-            {(stats.stops > 0 || stats.lines > 0) && (
-              <motion.button 
-                initial={{ scale: 0, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0, opacity: 0 }}
-                onClick={handleClear}
-                className="backdrop-blur-xl bg-white/80 border border-slate-200 h-14 w-14 rounded-3xl shadow-xl flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-all active:scale-95"
+
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              className="hidden md:flex backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl items-center gap-3 pointer-events-auto h-14"
+            >
+              <div className="flex flex-col">
+                <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showBaseMap')}</span>
+                <span className="text-[10px] font-bold text-slate-800 leading-none">{showBaseMap ? 'ON' : 'OFF'}</span>
+              </div>
+              <button 
+                onClick={toggleBaseMap}
+                className={`w-10 h-5 rounded-full transition-all relative flex items-center px-1 ${showBaseMap ? 'bg-blue-500' : 'bg-slate-300'}`}
               >
-                <X className="w-6 h-6" />
-              </motion.button>
-            )}
-          </AnimatePresence>
-        </div>
+                <motion.div 
+                  layout
+                  animate={{ x: showBaseMap ? 20 : 0 }}
+                  className="w-3 h-3 bg-white rounded-full shadow-sm"
+                />
+              </button>
+            </motion.div>
+
+            <motion.button 
+              layout
+              onClick={handleSearch}
+              disabled={isSearching || (!enableCityWideSearch && zoomLevel < 12)}
+              initial={false}
+              animate={{ 
+                scale: 1,
+                opacity: loading ? 0 : 1,
+                backgroundColor: isSearching ? 'rgba(245, 158, 11, 0.1)' : 
+                  (enableCityWideSearch ? 'rgba(239, 68, 68, 1)' : (zoomLevel < 12 ? 'rgba(241, 245, 241, 0.5)' : 'rgba(37, 99, 235, 1)'))
+              }}
+              whileHover={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 1.02, backgroundColor: enableCityWideSearch ? 'rgba(220, 38, 38, 1)' : 'rgba(29, 78, 216, 1)' } : {}}
+              whileTap={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 0.98 } : {}}
+              className={`backdrop-blur-xl border px-8 py-4 rounded-3xl shadow-xl flex items-center gap-3 text-sm font-black tracking-tight uppercase transition-colors
+                ${isSearching ? 'border-amber-200 text-amber-600 cursor-wait' : 
+                  enableCityWideSearch ? 'border-red-500 text-white shadow-red-500/20' :
+                  (zoomLevel < 12 ? 'border-slate-200 text-slate-400 cursor-not-allowed' : 
+                  'border-blue-500 text-white shadow-blue-500/20')}`}
+            >
+              <AnimatePresence mode="wait">
+                {isSearching ? (
+                  <motion.div
+                    key="loader"
+                    initial={{ rotate: 0, opacity: 0 }}
+                    animate={{ rotate: 360, opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ rotate: { repeat: Infinity, duration: 1, ease: 'linear' } }}
+                  >
+                    <Loader2 className="w-5 h-5" />
+                  </motion.div>
+                ) : (!enableCityWideSearch && zoomLevel < 12) ? (
+                  <motion.div
+                    key="zoom"
+                    initial={{ scale: 0.5, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.5, opacity: 0 }}
+                  >
+                    <ZoomIn className="w-5 h-5" />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="search"
+                    initial={{ scale: 0.5, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.5, opacity: 0 }}
+                  >
+                    <Search className="w-5 h-5" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              <motion.span layout className="whitespace-nowrap">
+                {isSearching ? t('searching') : (enableCityWideSearch ? t('cityWideSearch') : (zoomLevel < 12 ? t('searchHint') : t('startSearch')))}
+              </motion.span>
+            </motion.button>
+            
+            <AnimatePresence>
+              {(stats.stops > 0 || stats.lines > 0) && (
+                <motion.button 
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0, opacity: 0 }}
+                  onClick={handleClear}
+                  className="backdrop-blur-xl bg-white/80 border border-slate-200 h-14 w-14 rounded-3xl shadow-xl flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-all active:scale-95"
+                >
+                  <X className="w-6 h-6" />
+                </motion.button>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
+
+        {/* Custom Drawing Mode HUD Floating Toolbar Panel */}
+        {isDrawingMode && (
+          <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-30 w-[95%] max-w-3xl backdrop-blur-2xl bg-slate-900/95 text-white border border-slate-700/80 rounded-3xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col md:flex-row items-center justify-between gap-4 pointer-events-auto">
+            {/* Left instructions or stats */}
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+              <div className="flex flex-col">
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">自绘线路模式</span>
+                <span className="text-xs font-bold text-slate-200">
+                  {drawnPoints.length === 0 
+                    ? '请点击或轻触地图道路放置起点站点' 
+                    : `已绘制 ${drawnPoints.length} 个轨迹点 (其中站台: ${drawnPoints.filter(p => p.isStop).length} 个)`
+                  }
+                </span>
+              </div>
+            </div>
+
+            {/* Button groups */}
+            <div className="flex items-center flex-wrap gap-2 md:gap-2.5">
+              <button
+                onClick={() => setShowHistoryModal(true)}
+                className="px-3.5 py-2 rounded-xl bg-slate-800 border border-slate-700 text-xs font-bold hover:bg-slate-700 active:scale-95 transition-all text-slate-300"
+                title="查看历史提交"
+              >
+                查看历史提交
+              </button>
+
+              <button
+                onClick={handleAddStopAtSelected}
+                disabled={selectedPointIdx === null}
+                className="p-2.5 rounded-xl bg-blue-600/95 text-white border border-blue-500 hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all shrink-0"
+                title={selectedPointIdx !== null && drawnPoints[selectedPointIdx]?.isStop ? '修改站点名称' : '设为站点并命名'}
+              >
+                <MapPin className="w-4 h-4" />
+              </button>
+
+              <button
+                onClick={handleOpenSubmitDialog}
+                disabled={drawnPoints.length < 2}
+                className="p-2.5 rounded-xl bg-emerald-600 text-white border border-emerald-500 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all shrink-0"
+                title="提交路线"
+              >
+                <Check className="w-4 h-4" />
+              </button>
+
+              {showExitConfirm ? (
+                <div className="flex items-center gap-1 bg-red-950/40 border border-red-500/20 p-1 rounded-xl shrink-0">
+                  <span className="text-[9px] font-black text-red-400 px-1">确认退出?</span>
+                  <button
+                    onClick={() => {
+                      setIsDrawingMode(false);
+                      setDrawnPoints([]);
+                      setUndoStack([]);
+                      setRedoStack([]);
+                      setSelectedPointIdx(null);
+                      setShowExitConfirm(false);
+                    }}
+                    className="px-2 py-1 bg-red-600 hover:bg-red-500 text-white font-black text-[9px] rounded-lg transition-all text-center leading-none"
+                  >
+                    确认
+                  </button>
+                  <button
+                    onClick={() => setShowExitConfirm(false)}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-[9px] rounded-lg transition-all text-center leading-none"
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    if (drawnPoints.length === 0) {
+                      setIsDrawingMode(false);
+                      setDrawnPoints([]);
+                      setUndoStack([]);
+                      setRedoStack([]);
+                      setSelectedPointIdx(null);
+                    } else {
+                      setShowExitConfirm(true);
+                    }
+                  }}
+                  className="p-2.5 rounded-xl bg-red-600/20 text-red-400 border border-red-500/30 hover:bg-red-600/30 active:scale-95 transition-all shrink-0"
+                  title="退出"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+
+              {/* 上一步和下一步放到最边缘并且为一个模块里 */}
+              <div className="flex items-center bg-slate-800 border border-slate-700 rounded-xl divide-x divide-slate-700 overflow-hidden shrink-0 ml-auto select-none">
+                <button
+                  onClick={handleUndo}
+                  disabled={undoStack.length === 0}
+                  className="p-2 md:p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  title="上一步"
+                >
+                  <Undo className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={handleRedo}
+                  disabled={redoStack.length === 0}
+                  className="p-2 md:p-2.5 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                  title="下一步"
+                >
+                  <Redo className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Naming Station Overlay Pop-up Modal */}
+        {namingStopIdx !== null && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/20 backdrop-blur-sm pointer-events-auto">
+            <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl w-full max-w-sm flex flex-col gap-4 text-white">
+              <h3 className="text-sm font-black tracking-tight">{namingStopIdx === 0 ? '设定自绘公交路线「起点站名」' : '为选定轨迹节点添加/修改站牌名称'}</h3>
+              <p className="text-xs text-slate-400">请输入该候车公交站亭的标准物理标牌名称，例如“北京西站”。</p>
+              <input
+                type="text"
+                placeholder="站点名称 (必填)"
+                value={namingValue}
+                onChange={e => setNamingValue(e.target.value)}
+                className="px-4 py-3 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-blue-500 text-xs font-bold"
+                autoFocus
+              />
+              <div className="flex justify-end gap-3.5 mt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (namingStopIdx === 0) {
+                      // Abort first point and exit naming modal smoothly
+                      setDrawnPoints([]);
+                      setNamingStopIdx(null);
+                      setNamingValue('');
+                      return;
+                    }
+                    setNamingStopIdx(null);
+                    setNamingValue('');
+                  }}
+                  className="px-4 py-2 border border-slate-700 rounded-xl hover:bg-slate-800 text-xs text-slate-300 font-bold"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveStopName}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 border border-emerald-500 hover:bg-emerald-500 text-xs text-white font-black shadow-lg shadow-emerald-500/15"
+                >
+                  确定
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* User Submission Info Form Modal */}
+        {showSubmitModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/40 backdrop-blur-sm pointer-events-auto">
+            <div className="bg-slate-900 border border-slate-700 px-6 py-6 rounded-[2.5rem] shadow-2xl w-full max-w-sm flex flex-col gap-4 text-white">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <h3 className="text-base font-black tracking-tight">提交线路</h3>
+              </div>
+              <p className="text-xs text-slate-400">
+                请填写以下发布信息以提交审核：
+              </p>
+
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 flex flex-col gap-1">
+                    <label className="text-[10px] font-bold text-slate-400">城市</label>
+                    <input
+                      type="text"
+                      value={submitCity}
+                      onChange={e => setSubmitCity(e.target.value)}
+                      className="px-3 py-2 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none text-xs font-bold"
+                    />
+                  </div>
+                  <div className="flex-1 flex flex-col gap-1">
+                    <label className="text-[10px] font-bold text-slate-400">辖区</label>
+                    <input
+                      type="text"
+                      value={submitDistrict}
+                      onChange={e => setSubmitDistrict(e.target.value)}
+                      className="px-3 py-2 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none text-xs font-bold"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-400">线路名称 (必填)</label>
+                  <input
+                    type="text"
+                    placeholder="如：923路"
+                    value={submitLineName}
+                    onChange={e => setSubmitLineName(e.target.value)}
+                    className="px-3 py-2.5 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-emerald-500 text-xs font-bold placeholder:text-slate-500"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-400">署名 (必填)</label>
+                  <input
+                    type="text"
+                    placeholder="您的昵称"
+                    value={submitUserNickname}
+                    onChange={e => setSubmitUserNickname(e.target.value)}
+                    className="px-3 py-2.5 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-emerald-500 text-xs font-bold placeholder:text-slate-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 mt-2">
+                <button
+                  onClick={() => setShowSubmitModal(false)}
+                  className="px-4 py-2 border border-slate-700 rounded-xl hover:bg-slate-800 text-xs text-slate-300 font-bold"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleSubmitSubmission}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 border border-emerald-500 hover:bg-emerald-500 text-xs text-white font-black shadow-lg shadow-emerald-500/15"
+                >
+                  提交
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* User Submission Local & Net Status History Modal */}
+        {showHistoryModal && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/40 backdrop-blur-sm pointer-events-auto">
+            <div className="bg-slate-900 border border-slate-700 px-6 py-6 rounded-[2.5rem] shadow-2xl w-full max-w-lg h-[460px] flex flex-col text-white">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-blue-500" />
+                  <h3 className="text-base font-black tracking-tight">自绘历史提交</h3>
+                </div>
+                <button 
+                  onClick={() => setShowHistoryModal(false)}
+                  className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2.5">
+                {historicalSubmissions.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-500 py-12 gap-1.5 text-xs">
+                    <span>暂无提交记录</span>
+                    <span className="text-[10px] text-slate-600">点击画笔按钮可在地图绘制线路。</span>
+                  </div>
+                ) : (
+                  historicalSubmissions.map((hist) => {
+                    const status = submissionStatuses[hist.id] || hist.status || 'pending';
+                    return (
+                      <div key={hist.id} className="p-3.5 bg-slate-800/80 border border-slate-700/50 rounded-xl flex items-center justify-between gap-3 text-xs">
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-extrabold text-white text-sm">{hist.name}</span>
+                            <span className="text-[10px] text-slate-400">By {hist.creatorNickname}</span>
+                          </div>
+                          <span className="text-[10px] text-slate-300 font-medium">
+                            途经: {hist.via_stops.map((vs: any) => vs.name).join(' → ')}
+                          </span>
+                          <span className="text-[9px] text-slate-500">
+                            城市: {hist.city} {hist.district} • {new Date(hist.timestamp).toLocaleString()}
+                          </span>
+                        </div>
+
+                        <div>
+                          {status === 'approved' ? (
+                            <span className="px-2.5 py-1.5 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/25 text-[10px] font-black">
+                              已通过
+                            </span>
+                          ) : status === 'rejected' ? (
+                            <span className="px-2.5 py-1.5 rounded-lg bg-red-500/20 text-red-400 border border-red-500/25 text-[10px] font-black">
+                              未通过 (已删)
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1.5 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/25 text-[10px] font-black">
+                              待审核
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Admin Login Modal Overlay Trigger */}
+        {showAdminLogin && (
+          <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/30 backdrop-blur-sm pointer-events-auto">
+            <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl w-full max-w-xs flex flex-col gap-4 text-white">
+              <h3 className="text-sm font-black tracking-tight text-center">输入密码</h3>
+              <input
+                type="password"
+                placeholder="密码"
+                value={adminPassword}
+                onChange={e => setAdminPassword(e.target.value)}
+                className="px-4 py-2.5 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-blue-500 text-xs font-bold"
+                onKeyDown={e => e.key === 'Enter' && handleAdminLoginVerify()}
+              />
+              <div className="flex justify-end gap-3 mt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAdminLogin(false);
+                    setAdminPassword('');
+                  }}
+                  className="px-4 py-2 border border-slate-700 rounded-xl hover:bg-slate-800 text-xs text-slate-300 font-bold"
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAdminLoginVerify}
+                  className="px-5 py-2 rounded-xl bg-blue-600 border border-blue-500 hover:bg-blue-500 text-xs text-white font-black"
+                >
+                  确定
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Admin Review Dashboard Overlay Panel */}
+        {showAuditModal && (
+          <div className="fixed top-20 right-4 z-[100] flex flex-col pointer-events-auto w-[400px] h-[550px] max-w-[calc(100vw-32px)]">
+            <div className="bg-slate-900/95 backdrop-blur-2xl border border-slate-700/50 p-5 rounded-3xl shadow-2xl flex flex-col text-white h-full">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3 shrink-0">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  <h3 className="text-sm font-black tracking-tight">自绘待审核中心</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={fetchPendingSubmissions}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded-md text-slate-300 text-[10px] font-bold"
+                  >
+                    刷新
+                  </button>
+                  <button 
+                    onClick={() => setShowAuditModal(false)}
+                    className="p-1 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-slate-500 mb-2 shrink-0">
+                提示：点击任意卡片即可在地图加载预览。
+              </p>
+
+              <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2.5">
+                {pendingSubmissions.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-500 py-16 gap-2 text-xs">
+                    <span>审核队列已全部清空 ✨</span>
+                  </div>
+                ) : (
+                  pendingSubmissions.map((sub) => (
+                    <div 
+                      key={sub.id} 
+                      onClick={() => handlePreviewLineOnMap(sub)}
+                      className="p-3 bg-slate-850/80 border border-slate-850 hover:border-amber-500/50 rounded-xl flex flex-col gap-3 text-xs transition-all cursor-pointer hover:bg-slate-800 group relative"
+                      title="点击进行地图预览"
+                    >
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="font-extrabold text-blue-400 text-sm truncate max-w-[170px]">{sub.name}</span>
+                          <span className="px-1.5 py-0.5 rounded-md bg-slate-700 text-[8px] font-black text-slate-300 shrink-0">
+                            {sub.city} • {sub.district || '所有区'}
+                          </span>
+                        </div>
+                        <div className="text-slate-400 text-[9px]">
+                          投递：{sub.creatorNickname || '匿名'}
+                        </div>
+                        <div className="text-slate-300 text-[10px] line-clamp-2 leading-relaxed">
+                          <span className="font-bold text-slate-400">途经站点: </span>
+                          {sub.via_stops && sub.via_stops.length > 0 ? (
+                            sub.via_stops.map((vs: any) => vs.name).join(' → ')
+                          ) : (
+                            <span className="italic text-slate-500">仅有轨迹</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 justify-end shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAdminAction(sub.id, 'reject');
+                          }}
+                          className="px-2.5 py-1.5 border border-red-500/20 text-red-400 hover:bg-red-500/15 rounded-lg font-bold transition-all text-[10px]"
+                        >
+                          拒绝
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAdminAction(sub.id, 'approve');
+                          }}
+                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500 rounded-lg font-black transition-all text-[10px]"
+                        >
+                          批准发布
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Admin Data Management Dashboard Overlay Panel */}
+        {showManageModal && (
+          <div className="fixed top-20 right-4 z-[100] flex flex-col pointer-events-auto w-[420px] h-[550px] max-w-[calc(100vw-32px)]">
+            <div className="bg-slate-900/95 backdrop-blur-2xl border border-slate-700/50 p-5 rounded-3xl shadow-2xl flex flex-col text-white h-full">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3 shrink-0">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+                  <h3 className="text-sm font-black tracking-tight">自绘数据发布管理</h3>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={fetchApprovedLines}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded-md text-slate-300 text-[10px] font-bold"
+                  >
+                    刷新
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setShowManageModal(false);
+                      setEditingLineId(null);
+                    }}
+                    className="p-1 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-slate-500 mb-2 shrink-0">
+                提示：点击任意卡片加载预览；支持编辑与删除。
+              </p>
+
+              <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2.5">
+                {approvedUserLines.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-500 py-16 gap-2 text-xs">
+                    <span>正式发布的线路列表为空</span>
+                  </div>
+                ) : (
+                  approvedUserLines.map((line) => {
+                    const isEditing = editingLineId === line.id;
+                    return (
+                      <div 
+                        key={line.id} 
+                        onClick={() => handlePreviewLineOnMap(line)}
+                        className="p-3 bg-slate-850/80 border border-slate-850 hover:border-purple-500/50 rounded-xl flex flex-col gap-3 text-xs transition-all cursor-pointer hover:bg-slate-800 group relative"
+                        title="点击进行地图预览"
+                      >
+                        <div className="flex flex-col gap-1.5">
+                          {isEditing ? (
+                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <input 
+                                type="text"
+                                value={editingLineName}
+                                onChange={(e) => setEditingLineName(e.target.value)}
+                                className="px-2 py-1 bg-slate-800 border border-slate-600 rounded text-xs text-white max-w-[150px] font-bold"
+                                autoFocus
+                              />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditApprovedLine(line.id, editingLineName);
+                                }}
+                                className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white text-[9px] font-black rounded"
+                              >
+                                保存
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingLineId(null);
+                                }}
+                                className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[9px] font-bold rounded"
+                              >
+                                取消
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="font-extrabold text-purple-400 text-sm truncate max-w-[180px]">{line.name}</span>
+                              <span className="px-1.5 py-0.5 rounded-md bg-slate-700 text-[8px] font-black text-slate-300 shrink-0">
+                                {line.city} • {line.district || '所有区'}
+                              </span>
+                            </div>
+                          )}
+                          <div className="text-slate-400 text-[9px]">
+                            绘图者: {line.creatorNickname || '匿名'}
+                          </div>
+                          <div className="text-slate-300 text-[10px] line-clamp-2 leading-relaxed">
+                            <span className="font-bold text-slate-400">途径车站: </span>
+                            {line.via_stops && line.via_stops.length > 0 ? (
+                              line.via_stops.map((vs: any) => vs.name).join(' → ')
+                            ) : (
+                              <span className="italic text-slate-500">（仅精细线路轨迹）</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 justify-end shrink-0" onClick={(e) => e.stopPropagation()}>
+                          {!isEditing && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingLineId(line.id);
+                                setEditingLineName(line.name);
+                              }}
+                              className="px-2 py-1 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700 rounded font-bold transition-all text-[9px] flex items-center gap-0.5"
+                            >
+                              <Edit3 className="w-2.5 h-2.5" />
+                              <span>修改名称</span>
+                            </button>
+                          )}
+                          {deletingLineId === line.id ? (
+                            <div className="flex items-center gap-1 shrink-0 bg-red-950/40 p-0.5 rounded border border-red-500/20">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteApprovedLine(line.id);
+                                }}
+                                className="px-1.5 py-0.5 bg-red-600 hover:bg-red-500 text-white rounded font-bold text-[9px] transition-colors"
+                              >
+                                确认删除
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeletingLineId(null);
+                                }}
+                                className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-bold text-[9px] transition-colors"
+                              >
+                                取消
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeletingLineId(line.id);
+                              }}
+                              className="px-2 py-1 border border-red-500/20 text-red-400 hover:bg-red-500/15 rounded font-bold transition-all text-[9px] flex items-center gap-0.5"
+                            >
+                              <Trash2 className="w-2.5 h-2.5" />
+                              <span>删除</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Settings Modal */}
         <AnimatePresence>
@@ -2703,6 +4219,48 @@ export default function App() {
                       <div className="space-y-6">
                         <div className="space-y-4">
                           <div className="flex items-center justify-between p-1">
+                            <span className="text-xs font-bold text-slate-700">{t('showStations')}</span>
+                            <button 
+                              onClick={toggleStations}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: showStations ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-1">
+                            <span className="text-xs font-bold text-slate-700">{t('showBaseMap')}</span>
+                            <button 
+                              onClick={toggleBaseMap}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showBaseMap ? 'bg-blue-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: showBaseMap ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-1">
+                            <span className="text-xs font-bold text-slate-700">{t('stationLineStats')}</span>
+                            <button 
+                              onClick={toggleStationLineStats}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${stationLineStats ? 'bg-blue-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: stationLineStats ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between p-1">
                             <span className="text-xs font-bold text-slate-700">{t('showMoreInfo')}</span>
                             <button 
                               onClick={toggleMoreInfo}
@@ -2763,34 +4321,6 @@ export default function App() {
                       <div className="space-y-6">
                         <div className="space-y-4">
                           <div className="flex items-center justify-between p-1">
-                            <span className="text-xs font-bold text-slate-700">{t('showStations')}</span>
-                            <button 
-                              onClick={toggleStations}
-                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
-                            >
-                              <motion.div 
-                                layout
-                                animate={{ x: showStations ? 24 : 0 }}
-                                className="w-4 h-4 bg-white rounded-full shadow-sm"
-                              />
-                            </button>
-                          </div>
-
-                          <div className="flex items-center justify-between p-1">
-                            <span className="text-xs font-bold text-slate-700">{t('showBaseMap')}</span>
-                            <button 
-                              onClick={toggleBaseMap}
-                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showBaseMap ? 'bg-blue-500' : 'bg-slate-300'}`}
-                            >
-                              <motion.div 
-                                layout
-                                animate={{ x: showBaseMap ? 24 : 0 }}
-                                className="w-4 h-4 bg-white rounded-full shadow-sm"
-                              />
-                            </button>
-                          </div>
-
-                          <div className="flex items-center justify-between p-1">
                             <span className="text-xs font-bold text-slate-700">{t('filterAirportBus')}</span>
                             <button 
                               onClick={toggleFilterAirportBus}
@@ -2803,16 +4333,16 @@ export default function App() {
                               />
                             </button>
                           </div>
-                          
+
                           <div className="flex items-center justify-between p-1">
-                            <span className="text-xs font-bold text-slate-700">{t('stationLineStats')}</span>
+                            <span className="text-xs font-bold text-slate-700">{t('filterUserSubmissions')}</span>
                             <button 
-                              onClick={toggleStationLineStats}
-                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${stationLineStats ? 'bg-blue-500' : 'bg-slate-300'}`}
+                              onClick={toggleFilterUserSubmissions}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${filterUserSubmissions ? 'bg-blue-500' : 'bg-slate-300'}`}
                             >
                               <motion.div 
                                 layout
-                                animate={{ x: stationLineStats ? 24 : 0 }}
+                                animate={{ x: filterUserSubmissions ? 24 : 0 }}
                                 className="w-4 h-4 bg-white rounded-full shadow-sm"
                               />
                             </button>
@@ -2854,7 +4384,12 @@ export default function App() {
                            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t('version')} V3.0</span>
                         </div>
                         <div className="flex flex-col items-center mt-2 gap-3">
-                           <span className="text-[11px] font-bold text-slate-500">@TsFeng</span>
+                           <span 
+                             onClick={handleFooterClick}
+                             className="text-[11px] font-bold text-slate-500 cursor-pointer hover:text-blue-500 select-none"
+                           >
+                             @TsFeng
+                           </span>
                            <div className="flex items-center gap-3">
                               <a href="https://space.bilibili.com/24964342" target="_blank" rel="noreferrer" className="w-8 h-8 flex items-center justify-center rounded-full bg-[#fb7299] text-white hover:bg-[#ff8eb3] transition-colors shadow-sm">
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.755 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c0-.373.129-.689.386-.947.258-.257.574-.386.947-.386z"/></svg>
@@ -3033,6 +4568,7 @@ export default function App() {
                   .sort((a: any, b: any) => a.info.name.localeCompare(b.info.name))
                   .map(({ line, info }: any, idx: number) => {
                     const { name, start, end } = info;
+                    const isUserSub = fetchedLinesCache.current.get(line)?.isUserSubmitted || approvedUserLines.some(ul => ul.name === line);
                     return (
                       <div 
                         key={line + idx}
@@ -3041,10 +4577,25 @@ export default function App() {
                       >
                         <div className="hidden md:block absolute left-0 top-0 bottom-0 w-1 bg-blue-500/0 md:group-hover:bg-blue-500 transition-all" />
                         
-                        <div className="md:bg-slate-900 md:text-white text-slate-800 font-black text-[11px] md:text-[10px] md:w-12 md:h-12 md:rounded-2xl shrink-0 flex items-center justify-center md:shadow-md md:group-hover:bg-blue-600 transition-colors whitespace-nowrap">
-                          {name.replace('路', '')}
+                        <div className="flex flex-col items-center">
+                          <div className="md:bg-slate-900 md:text-white text-slate-800 font-black text-[11px] md:text-[10px] md:w-12 md:h-12 md:rounded-2xl shrink-0 flex items-center justify-center md:shadow-md md:group-hover:bg-blue-600 transition-colors whitespace-nowrap">
+                            {name.replace('路', '')}
+                          </div>
+                          {isUserSub && (
+                            <span className="text-[8px] font-bold text-[#BA55D3] md:hidden mt-0.5 leading-none shrink-0 whitespace-nowrap">
+                              用户添加
+                            </span>
+                          )}
                         </div>
+
                         <div className="hidden md:flex flex-col min-w-0 flex-1 justify-center h-full">
+                          {isUserSub && (
+                            <div className="mb-1 text-left">
+                              <span className="px-1.5 py-0.5 rounded bg-purple-50 text-[9px] font-black text-[#BA55D3] border border-purple-100 whitespace-nowrap inline-block leading-none">
+                                用户添加
+                              </span>
+                            </div>
+                          )}
                           <div className="flex flex-col gap-1.5">
                             {start !== '-' ? (
                               <>
@@ -3091,13 +4642,24 @@ export default function App() {
                 >
                   <X className="w-3 h-3 md:w-4 md:h-4 text-slate-400" />
                 </button>
-                <div className="p-2.5 px-4 md:p-4 md:py-5 border-b border-slate-100 shrink-0 flex flex-row md:flex-col items-center md:items-start gap-2 md:gap-0">
-                  <span className="font-black text-slate-800 text-sm md:text-lg pr-2 md:pr-6 whitespace-nowrap">{parseLineInfo(activeBusLine.name).name.replace('路','')}</span>
-                  <span className="text-[10px] md:text-xs text-slate-500 font-medium md:mt-1 truncate hidden md:block">
+                <div className="p-2.5 px-4 md:p-4 md:py-4 border-b border-slate-100 shrink-0 flex flex-col items-start gap-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-black text-slate-800 text-sm md:text-lg whitespace-nowrap">
+                      {parseLineInfo(activeBusLine.name).name.replace('路','')}
+                    </span>
+                    {activeBusLine.isUserSubmitted && (
+                      <span className="px-1.5 py-0.5 rounded bg-purple-50 text-[8px] font-black text-purple-400 border border-purple-100 whitespace-nowrap">
+                        用户添加
+                      </span>
+                    )}
+                  </div>
+                  {activeBusLine.isUserSubmitted && activeBusLine.creatorNickname && (
+                    <span className="text-[10px] text-purple-400 font-bold leading-none">
+                      绘制者：{activeBusLine.creatorNickname}
+                    </span>
+                  )}
+                  <span className="text-[10px] md:text-xs text-slate-400 font-medium truncate">
                     {parseLineInfo(activeBusLine.name).start !== '-' ? `${parseLineInfo(activeBusLine.name).start} - ${parseLineInfo(activeBusLine.name).end}` : '环线 / 方向未知'}
-                  </span>
-                  <span className="text-[10px] text-slate-500 font-medium truncate md:hidden">
-                    {parseLineInfo(activeBusLine.name).start !== '-' ? `${parseLineInfo(activeBusLine.name).start} - ${parseLineInfo(activeBusLine.name).end}` : '环线'}
                   </span>
                 </div>
                 <div className="flex-1 overflow-x-auto md:overflow-x-hidden md:overflow-y-auto custom-scrollbar p-0 md:p-4 md:pr-2 flex flex-row md:flex-col items-center md:items-stretch snap-x snap-mandatory mt-1 md:mt-0">
@@ -3156,14 +4718,16 @@ export default function App() {
       </main>
 
       <footer className="fixed bottom-4 right-4 z-20 pointer-events-none flex flex-col items-end gap-2">
-        <button 
-          onClick={handleLocate}
-          className="backdrop-blur-xl bg-white/80 border border-white/50 w-12 h-12 rounded-full shadow-2xl flex items-center justify-center text-blue-600 hover:bg-white transition-all active:scale-95 hover:shadow-blue-500/10 pointer-events-auto mb-1"
-        >
-          <Navigation className="w-5 h-5 fill-blue-600/10" />
-        </button>
-        <div className="mr-2">
-          <span className="text-[9px] font-bold text-slate-400 opacity-60 uppercase tracking-widest leading-none">@TsFeng</span>
+        {!isDrawingMode && (
+          <button 
+            onClick={handleLocate}
+            className="backdrop-blur-xl bg-white/80 border border-white/50 w-12 h-12 rounded-full shadow-2xl flex items-center justify-center text-blue-600 hover:bg-white transition-all active:scale-95 hover:shadow-blue-500/10 pointer-events-auto mb-1"
+          >
+            <Navigation className="w-5 h-5 fill-blue-600/10" />
+          </button>
+        )}
+        <div className="mr-2 cursor-pointer pointer-events-auto" onClick={handleFooterClick}>
+          <span className="text-[9px] font-bold text-slate-400 opacity-60 uppercase tracking-widest leading-none select-none">@TsFeng</span>
         </div>
         {showMoreInfo && (
           <div className="hidden md:flex backdrop-blur-xl bg-white/70 border border-white/50 p-1 px-4 rounded-xl shadow-xl items-center gap-2 pointer-events-auto h-[44px]">
