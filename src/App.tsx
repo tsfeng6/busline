@@ -1405,9 +1405,9 @@ export default function App() {
     try {
       setLoading(true);
       if (isFirebaseEnabled()) {
-        const success = await submitLineToFirebase(submissionData);
+        const result = await submitLineToFirebase(submissionData);
         setLoading(false);
-        if (success) {
+        if (result.success) {
           alert('您的自绘线路已成功通过云端数据库（Firebase）提交至审核列表中！后续可在“查看历史提交”中跟踪动态审核结果。');
           setDrawnPoints([]);
           setUndoStack([]);
@@ -1418,7 +1418,7 @@ export default function App() {
           setSubmitLineName('');
           checkSubmissionStatuses(updatedHistory);
         } else {
-          alert('提交失败：无法上传该路线到 Firebase，请检查网络后重试。');
+          alert(`提交失败：${result.error || '无法上传该路线到 Firebase，请检查网络后重试。'}`);
         }
       } else {
         const res = await fetch('/api/submissions/submit', {
@@ -4687,7 +4687,7 @@ export default function App() {
                         </div>
                         <h3 className="text-xl font-black text-slate-900 tracking-tight">{t('title')}</h3>
                         <div className="px-4 py-1.5 bg-slate-100 rounded-full">
-                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{t('version')} V3.0</span>
+                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">v3.1</span>
                         </div>
                         <div className="flex flex-col items-center mt-2 gap-3">
                            <span 

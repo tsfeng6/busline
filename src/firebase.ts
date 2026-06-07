@@ -11,19 +11,21 @@ export function getFirebaseDB(): any {
 }
 
 // 1. Submit a line to Firestore (delegated via Server Proxy API)
-export async function submitLineToFirebase(submissionData: any): Promise<boolean> {
+export async function submitLineToFirebase(submissionData: any): Promise<{ success: boolean; error?: string }> {
   try {
     const res = await fetch('/api/submissions/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(submissionData)
     });
-    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-    const data = await res.json();
-    return !!data.success;
-  } catch (error) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { success: false, error: data.error || `HTTP error! status: ${res.status}` };
+    }
+    return { success: !!data.success, error: data.error };
+  } catch (error: any) {
     console.error('Proxy Submit Error:', error);
-    return false;
+    return { success: false, error: error.message || String(error) };
   }
 }
 
