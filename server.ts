@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
@@ -81,6 +82,7 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
 
   // Middleware
+  app.use(cors());
   app.use(express.json());
 
   // Storage Directories (Local Fallback)
