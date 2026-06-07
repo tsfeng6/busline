@@ -17,7 +17,7 @@ import {
 
 const AMAP_KEY = import.meta.env.VITE_AMAP_KEY || '20f5c6b65349e5d4cb5f58c7e0c4a4ba'; 
 const SECURITY_CODE = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://1316463596-7xje7hhw9f.ap-hongkong.tencentscf.com';
 
 if (typeof window !== 'undefined') {
   (window as any)._AMapSecurityConfig = {
@@ -4688,7 +4688,7 @@ export default function App() {
                         </div>
                         <h3 className="text-xl font-black text-slate-900 tracking-tight">{t('title')}</h3>
                         <div className="px-4 py-1.5 bg-slate-100 rounded-full">
-                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">v3.2</span>
+                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">v3.3</span>
                         </div>
                         <div className="flex flex-col items-center mt-2 gap-3">
                            <span 
