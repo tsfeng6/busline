@@ -25,7 +25,9 @@ export function getFirebaseDB(): Firestore | null {
   if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey.trim() !== "") {
     try {
       const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
-      dbInstance = getFirestore(app);
+      dbInstance = firebaseConfig.firestoreDatabaseId 
+        ? getFirestore(app, firebaseConfig.firestoreDatabaseId) 
+        : getFirestore(app);
       isInitialized = true;
       console.log("Firebase Firestore successfully initialized!");
       return dbInstance;
