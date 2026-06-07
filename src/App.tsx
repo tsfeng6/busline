@@ -149,6 +149,36 @@ export default function App() {
   const [namingStopIdx, setNamingStopIdx] = useState<number | null>(null);
   const [namingValue, setNamingValue] = useState('');
 
+  const [showDrawNotice, setShowDrawNotice] = useState(false);
+  const [noticeCountdown, setNoticeCountdown] = useState(0);
+
+  useEffect(() => {
+    if (isDrawingMode) {
+      const hasSeen = localStorage.getItem('has_seen_draw_notice');
+      if (!hasSeen) {
+        setShowDrawNotice(true);
+        setNoticeCountdown(5);
+      }
+    }
+  }, [isDrawingMode]);
+
+  useEffect(() => {
+    let timer: any;
+    if (showDrawNotice && noticeCountdown > 0) {
+      timer = setInterval(() => {
+        setNoticeCountdown(prev => prev - 1);
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [showDrawNotice, noticeCountdown]);
+
+  const openNoticeManually = () => {
+    setShowDrawNotice(true);
+    setNoticeCountdown(0);
+  };
+
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [submitCity, setSubmitCity] = useState('');
   const [submitDistrict, setSubmitDistrict] = useState('');
@@ -446,7 +476,7 @@ export default function App() {
       stats: '统计',
       stops: '站点',
       lines: '线路',
-      searchHint: '放大以进行检索',
+      searchHint: '请放大以检索',
       locate: '定位',
       level: '缩放',
       title: '巴士线路图',
@@ -484,7 +514,7 @@ export default function App() {
       stats: '統計',
       stops: '站點',
       lines: '線路',
-      searchHint: '放大以進行檢索',
+      searchHint: '請放大以檢索',
       locate: '定位',
       level: '縮放',
       title: '巴士線路圖',
@@ -3493,7 +3523,7 @@ export default function App() {
         {!isDrawingMode && (
           <div className="flex items-start justify-between gap-4 w-full h-[52px]">
             {/* Combined Logo/Search Bar */}
-            <div className={`backdrop-blur-xl bg-white border border-slate-200/50 shadow-xl flex items-center h-[52px] pointer-events-auto transition-all duration-500 ease-out relative overflow-visible ${isMobileSearchOpen ? 'w-[calc(100vw-5rem)] md:w-[340px] rounded-2xl' : 'w-[104px] md:w-[340px] rounded-[26px] md:rounded-2xl'}`}>
+            <div className={`backdrop-blur-xl bg-white border border-slate-200/50 shadow-xl flex items-center h-[52px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[340px] rounded-2xl z-30' : 'relative w-[104px] md:w-[340px] rounded-[26px] md:rounded-2xl'}`}>
               
               {/* Logo Area */}
               <div className="flex items-center justify-center pl-4 pr-2 shrink-0 h-full">
@@ -3511,7 +3541,7 @@ export default function App() {
               <div className={`flex-1 flex items-center overflow-hidden transition-all duration-500 ease-out h-full ${isMobileSearchOpen ? 'opacity-100 pl-3 w-full' : 'opacity-0 pl-0 w-0 md:opacity-100 md:pl-3 md:w-full'}`}>
                 <input 
                   type="text" 
-                  placeholder={t('searchPlaceholder')} 
+                  placeholder={(!enableCityWideSearch && zoomLevel < 12) ? t('searchHint') : t('searchPlaceholder')} 
                   className="bg-transparent border-none outline-none text-sm font-black text-slate-700 w-full placeholder:text-slate-400 placeholder:font-medium h-full"
                   value={searchQuery}
                   onChange={(e) => onSearchInputChange(e.target.value)}
@@ -3597,7 +3627,29 @@ export default function App() {
             </div>
 
             {/* Quick Actions Container */}
-            <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-3 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
+              {/* Toggle Stations Button */}
+              <div className="pointer-events-auto shrink-0 transition-opacity duration-300 opacity-100 mt-1">
+                <button 
+                  onClick={toggleStations}
+                  className={`backdrop-blur-xl border border-white/50 w-[42px] h-[42px] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex items-center justify-center transition-all active:scale-95 group ${showStations ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-white/90 text-slate-700 hover:text-blue-600 hover:bg-white'}`}
+                  title={showStations ? "隐藏站点" : "显示站点"}
+                >
+                  <MapPin className={`w-5 h-5 transition-transform group-hover:scale-110 ${showStations ? 'text-white' : 'text-slate-700 group-hover:text-blue-600'}`} />
+                </button>
+              </div>
+
+              {/* Toggle Base Map Button */}
+              <div className="pointer-events-auto shrink-0 transition-opacity duration-300 opacity-100 mt-1">
+                <button 
+                  onClick={toggleBaseMap}
+                  className={`backdrop-blur-xl border border-white/50 w-[42px] h-[42px] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex items-center justify-center transition-all active:scale-95 group ${showBaseMap ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'bg-white/90 text-slate-700 hover:text-indigo-600 hover:bg-white'}`}
+                  title={showBaseMap ? "隐藏底图" : "显示底图"}
+                >
+                  <MapIcon className={`w-5 h-5 transition-transform group-hover:scale-110 ${showBaseMap ? 'text-white' : 'text-slate-700 group-hover:text-indigo-600'}`} />
+                </button>
+              </div>
+
               {/* Custom Draw Mode Paintbrush Button */}
               <div className="pointer-events-auto shrink-0 transition-opacity duration-300 opacity-100 mt-1">
                 <button 
@@ -3702,122 +3754,89 @@ export default function App() {
 
 
         {!isDrawingMode && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex items-center gap-4">
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2">
             <AnimatePresence>
-              {(stats.stops > 0 || stats.lines > 0) && (
+              {(!enableCityWideSearch && zoomLevel < 12 && !isSearching && !loading) && (
                 <motion.div
-                  initial={{ x: 20, opacity: 0 }}
-                  animate={{ x: 0, opacity: 1 }}
-                  exit={{ x: 20, opacity: 0 }}
-                  className="hidden md:flex backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl items-center gap-3 pointer-events-auto h-14"
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  className="backdrop-blur-xl bg-orange-500/90 text-white text-xs font-black px-4 py-2 rounded-full shadow-lg whitespace-nowrap border border-orange-400 flex items-center gap-1.5 pointer-events-none mb-1 shadow-orange-500/20"
                 >
-                  <div className="flex flex-col">
-                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showStations')}</span>
-                    <span className="text-[10px] font-bold text-slate-800 leading-none">{showStations ? 'ON' : 'OFF'}</span>
-                  </div>
-                  <button 
-                    onClick={toggleStations}
-                    className={`w-10 h-5 rounded-full transition-all relative flex items-center px-1 ${showStations ? 'bg-blue-500' : 'bg-slate-300'}`}
-                  >
-                    <motion.div 
-                      layout
-                      animate={{ x: showStations ? 20 : 0 }}
-                      className="w-3 h-3 bg-white rounded-full shadow-sm"
-                    />
-                  </button>
+                  <ZoomIn className="w-3.5 h-3.5 animate-bounce" />
+                  <span>{t('searchHint')}</span>
                 </motion.div>
               )}
             </AnimatePresence>
 
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="hidden md:flex backdrop-blur-xl bg-white/80 border border-white/50 px-4 py-2.5 rounded-3xl shadow-xl items-center gap-3 pointer-events-auto h-14"
-            >
-              <div className="flex flex-col">
-                <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter leading-none mb-0.5 whitespace-nowrap">{t('showBaseMap')}</span>
-                <span className="text-[10px] font-bold text-slate-800 leading-none">{showBaseMap ? 'ON' : 'OFF'}</span>
-              </div>
-              <button 
-                onClick={toggleBaseMap}
-                className={`w-10 h-5 rounded-full transition-all relative flex items-center px-1 ${showBaseMap ? 'bg-blue-500' : 'bg-slate-300'}`}
+            <div className="flex items-center gap-4">
+              <motion.button 
+                layout
+                onClick={handleSearch}
+                disabled={isSearching || (!enableCityWideSearch && zoomLevel < 12)}
+                initial={false}
+                animate={{ 
+                  scale: 1,
+                  opacity: loading ? 0 : 1,
+                  backgroundColor: isSearching ? 'rgba(245, 158, 11, 0.1)' : 
+                    (enableCityWideSearch ? 'rgba(239, 68, 68, 1)' : (zoomLevel < 12 ? 'rgba(241, 245, 241, 0.5)' : 'rgba(37, 99, 235, 1)'))
+                }}
+                whileHover={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 1.02, backgroundColor: enableCityWideSearch ? 'rgba(220, 38, 38, 1)' : 'rgba(29, 78, 216, 1)' } : {}}
+                whileTap={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 0.98 } : {}}
+                className={`backdrop-blur-xl border w-14 h-14 shrink-0 rounded-3xl shadow-xl flex items-center justify-center transition-colors
+                  ${isSearching ? 'border-amber-200 text-amber-600 cursor-wait' : 
+                    enableCityWideSearch ? 'border-red-500 text-white shadow-red-500/20' :
+                    (zoomLevel < 12 ? 'border-slate-200 text-slate-400 cursor-not-allowed' : 
+                    'border-blue-500 text-white shadow-blue-500/20')}`}
+                title={isSearching ? t('searching') : (enableCityWideSearch ? t('cityWideSearch') : (zoomLevel < 12 ? t('searchHint') : t('startSearch')))}
               >
-                <motion.div 
-                  layout
-                  animate={{ x: showBaseMap ? 20 : 0 }}
-                  className="w-3 h-3 bg-white rounded-full shadow-sm"
-                />
-              </button>
-            </motion.div>
-
-            <motion.button 
-              layout
-              onClick={handleSearch}
-              disabled={isSearching || (!enableCityWideSearch && zoomLevel < 12)}
-              initial={false}
-              animate={{ 
-                scale: 1,
-                opacity: loading ? 0 : 1,
-                backgroundColor: isSearching ? 'rgba(245, 158, 11, 0.1)' : 
-                  (enableCityWideSearch ? 'rgba(239, 68, 68, 1)' : (zoomLevel < 12 ? 'rgba(241, 245, 241, 0.5)' : 'rgba(37, 99, 235, 1)'))
-              }}
-              whileHover={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 1.02, backgroundColor: enableCityWideSearch ? 'rgba(220, 38, 38, 1)' : 'rgba(29, 78, 216, 1)' } : {}}
-              whileTap={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 0.98 } : {}}
-              className={`backdrop-blur-xl border px-8 py-4 rounded-3xl shadow-xl flex items-center gap-3 text-sm font-black tracking-tight uppercase transition-colors
-                ${isSearching ? 'border-amber-200 text-amber-600 cursor-wait' : 
-                  enableCityWideSearch ? 'border-red-500 text-white shadow-red-500/20' :
-                  (zoomLevel < 12 ? 'border-slate-200 text-slate-400 cursor-not-allowed' : 
-                  'border-blue-500 text-white shadow-blue-500/20')}`}
-            >
-              <AnimatePresence mode="wait">
-                {isSearching ? (
-                  <motion.div
-                    key="loader"
-                    initial={{ rotate: 0, opacity: 0 }}
-                    animate={{ rotate: 360, opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ rotate: { repeat: Infinity, duration: 1, ease: 'linear' } }}
-                  >
-                    <Loader2 className="w-5 h-5" />
-                  </motion.div>
-                ) : (!enableCityWideSearch && zoomLevel < 12) ? (
-                  <motion.div
-                    key="zoom"
-                    initial={{ scale: 0.5, opacity: 0 }}
+                <AnimatePresence mode="wait">
+                  {isSearching ? (
+                    <motion.div
+                      key="loader"
+                      initial={{ rotate: 0, opacity: 0 }}
+                      animate={{ rotate: 360, opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ rotate: { repeat: Infinity, duration: 1, ease: 'linear' } }}
+                    >
+                      <Loader2 className="w-5 h-5" />
+                    </motion.div>
+                  ) : (!enableCityWideSearch && zoomLevel < 12) ? (
+                    <motion.div
+                      key="zoom"
+                      initial={{ scale: 0.5, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.5, opacity: 0 }}
+                    >
+                      <ZoomIn className="w-5 h-5" />
+                    </motion.div>
+                  ) : (
+                    <motion.div
+                      key="search"
+                      initial={{ scale: 0.5, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.5, opacity: 0 }}
+                    >
+                      <Search className="w-5 h-5" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.button>
+              
+              <AnimatePresence>
+                {(stats.stops > 0 || stats.lines > 0) && (
+                  <motion.button 
+                    initial={{ scale: 0, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.5, opacity: 0 }}
+                    exit={{ scale: 0, opacity: 0 }}
+                    onClick={handleClear}
+                    className="backdrop-blur-xl bg-white/80 border border-slate-200 h-14 w-14 rounded-3xl shadow-xl flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-all active:scale-95"
                   >
-                    <ZoomIn className="w-5 h-5" />
-                  </motion.div>
-                ) : (
-                  <motion.div
-                    key="search"
-                    initial={{ scale: 0.5, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.5, opacity: 0 }}
-                  >
-                    <Search className="w-5 h-5" />
-                  </motion.div>
+                    <X className="w-6 h-6" />
+                  </motion.button>
                 )}
               </AnimatePresence>
-              <motion.span layout className="whitespace-nowrap">
-                {isSearching ? t('searching') : (enableCityWideSearch ? t('cityWideSearch') : (zoomLevel < 12 ? t('searchHint') : t('startSearch')))}
-              </motion.span>
-            </motion.button>
-            
-            <AnimatePresence>
-              {(stats.stops > 0 || stats.lines > 0) && (
-                <motion.button 
-                  initial={{ scale: 0, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={{ scale: 0, opacity: 0 }}
-                  onClick={handleClear}
-                  className="backdrop-blur-xl bg-white/80 border border-slate-200 h-14 w-14 rounded-3xl shadow-xl flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-white transition-all active:scale-95"
-                >
-                  <X className="w-6 h-6" />
-                </motion.button>
-              )}
-            </AnimatePresence>
+            </div>
           </div>
         )}
 
@@ -3826,13 +3845,20 @@ export default function App() {
           <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-30 w-[95%] max-w-3xl backdrop-blur-2xl bg-slate-900/95 text-white border border-slate-700/80 rounded-3xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col md:flex-row items-center justify-between gap-4 pointer-events-auto">
             {/* Left instructions or stats */}
             <div className="flex items-center gap-3">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <button
+                onClick={openNoticeManually}
+                className="backdrop-blur-md bg-slate-800 hover:bg-slate-700/80 border border-slate-700/80 p-2 rounded-xl text-emerald-400 hover:text-emerald-300 transition-all active:scale-95 flex items-center justify-center shrink-0"
+                title="查看绘制功能提示"
+              >
+                <Info className="w-3.5 h-3.5" />
+              </button>
               <div className="flex flex-col">
-                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">自绘线路模式</span>
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">自绘模式</span>
                 <span className="text-xs font-bold text-slate-200">
                   {drawnPoints.length === 0 
-                    ? '请点击或轻触地图道路放置起点站点' 
-                    : `已绘制 ${drawnPoints.length} 个轨迹点 (其中站台: ${drawnPoints.filter(p => p.isStop).length} 个)`
+                    ? '点击地图即可绘制' 
+                    : `已绘: ${drawnPoints.length}点 | 站台: ${drawnPoints.filter(p => p.isStop).length}个`
                   }
                 </span>
               </div>
@@ -3936,14 +3962,13 @@ export default function App() {
         {namingStopIdx !== null && (
           <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/20 backdrop-blur-sm pointer-events-auto">
             <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl w-full max-w-sm flex flex-col gap-4 text-white">
-              <h3 className="text-sm font-black tracking-tight">{namingStopIdx === 0 ? '设定自绘公交路线「起点站名」' : '为选定轨迹节点添加/修改站牌名称'}</h3>
-              <p className="text-xs text-slate-400">请输入该候车公交站亭的标准物理标牌名称，例如“北京西站”。</p>
+              <h3 className="text-base font-black tracking-tight text-center">添加新站</h3>
               <input
                 type="text"
-                placeholder="站点名称 (必填)"
+                placeholder="输入新站名"
                 value={namingValue}
                 onChange={e => setNamingValue(e.target.value)}
-                className="px-4 py-3 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-blue-500 text-xs font-bold"
+                className="px-4 py-3 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-blue-500 text-xs font-bold w-full"
                 autoFocus
               />
               <div className="flex justify-end gap-3.5 mt-2">
@@ -3989,23 +4014,23 @@ export default function App() {
               </p>
 
               <div className="flex flex-col gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 flex flex-col gap-1">
+                <div className="flex items-center gap-3 w-full">
+                  <div className="flex-1 min-w-0 flex flex-col gap-1">
                     <label className="text-[10px] font-bold text-slate-400">城市</label>
                     <input
                       type="text"
                       value={submitCity}
                       onChange={e => setSubmitCity(e.target.value)}
-                      className="px-3 py-2 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none text-xs font-bold"
+                      className="px-3 py-2 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none text-xs font-bold w-full"
                     />
                   </div>
-                  <div className="flex-1 flex flex-col gap-1">
+                  <div className="flex-1 min-w-0 flex flex-col gap-1">
                     <label className="text-[10px] font-bold text-slate-400">辖区</label>
                     <input
                       type="text"
                       value={submitDistrict}
                       onChange={e => setSubmitDistrict(e.target.value)}
-                      className="px-3 py-2 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none text-xs font-bold"
+                      className="px-3 py-2 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none text-xs font-bold w-full"
                     />
                   </div>
                 </div>
@@ -4017,7 +4042,7 @@ export default function App() {
                     placeholder="如：923路"
                     value={submitLineName}
                     onChange={e => setSubmitLineName(e.target.value)}
-                    className="px-3 py-2.5 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-emerald-500 text-xs font-bold placeholder:text-slate-500"
+                    className="px-3 py-2.5 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-emerald-500 text-xs font-bold placeholder:text-slate-500 w-full"
                   />
                 </div>
 
@@ -4028,7 +4053,7 @@ export default function App() {
                     placeholder="您的昵称"
                     value={submitUserNickname}
                     onChange={e => setSubmitUserNickname(e.target.value)}
-                    className="px-3 py-2.5 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-emerald-500 text-xs font-bold placeholder:text-slate-500"
+                    className="px-3 py-2.5 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-emerald-500 text-xs font-bold placeholder:text-slate-500 w-full"
                   />
                 </div>
               </div>
@@ -4045,6 +4070,50 @@ export default function App() {
                   className="px-5 py-2 rounded-xl bg-emerald-600 border border-emerald-500 hover:bg-emerald-500 text-xs text-white font-black shadow-lg shadow-emerald-500/15"
                 >
                   提交
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Use Drawing Guidelines Tips Notice Modal */}
+        {showDrawNotice && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/60 backdrop-blur-md pointer-events-auto">
+            <div className="bg-slate-900 border border-slate-700 p-6 md:p-8 rounded-[2.5rem] shadow-2xl w-full max-w-sm md:max-w-md flex flex-col gap-5 text-white animate-in fade-in duration-200">
+              <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+                <Info className="w-5 h-5 text-emerald-400 shrink-0" />
+                <h3 className="text-base font-black tracking-tight text-slate-100">使用绘制功能提示</h3>
+              </div>
+              
+              <div className="flex flex-col gap-4 text-xs font-medium text-slate-300 leading-relaxed">
+                <div className="flex gap-2.5">
+                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-slate-400 shrink-0 font-bold text-[10px]">1</span>
+                  <p>请规范绘制，不得绘制违法、违规的不良信息，否则审核将不予通过并追究责任。</p>
+                </div>
+                <div className="flex gap-2.5">
+                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-slate-400 shrink-0 font-bold text-[10px]">2</span>
+                  <p>请勿短期内恶意大量绘制无效线路，否则用户将被禁止使用该功能。</p>
+                </div>
+                <div className="flex gap-2.5">
+                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-slate-400 shrink-0 font-bold text-[10px]">3</span>
+                  <p>该功能当前为测试功能，若您遇到使用上的问题，可通过微信公众号<strong className="text-emerald-400 font-black">“巴士线路图”</strong>进行反馈。</p>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 border-t border-slate-800 pt-4 mt-1">
+                <button
+                  type="button"
+                  disabled={noticeCountdown > 0}
+                  onClick={() => {
+                    setShowDrawNotice(false);
+                    localStorage.setItem('has_seen_draw_notice', 'true');
+                  }}
+                  className={`px-6 py-2.5 rounded-xl text-xs font-black transition-all w-full text-center flex items-center justify-center gap-2 select-none
+                    ${noticeCountdown > 0 
+                      ? 'bg-slate-800 border border-slate-700 text-slate-500 cursor-not-allowed' 
+                      : 'bg-emerald-600 border border-emerald-500 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-500/15 active:scale-95'}`}
+                >
+                  {noticeCountdown > 0 ? `了解并同意 (${noticeCountdown}s)` : '了解并进入'}
                 </button>
               </div>
             </div>
