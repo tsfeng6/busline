@@ -386,21 +386,6 @@ export default function App() {
         list = data || [];
       }
       
-      // Load local-only static lines too!
-      const localSaved = localStorage.getItem('client_approved_user_lines');
-      if (localSaved) {
-        try {
-          const localList = JSON.parse(localSaved);
-          localList.forEach((ul: any) => {
-            if (!list.some((existing: any) => existing.id === ul.id)) {
-              list.push(ul);
-            }
-          });
-        } catch (e) {
-          console.error(e);
-        }
-      }
-
       setApprovedUserLines(list);
       
       // Load user submitted lines into fetchedLinesCache
@@ -1496,44 +1481,8 @@ export default function App() {
       }
     } catch (err: any) {
       setLoading(false);
-      console.warn('Backend unavailable, falling back to local storage approval:', err);
-      
-      // Auto-approve locally
-      const localSaved = localStorage.getItem('client_approved_user_lines');
-      let localList = [];
-      if (localSaved) {
-        try {
-          localList = JSON.parse(localSaved);
-        } catch (e) {
-          console.error(e);
-        }
-      }
-      
-      const approvedLocalData = {
-        ...submissionData,
-        status: 'approved' // Auto-approve locally
-      };
-      
-      localList.unshift(approvedLocalData);
-      localStorage.setItem('client_approved_user_lines', JSON.stringify(localList));
-      
-      // Also update history item to show as approved locally
-      const updatedHistoryApproved = updatedHistory.map(h => h.id === submissionId ? approvedLocalData : h);
-      setHistoricalSubmissions(updatedHistoryApproved);
-      localStorage.setItem('user_drawn_lines_history', JSON.stringify(updatedHistoryApproved));
-      
-      // Refresh approved lines array and cache in memory immediately
-      fetchApprovedLines();
-      
-      alert('【提示：检测到当前为 GitHub Pages/静态网站托管环境且尚未配置 Cloud API】\n\n自绘线路已为您进行「本地免审发布」！若想实现多端同步和线上管理员审核，请按照提示在项目设置中配置 Firebase 凭据。\n\n您现在可以无需审核，直接检索、过滤并在地图上查看此路线啦！');
-      
-      setDrawnPoints([]);
-      setUndoStack([]);
-      setRedoStack([]);
-      setSelectedPointIdx(null);
-      setIsDrawingMode(false);
-      setShowSubmitModal(false);
-      setSubmitLineName('');
+      console.error('Submission error:', err);
+      alert('提交失败，无法连接到服务器进行审核提交，请稍后再试。');
     }
   };
 
