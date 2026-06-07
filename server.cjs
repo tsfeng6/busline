@@ -37459,7 +37459,7 @@ async function runMigration() {
 // server.ts
 async function startServer() {
   const app = (0, import_express.default)();
-  const PORT = 3e3;
+  const PORT = process.env.PORT || 3e3;
   try {
     await runMigration();
   } catch (e) {
