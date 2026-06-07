@@ -1,13 +1,19 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import { db } from './src/db/index';
+import { db, runMigration } from './src/db/index';
 import { submissions } from './src/db/schema';
 import { eq, inArray, desc } from 'drizzle-orm';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
+
+  try {
+    await runMigration();
+  } catch (e) {
+    console.error('Migration failed:', e);
+  }
 
   // Middleware
   app.use(cors());
@@ -159,7 +165,7 @@ async function startServer() {
 
       const fileId = sanitizeId(id);
       
-      const result = await db.update(submissions)
+      await db.update(submissions)
         .set({ status: 'approved' })
         .where(eq(submissions.id, fileId));
 
@@ -179,7 +185,6 @@ async function startServer() {
 
       const fileId = sanitizeId(id);
       
-      // We can either update status to rejected or delete it
       await db.update(submissions)
         .set({ status: 'rejected' })
         .where(eq(submissions.id, fileId));
@@ -199,6 +204,7 @@ async function startServer() {
       if (!id || !name) return res.status(400).json({ error: 'Missing required fields' });
 
       const fileId = sanitizeId(id);
+      
       await db.update(submissions)
         .set({ name })
         .where(eq(submissions.id, fileId));

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --external:vite --sourcemap --outfile=dist/server.cjs",
+    "db:push": "drizzle-kit push",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist",
@@ -28,7 +29,7 @@
     "@types/pg": "^8.20.0",
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
-    "dotenv": "^17.2.3",
+    "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",
     "esbuild": "^0.28.0",
     "html2canvas": "^1.4.1",

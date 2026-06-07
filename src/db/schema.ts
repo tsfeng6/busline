@@ -11,4 +11,3 @@ export const submissions = pgTable('submissions', {
   status: varchar('status', { length: 50 }).notNull().default('pending'), // 'pending', 'approved', 'rejected'
   timestamp: timestamp('timestamp').notNull().defaultNow(),
 });
-

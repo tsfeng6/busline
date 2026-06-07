@@ -374,7 +374,7 @@ export default function App() {
     try {
       let list: any[] = [];
       if (isFirebaseEnabled()) {
-        console.log("Firebase is active, fetching approved lines from cloud Firestore...");
+        console.log("Server is active, fetching approved lines from backend API...");
         list = await fetchApprovedLinesFromFirebase();
       } else {
         const url = `${API_BASE_URL}/api/submissions/approved`;
@@ -1445,7 +1445,7 @@ export default function App() {
         const result = await submitLineToFirebase(submissionData);
         setLoading(false);
         if (result.success) {
-          alert('您的自绘线路已成功通过云端数据库（Firebase）提交至审核列表中！后续可在“查看历史提交”中跟踪动态审核结果。');
+          alert('您的自绘线路已成功通过服务器提交至审核列表中！后续可在“查看历史提交”中跟踪动态审核结果。');
           setDrawnPoints([]);
           setUndoStack([]);
           setRedoStack([]);
@@ -1455,7 +1455,7 @@ export default function App() {
           setSubmitLineName('');
           checkSubmissionStatuses(updatedHistory);
         } else {
-          alert(`提交失败：${result.error || '无法上传该路线到 Firebase，请检查网络后重试。'}`);
+          alert(`提交失败：${result.error || '无法保存该路线到服务器，请检查网络后重试。'}`);
         }
       } else {
         const res = await fetch(`${API_BASE_URL}/api/submissions/submit`, {
@@ -1552,7 +1552,7 @@ export default function App() {
           fetchApprovedLines();
           checkSubmissionStatuses(historicalSubmissions);
         } else {
-          alert('管理员执行操作发生 Firebase 数据库错误，请检查规则配置后重试。');
+          alert('管理员执行操作发生服务器数据库错误，请检查服务器日志后重试。');
         }
       } else {
         const pathUrl = action === 'approve' ? `${API_BASE_URL}/api/admin/approve` : `${API_BASE_URL}/api/admin/reject`;
