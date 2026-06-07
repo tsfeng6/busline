@@ -26,8 +26,74 @@ var import_express = __toESM(require("express"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_fs = __toESM(require("fs"), 1);
 var import_vite = require("vite");
-var import_app = require("firebase/app");
-var import_firestore = require("firebase/firestore");
+function fromFirestore(doc) {
+  if (!doc) return null;
+  const result = {};
+  const fields = doc.fields || {};
+  for (const [key, valObj] of Object.entries(fields)) {
+    result[key] = readValue(valObj);
+  }
+  return result;
+}
+function readValue(valObj) {
+  if (!valObj) return null;
+  if ("stringValue" in valObj) return valObj.stringValue;
+  if ("integerValue" in valObj) return parseInt(valObj.integerValue, 10);
+  if ("doubleValue" in valObj) return parseFloat(valObj.doubleValue);
+  if ("booleanValue" in valObj) return valObj.booleanValue;
+  if ("arrayValue" in valObj) {
+    const values = valObj.arrayValue.values || [];
+    return values.map((v) => readValue(v));
+  }
+  if ("mapValue" in valObj) {
+    const fields = valObj.mapValue.fields || {};
+    const res = {};
+    for (const [k, v] of Object.entries(fields)) {
+      res[k] = readValue(v);
+    }
+    return res;
+  }
+  return null;
+}
+function toFirestore(obj) {
+  const fields = {};
+  for (const [key, value] of Object.entries(obj)) {
+    const fVal = toValue(value);
+    if (fVal !== void 0) {
+      fields[key] = fVal;
+    }
+  }
+  return { fields };
+}
+function toValue(value) {
+  if (value === null || value === void 0) return { nullValue: null };
+  if (typeof value === "string") return { stringValue: value };
+  if (typeof value === "boolean") return { booleanValue: value };
+  if (typeof value === "number") {
+    if (Number.isInteger(value)) {
+      return { integerValue: String(value) };
+    }
+    return { doubleValue: value };
+  }
+  if (Array.isArray(value)) {
+    return {
+      arrayValue: {
+        values: value.map(toValue).filter((v) => v !== void 0)
+      }
+    };
+  }
+  if (typeof value === "object") {
+    const fields = {};
+    for (const [k, v] of Object.entries(value)) {
+      const fv = toValue(v);
+      if (fv !== void 0) fields[k] = fv;
+    }
+    return {
+      mapValue: { fields }
+    };
+  }
+  return void 0;
+}
 async function startServer() {
   const app = (0, import_express.default)();
   const PORT = 3e3;
@@ -38,22 +104,27 @@ async function startServer() {
   if (!import_fs.default.existsSync(DATA_DIR)) import_fs.default.mkdirSync(DATA_DIR, { recursive: true });
   if (!import_fs.default.existsSync(PENDING_DIR)) import_fs.default.mkdirSync(PENDING_DIR, { recursive: true });
   if (!import_fs.default.existsSync(APPROVED_DIR)) import_fs.default.mkdirSync(APPROVED_DIR, { recursive: true });
-  let db = null;
+  let firebaseEnabled = false;
+  let firebaseBaseUrl = "";
+  let firebaseApiKey = "";
   try {
     const configPath = import_path.default.join(process.cwd(), "firebase-applet-config.json");
     if (import_fs.default.existsSync(configPath)) {
       const config = JSON.parse(import_fs.default.readFileSync(configPath, "utf-8"));
       if (config && config.apiKey && config.apiKey.trim() !== "") {
-        const firebaseApp = (0, import_app.getApps)().length === 0 ? (0, import_app.initializeApp)(config) : (0, import_app.getApp)();
-        db = config.firestoreDatabaseId ? (0, import_firestore.getFirestore)(firebaseApp, config.firestoreDatabaseId) : (0, import_firestore.getFirestore)(firebaseApp);
-        console.log("Firebase Firestore successfully initialized on Cloud Run Server proxy!");
+        const isCustomDb = config.firestoreDatabaseId && config.firestoreDatabaseId.trim() !== "";
+        const databaseId = isCustomDb ? config.firestoreDatabaseId : "(default)";
+        firebaseBaseUrl = `https://firestore.googleapis.com/v1/projects/${config.projectId}/databases/${databaseId}/documents`;
+        firebaseApiKey = config.apiKey;
+        firebaseEnabled = true;
+        console.log(`[SQL/Firestore Proxy] Configured direct HTTP REST proxy: ${config.projectId}/${databaseId}`);
       }
     }
   } catch (e) {
-    console.error("Failed to initialize server-side Firebase Firestore proxy:", e);
+    console.error("Failed to parse firebase-applet-config.json:", e);
   }
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", firebaseProxyActive: !!db });
+    res.json({ status: "ok", firebaseProxyActive: firebaseEnabled });
   });
   const sanitizeId = (id) => id.replace(/[^a-zA-Z0-9_\-]/g, "");
   app.post("/api/submissions/submit", async (req, res) => {
@@ -74,8 +145,24 @@ async function startServer() {
         status: status || "pending",
         timestamp: timestamp || Date.now()
       };
-      if (db) {
-        await (0, import_firestore.setDoc)((0, import_firestore.doc)(db, "submissions", fileId), data);
+      if (firebaseEnabled) {
+        const firestoreDoc = toFirestore(data);
+        const url = `${firebaseBaseUrl}/submissions/${fileId}?key=${firebaseApiKey}`;
+        const fRes = await fetch(url, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(firestoreDoc)
+        });
+        if (!fRes.ok) {
+          const rawErr = await fRes.text();
+          let parsedErr = {};
+          try {
+            parsedErr = JSON.parse(rawErr);
+          } catch (ex) {
+          }
+          const innerMessage = parsedErr?.error?.message || rawErr;
+          throw new Error(`Firebase \u5B58\u50A8\u5931\u8D25 (${fRes.status}): ${innerMessage}`);
+        }
         console.log(`[SQL/Firestore Proxy] Saved submission "${fileId}" directly to Cloud Firestore.`);
       } else {
         const filePath = import_path.default.join(PENDING_DIR, `${fileId}.json`);
@@ -83,7 +170,7 @@ async function startServer() {
       }
       res.json({ success: true, message: "Submitted successfully, awaiting audit." });
     } catch (err) {
-      console.error(err);
+      console.error("Submit proxy error:", err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -95,27 +182,26 @@ async function startServer() {
       }
       const ids = idsStr.split(",").map(sanitizeId);
       const statuses = {};
-      if (db && ids.length > 0) {
-        const batches = [];
-        for (let i = 0; i < ids.length; i += 10) {
-          batches.push(ids.slice(i, i + 10));
-        }
-        for (const batch of batches) {
-          if (batch.length === 0) continue;
-          const q = (0, import_firestore.query)((0, import_firestore.collection)(db, "submissions"), (0, import_firestore.where)("id", "in", batch));
-          const querySnapshot = await (0, import_firestore.getDocs)(q);
-          querySnapshot.forEach((docSnap) => {
-            const data = docSnap.data();
-            if (data && data.id) {
-              statuses[data.id] = data.status;
+      if (firebaseEnabled && ids.length > 0) {
+        await Promise.all(
+          ids.map(async (fileId) => {
+            try {
+              const url = `${firebaseBaseUrl}/submissions/${fileId}?key=${firebaseApiKey}`;
+              const fRes = await fetch(url);
+              if (fRes.ok) {
+                const docSnap = await fRes.json();
+                const simpleObj = fromFirestore(docSnap);
+                statuses[fileId] = simpleObj.status || "pending";
+              } else if (fRes.status === 404) {
+                statuses[fileId] = "rejected";
+              } else {
+                statuses[fileId] = "pending";
+              }
+            } catch (err) {
+              statuses[fileId] = "pending";
             }
-          });
-        }
-        ids.forEach((id) => {
-          if (!statuses[id]) {
-            statuses[id] = "rejected";
-          }
-        });
+          })
+        );
         return res.json(statuses);
       }
       ids.forEach((id) => {
@@ -131,33 +217,22 @@ async function startServer() {
       });
       res.json(statuses);
     } catch (err) {
-      console.error(err);
+      console.error("Status proxy error:", err);
       res.status(500).json({ error: err.message });
     }
   });
   app.get("/api/submissions/approved", async (req, res) => {
     try {
-      if (db) {
-        let lines2 = [];
-        try {
-          const q = (0, import_firestore.query)(
-            (0, import_firestore.collection)(db, "submissions"),
-            (0, import_firestore.where)("status", "==", "approved"),
-            (0, import_firestore.orderBy)("timestamp", "desc")
-          );
-          const querySnapshot = await (0, import_firestore.getDocs)(q);
-          querySnapshot.forEach((docSnap) => {
-            lines2.push(docSnap.data());
-          });
-        } catch (error) {
-          const q = (0, import_firestore.query)((0, import_firestore.collection)(db, "submissions"), (0, import_firestore.where)("status", "==", "approved"));
-          const querySnapshot = await (0, import_firestore.getDocs)(q);
-          const approvedLines = [];
-          querySnapshot.forEach((docSnap) => {
-            approvedLines.push(docSnap.data());
-          });
-          lines2 = approvedLines.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      if (firebaseEnabled) {
+        const url = `${firebaseBaseUrl}/submissions?pageSize=1000&key=${firebaseApiKey}`;
+        const fRes = await fetch(url);
+        if (!fRes.ok) {
+          const rawErr = await fRes.text();
+          throw new Error(`Firebase \u540C\u6B65\u5931\u8D25 (${fRes.status}): ${rawErr}`);
         }
+        const result = await fRes.json();
+        const docs = result.documents || [];
+        const lines2 = docs.map(fromFirestore).filter((line) => line && line.status === "approved").sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
         return res.json(lines2);
       }
       if (!import_fs.default.existsSync(APPROVED_DIR)) {
@@ -173,34 +248,23 @@ async function startServer() {
       }).filter(Boolean);
       res.json(lines);
     } catch (err) {
-      console.error(err);
+      console.error("Approved proxy error:", err);
       res.status(500).json({ error: err.message });
     }
   });
   app.get("/api/admin/pending", async (req, res) => {
     try {
-      if (db) {
-        let pendingLines = [];
-        try {
-          const q = (0, import_firestore.query)(
-            (0, import_firestore.collection)(db, "submissions"),
-            (0, import_firestore.where)("status", "==", "pending"),
-            (0, import_firestore.orderBy)("timestamp", "desc")
-          );
-          const querySnapshot = await (0, import_firestore.getDocs)(q);
-          querySnapshot.forEach((docSnap) => {
-            pendingLines.push(docSnap.data());
-          });
-        } catch (error) {
-          const q = (0, import_firestore.query)((0, import_firestore.collection)(db, "submissions"), (0, import_firestore.where)("status", "==", "pending"));
-          const querySnapshot = await (0, import_firestore.getDocs)(q);
-          const rawLines = [];
-          querySnapshot.forEach((docSnap) => {
-            rawLines.push(docSnap.data());
-          });
-          pendingLines = rawLines.sort((a, b) => b.timestamp - a.timestamp);
+      if (firebaseEnabled) {
+        const url = `${firebaseBaseUrl}/submissions?pageSize=1000&key=${firebaseApiKey}`;
+        const fRes = await fetch(url);
+        if (!fRes.ok) {
+          const rawErr = await fRes.text();
+          throw new Error(`Firebase \u540C\u6B65\u5931\u8D25 (${fRes.status}): ${rawErr}`);
         }
-        return res.json(pendingLines);
+        const result = await fRes.json();
+        const docs = result.documents || [];
+        const lines2 = docs.map(fromFirestore).filter((line) => line && line.status === "pending").sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        return res.json(lines2);
       }
       if (!import_fs.default.existsSync(PENDING_DIR)) {
         return res.json([]);
@@ -215,7 +279,7 @@ async function startServer() {
       }).filter(Boolean);
       res.json(lines);
     } catch (err) {
-      console.error(err);
+      console.error("Pending proxy error:", err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -224,8 +288,22 @@ async function startServer() {
       const { id } = req.body;
       if (!id) return res.status(400).json({ error: "Missing Id" });
       const fileId = sanitizeId(id);
-      if (db) {
-        await (0, import_firestore.updateDoc)((0, import_firestore.doc)(db, "submissions", fileId), { status: "approved" });
+      if (firebaseEnabled) {
+        const url = `${firebaseBaseUrl}/submissions/${fileId}?key=${firebaseApiKey}&updateMask.fieldPaths=status`;
+        const payload = {
+          fields: {
+            status: { stringValue: "approved" }
+          }
+        };
+        const fRes = await fetch(url, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!fRes.ok) {
+          const rawErr = await fRes.text();
+          throw new Error(`Firebase \u5BA1\u6279\u5931\u8D25 (${fRes.status}): ${rawErr}`);
+        }
         return res.json({ success: true, message: "Submission approved and published" });
       }
       const pendingPath = import_path.default.join(PENDING_DIR, `${fileId}.json`);
@@ -239,7 +317,7 @@ async function startServer() {
       import_fs.default.unlinkSync(pendingPath);
       res.json({ success: true, message: "Submission approved and published" });
     } catch (err) {
-      console.error(err);
+      console.error("Approve proxy error:", err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -248,8 +326,15 @@ async function startServer() {
       const { id } = req.body;
       if (!id) return res.status(400).json({ error: "Missing Id" });
       const fileId = sanitizeId(id);
-      if (db) {
-        await (0, import_firestore.deleteDoc)((0, import_firestore.doc)(db, "submissions", fileId));
+      if (firebaseEnabled) {
+        const url = `${firebaseBaseUrl}/submissions/${fileId}?key=${firebaseApiKey}`;
+        const fRes = await fetch(url, {
+          method: "DELETE"
+        });
+        if (!fRes.ok) {
+          const rawErr = await fRes.text();
+          throw new Error(`Firebase \u9A73\u56DE\u5931\u8D25 (${fRes.status}): ${rawErr}`);
+        }
         return res.json({ success: true, message: "Submission rejected and deleted" });
       }
       const pendingPath = import_path.default.join(PENDING_DIR, `${fileId}.json`);
@@ -259,7 +344,7 @@ async function startServer() {
       import_fs.default.unlinkSync(pendingPath);
       res.json({ success: true, message: "Submission rejected and deleted" });
     } catch (err) {
-      console.error(err);
+      console.error("Reject proxy error:", err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -268,8 +353,22 @@ async function startServer() {
       const { id, name } = req.body;
       if (!id || !name) return res.status(400).json({ error: "Missing required fields" });
       const fileId = sanitizeId(id);
-      if (db) {
-        await (0, import_firestore.updateDoc)((0, import_firestore.doc)(db, "submissions", fileId), { name });
+      if (firebaseEnabled) {
+        const url = `${firebaseBaseUrl}/submissions/${fileId}?key=${firebaseApiKey}&updateMask.fieldPaths=name`;
+        const payload = {
+          fields: {
+            name: { stringValue: name }
+          }
+        };
+        const fRes = await fetch(url, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!fRes.ok) {
+          const rawErr = await fRes.text();
+          throw new Error(`Firebase \u4FEE\u6539\u5931\u8D25 (${fRes.status}): ${rawErr}`);
+        }
         return res.json({ success: true, message: "Submission name updated successfully" });
       }
       const approvedPath = import_path.default.join(APPROVED_DIR, `${fileId}.json`);
@@ -281,7 +380,7 @@ async function startServer() {
       import_fs.default.writeFileSync(approvedPath, JSON.stringify(data, null, 2), "utf-8");
       res.json({ success: true, message: "Submission name updated successfully" });
     } catch (err) {
-      console.error(err);
+      console.error("Edit name proxy error:", err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -290,8 +389,15 @@ async function startServer() {
       const { id } = req.body;
       if (!id) return res.status(400).json({ error: "Missing Id" });
       const fileId = sanitizeId(id);
-      if (db) {
-        await (0, import_firestore.deleteDoc)((0, import_firestore.doc)(db, "submissions", fileId));
+      if (firebaseEnabled) {
+        const url = `${firebaseBaseUrl}/submissions/${fileId}?key=${firebaseApiKey}`;
+        const fRes = await fetch(url, {
+          method: "DELETE"
+        });
+        if (!fRes.ok) {
+          const rawErr = await fRes.text();
+          throw new Error(`Firebase \u5220\u9664\u5931\u8D25 (${fRes.status}): ${rawErr}`);
+        }
         return res.json({ success: true, message: "Approved submission deleted successfully" });
       }
       const approvedPath = import_path.default.join(APPROVED_DIR, `${fileId}.json`);
@@ -301,7 +407,7 @@ async function startServer() {
       import_fs.default.unlinkSync(approvedPath);
       res.json({ success: true, message: "Approved submission deleted successfully" });
     } catch (err) {
-      console.error(err);
+      console.error("Delete proxy error:", err);
       res.status(500).json({ error: err.message });
     }
   });
