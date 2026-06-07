@@ -96,7 +96,7 @@ function toValue(value) {
 }
 async function startServer() {
   const app = (0, import_express.default)();
-  const PORT = process.env.PORT || 3e3;
+  const PORT = Number(process.env.PORT) || 3e3;
   app.use(import_express.default.json());
   const DATA_DIR = import_path.default.join(process.cwd(), "data");
   const PENDING_DIR = import_path.default.join(DATA_DIR, "pending");
