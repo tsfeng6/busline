@@ -4,20 +4,71 @@ import { BusStop, BusLine, LineSegment } from './types';
 import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
-import { 
-  isFirebaseEnabled, 
-  submitLineToFirebase, 
-  fetchApprovedLinesFromFirebase, 
-  checkSubmissionStatusFromFirebase, 
-  getPendingSubmissionsFromFirebase, 
-  updateSubmissionStatusInFirebase, 
-  editApprovedLineInFirebase, 
-  deleteApprovedLineInFirebase 
-} from './firebase';
+
+const isFirebaseEnabled = () => true;
+
+const submitLineToFirebase = async (data: any) => {
+  const response = await fetch(`${API_BASE_URL}/api/submissions/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!response.ok) throw new Error('Submission failed');
+  return response.json();
+};
+
+const fetchApprovedLinesFromFirebase = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/submissions/approved`);
+  if (!response.ok) throw new Error('Failed to fetch approved lines');
+  return response.json();
+};
+
+const checkSubmissionStatusFromFirebase = async (ids: string[]) => {
+  const response = await fetch(`${API_BASE_URL}/api/submissions/status?ids=${ids.join(',')}`);
+  if (!response.ok) return {};
+  return response.json();
+};
+
+const getPendingSubmissionsFromFirebase = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/admin/pending`);
+  if (!response.ok) throw new Error('Failed to fetch pending lines');
+  return response.json();
+};
+
+const updateSubmissionStatusInFirebase = async (id: string, status: string) => {
+  const endpoint = status === 'approved' ? '/api/admin/approve' : '/api/admin/reject';
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  if (!response.ok) throw new Error('Failed to update status');
+  return response.json();
+};
+
+const editApprovedLineInFirebase = async (id: string, name: string) => {
+  const response = await fetch(`${API_BASE_URL}/api/admin/edit-approved`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, name }),
+  });
+  if (!response.ok) throw new Error('Failed to edit approved line');
+  return response.json();
+};
+
+const deleteApprovedLineInFirebase = async (id: string) => {
+  const response = await fetch(`${API_BASE_URL}/api/admin/delete-approved`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  if (!response.ok) throw new Error('Failed to delete approved line');
+  return response.json();
+};
 
 const AMAP_KEY = import.meta.env.VITE_AMAP_KEY || '20f5c6b65349e5d4cb5f58c7e0c4a4ba'; 
 const SECURITY_CODE = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://1316463596-7xje7hhw9f.ap-hongkong.tencentscf.com';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 if (typeof window !== 'undefined') {
   (window as any)._AMapSecurityConfig = {
@@ -4688,7 +4739,7 @@ export default function App() {
                         </div>
                         <h3 className="text-xl font-black text-slate-900 tracking-tight">{t('title')}</h3>
                         <div className="px-4 py-1.5 bg-slate-100 rounded-full">
-                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">v3.3</span>
+                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">v3.5</span>
                         </div>
                         <div className="flex flex-col items-center mt-2 gap-3">
                            <span 
