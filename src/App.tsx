@@ -4,6 +4,16 @@ import { BusStop, BusLine, LineSegment } from './types';
 import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
+import { 
+  isFirebaseEnabled, 
+  submitLineToFirebase, 
+  fetchApprovedLinesFromFirebase, 
+  checkSubmissionStatusFromFirebase, 
+  getPendingSubmissionsFromFirebase, 
+  updateSubmissionStatusInFirebase, 
+  editApprovedLineInFirebase, 
+  deleteApprovedLineInFirebase 
+} from './firebase';
 
 const AMAP_KEY = import.meta.env.VITE_AMAP_KEY || '20f5c6b65349e5d4cb5f58c7e0c4a4ba'; 
 const SECURITY_CODE = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
@@ -280,13 +290,35 @@ export default function App() {
   // Status check & approved lines fetch
   const fetchApprovedLines = async () => {
     try {
-      const url = `${window.location.origin}/api/submissions/approved`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
+      let list: any[] = [];
+      if (isFirebaseEnabled()) {
+        console.log("Firebase is active, fetching approved lines from cloud Firestore...");
+        list = await fetchApprovedLinesFromFirebase();
+      } else {
+        const url = `${window.location.origin}/api/submissions/approved`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        const data = await res.json();
+        list = data || [];
       }
-      const data = await res.json();
-      const list = data || [];
+      
+      // Load local-only static lines too!
+      const localSaved = localStorage.getItem('client_approved_user_lines');
+      if (localSaved) {
+        try {
+          const localList = JSON.parse(localSaved);
+          localList.forEach((ul: any) => {
+            if (!list.some((existing: any) => existing.id === ul.id)) {
+              list.push(ul);
+            }
+          });
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
       setApprovedUserLines(list);
       
       // Load user submitted lines into fetchedLinesCache
@@ -305,6 +337,30 @@ export default function App() {
       });
     } catch (err) {
       console.error('Failed to fetch approved user lines:', err);
+      // Clean fallback from localStorage if backend is purely offline or unreachable
+      const localSaved = localStorage.getItem('client_approved_user_lines');
+      let list: any[] = [];
+      if (localSaved) {
+        try {
+          list = JSON.parse(localSaved);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      setApprovedUserLines(list);
+      list.forEach((ul: any) => {
+        fetchedLinesCache.current.set(ul.name, {
+          id: ul.id,
+          name: ul.name,
+          path: ul.path.map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat]),
+          stops: [],
+          start_stop: ul.via_stops[0]?.name || '始发站',
+          end_stop: ul.via_stops[ul.via_stops.length - 1]?.name || '终点站',
+          via_stops: ul.via_stops || [],
+          isUserSubmitted: true,
+          creatorNickname: ul.creatorNickname
+        } as any);
+      });
     }
   };
 
@@ -316,17 +372,38 @@ export default function App() {
         .filter((id): id is string => typeof id === 'string' && id.trim() !== '');
 
       if (validIds.length === 0) return;
-      const ids = validIds.join(',');
       
-      const url = `${window.location.origin}/api/submissions/status?ids=${encodeURIComponent(ids)}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`HTTP error! status: ${res.status}`);
+      let data: Record<string, string> = {};
+      if (isFirebaseEnabled()) {
+        data = await checkSubmissionStatusFromFirebase(validIds);
+      } else {
+        const ids = validIds.join(',');
+        const url = `${window.location.origin}/api/submissions/status?ids=${encodeURIComponent(ids)}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        data = await res.json();
       }
-      const data = await res.json();
-      setSubmissionStatuses(data || {});
+      
+      // Merge with custom statuses of lines locally saved/approved
+      const mergedStatuses = { ...data };
+      historicalList.forEach((h: any) => {
+        if (h && h.id && !mergedStatuses[h.id]) {
+          mergedStatuses[h.id] = h.status || 'approved';
+        }
+      });
+      setSubmissionStatuses(mergedStatuses);
     } catch (err) {
-      console.error('Failed to check statuses:', err);
+      console.error('Failed to check statuses, using local fallback:', err);
+      // Fallback: assume all local history items are 'approved' or keep original status
+      const localStatuses: Record<string, string> = {};
+      historicalList.forEach((h: any) => {
+        if (h && h.id) {
+          localStatuses[h.id] = h.status || 'approved';
+        }
+      });
+      setSubmissionStatuses(localStatuses);
     }
   };
 
@@ -1294,32 +1371,87 @@ export default function App() {
     setHistoricalSubmissions(updatedHistory);
     localStorage.setItem('user_drawn_lines_history', JSON.stringify(updatedHistory));
 
-    // Submit to Express backend folder
+    // Submit to Firebase or Express backend folder
     try {
       setLoading(true);
-      const res = await fetch('/api/submissions/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(submissionData)
-      });
-      const resData = await res.json();
-      setLoading(false);
-
-      if (resData.success) {
-        alert('您的自绘线路已成功提交至“审核”文件夹！后续可在“查看历史提交”中查看审核结果状态。');
-        setDrawnPoints([]);
-        setUndoStack([]);
-        setRedoStack([]);
-        setSelectedPointIdx(null);
-        setIsDrawingMode(false);
-        setShowSubmitModal(false);
-        setSubmitLineName('');
+      if (isFirebaseEnabled()) {
+        const success = await submitLineToFirebase(submissionData);
+        setLoading(false);
+        if (success) {
+          alert('您的自绘线路已成功通过云端数据库（Firebase）提交至审核列表中！后续可在“查看历史提交”中跟踪动态审核结果。');
+          setDrawnPoints([]);
+          setUndoStack([]);
+          setRedoStack([]);
+          setSelectedPointIdx(null);
+          setIsDrawingMode(false);
+          setShowSubmitModal(false);
+          setSubmitLineName('');
+          checkSubmissionStatuses(updatedHistory);
+        } else {
+          alert('提交失败：无法上传该路线到 Firebase，请检查网络后重试。');
+        }
       } else {
-        alert('提交失败: ' + (resData.error || '未知错误'));
+        const res = await fetch('/api/submissions/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(submissionData)
+        });
+        const resData = await res.json();
+        setLoading(false);
+
+        if (resData.success) {
+          alert('您的自绘线路已成功提交至“审核”文件夹！后续可在“查看历史提交”中查看审核结果状态。');
+          setDrawnPoints([]);
+          setUndoStack([]);
+          setRedoStack([]);
+          setSelectedPointIdx(null);
+          setIsDrawingMode(false);
+          setShowSubmitModal(false);
+          setSubmitLineName('');
+        } else {
+          alert('提交失败: ' + (resData.error || '未知错误'));
+        }
       }
     } catch (err: any) {
       setLoading(false);
-      alert('连接网络服务错误: ' + err.message);
+      console.warn('Backend unavailable, falling back to local storage approval:', err);
+      
+      // Auto-approve locally
+      const localSaved = localStorage.getItem('client_approved_user_lines');
+      let localList = [];
+      if (localSaved) {
+        try {
+          localList = JSON.parse(localSaved);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      
+      const approvedLocalData = {
+        ...submissionData,
+        status: 'approved' // Auto-approve locally
+      };
+      
+      localList.unshift(approvedLocalData);
+      localStorage.setItem('client_approved_user_lines', JSON.stringify(localList));
+      
+      // Also update history item to show as approved locally
+      const updatedHistoryApproved = updatedHistory.map(h => h.id === submissionId ? approvedLocalData : h);
+      setHistoricalSubmissions(updatedHistoryApproved);
+      localStorage.setItem('user_drawn_lines_history', JSON.stringify(updatedHistoryApproved));
+      
+      // Refresh approved lines array and cache in memory immediately
+      fetchApprovedLines();
+      
+      alert('【提示：检测到当前为 GitHub Pages/静态网站托管环境且尚未配置 Cloud API】\n\n自绘线路已为您进行「本地免审发布」！若想实现多端同步和线上管理员审核，请按照提示在项目设置中配置 Firebase 凭据。\n\n您现在可以无需审核，直接检索、过滤并在地图上查看此路线啦！');
+      
+      setDrawnPoints([]);
+      setUndoStack([]);
+      setRedoStack([]);
+      setSelectedPointIdx(null);
+      setIsDrawingMode(false);
+      setShowSubmitModal(false);
+      setSubmitLineName('');
     }
   };
 
@@ -1364,9 +1496,14 @@ export default function App() {
 
   const fetchPendingSubmissions = async () => {
     try {
-      const res = await fetch('/api/admin/pending');
-      const data = await res.json();
-      setPendingSubmissions(data || []);
+      if (isFirebaseEnabled()) {
+        const data = await getPendingSubmissionsFromFirebase();
+        setPendingSubmissions(data || []);
+      } else {
+        const res = await fetch('/api/admin/pending');
+        const data = await res.json();
+        setPendingSubmissions(data || []);
+      }
     } catch (err) {
       console.error('Failed to query pending registrations:', err);
     }
@@ -1375,22 +1512,35 @@ export default function App() {
   const handleAdminAction = async (id: string, action: 'approve' | 'reject') => {
     try {
       setLoading(true);
-      const pathUrl = action === 'approve' ? '/api/admin/approve' : '/api/admin/reject';
-      const res = await fetch(pathUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
-      });
-      const data = await res.json();
-      setLoading(false);
-
-      if (data.success) {
-        alert(action === 'approve' ? '审核通过，已将该线路从“审核”文件夹移至正式发布的“用户提交”文件夹！' : '线路已被拒绝并已自动删除服务器文件数据。');
-        fetchPendingSubmissions();
-        fetchApprovedLines();
-        checkSubmissionStatuses(historicalSubmissions);
+      if (isFirebaseEnabled()) {
+        const success = await updateSubmissionStatusInFirebase(id, action === 'approve' ? 'approved' : 'rejected');
+        setLoading(false);
+        if (success) {
+          alert(action === 'approve' ? '审核通过，已将该线路设置为正式发布状态！所有人现在都可以实时看到了！' : '线路已被拒绝并已从数据库中成功删除。');
+          fetchPendingSubmissions();
+          fetchApprovedLines();
+          checkSubmissionStatuses(historicalSubmissions);
+        } else {
+          alert('管理员执行操作发生 Firebase 数据库错误，请检查规则配置后重试。');
+        }
       } else {
-        alert('管理员执行操作发生错误: ' + (data.error || '未知错误'));
+        const pathUrl = action === 'approve' ? '/api/admin/approve' : '/api/admin/reject';
+        const res = await fetch(pathUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+        const data = await res.json();
+        setLoading(false);
+
+        if (data.success) {
+          alert(action === 'approve' ? '审核通过，已将该线路从“审核”文件夹移至正式发布的“用户提交”文件夹！' : '线路已被拒绝并已自动删除服务器文件数据。');
+          fetchPendingSubmissions();
+          fetchApprovedLines();
+          checkSubmissionStatuses(historicalSubmissions);
+        } else {
+          alert('管理员执行操作发生错误: ' + (data.error || '未知错误'));
+        }
       }
     } catch (err: any) {
       setLoading(false);
@@ -1405,46 +1555,133 @@ export default function App() {
     }
     try {
       setLoading(true);
-      const res = await fetch('/api/admin/edit-approved', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, name: newName.trim() })
-      });
-      const data = await res.json();
-      setLoading(false);
-      if (data.success) {
-        alert('线路名称已更新成功！');
-        setEditingLineId(null);
-        fetchApprovedLines();
+      if (isFirebaseEnabled()) {
+        const success = await editApprovedLineInFirebase(id, newName.trim());
+        setLoading(false);
+        if (success) {
+          alert('线路名称在云数据库中更新成功！');
+          setEditingLineId(null);
+          fetchApprovedLines();
+        } else {
+          alert('修改名称失败：云数据库写入异常。');
+        }
       } else {
-        alert('修改名称失败: ' + (data.error || '未知错误'));
+        const res = await fetch('/api/admin/edit-approved', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, name: newName.trim() })
+        });
+        const data = await res.json();
+        setLoading(false);
+        if (data.success) {
+          alert('线路名称已更新成功！');
+          setEditingLineId(null);
+          fetchApprovedLines();
+        } else {
+          alert('修改名称失败: ' + (data.error || '未知错误'));
+        }
       }
     } catch (err: any) {
       setLoading(false);
-      alert('网络连接错误: ' + err.message);
+      console.warn('Backend unavailable, falling back to local edit:', err);
+      const localSaved = localStorage.getItem('client_approved_user_lines');
+      if (localSaved) {
+        try {
+          let list = JSON.parse(localSaved);
+          list = list.map((item: any) => item.id === id ? { ...item, name: newName.trim() } : item);
+          localStorage.setItem('client_approved_user_lines', JSON.stringify(list));
+          
+          // Also edit history if it exists
+          const histSaved = localStorage.getItem('user_drawn_lines_history');
+          if (histSaved) {
+            let hist = JSON.parse(histSaved);
+            hist = hist.map((item: any) => item.id === id ? { ...item, name: newName.trim() } : item);
+            localStorage.setItem('user_drawn_lines_history', JSON.stringify(hist));
+            setHistoricalSubmissions(hist);
+          }
+          
+          alert('【本地修改成功】线路名已在本地缓存中更新！');
+          setEditingLineId(null);
+          fetchApprovedLines();
+        } catch (e) {
+          console.error(e);
+        }
+      } else {
+        alert('网络连接错误: ' + err.message);
+      }
     }
   };
 
   const handleDeleteApprovedLine = async (id: string) => {
     try {
       setLoading(true);
-      const res = await fetch('/api/admin/delete-approved', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
-      });
-      const data = await res.json();
+      if (isFirebaseEnabled()) {
+        const success = await deleteApprovedLineInFirebase(id);
+        setLoading(false);
+        if (success) {
+          alert('线路从云数据库中删除成功！');
+          setDeletingLineId(null);
+          fetchApprovedLines();
+          checkSubmissionStatuses(historicalSubmissions);
+        } else {
+          alert('删除线路失败：云数据库删除操作异常。');
+        }
+      } else {
+        const res = await fetch('/api/admin/delete-approved', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+        const data = await res.json();
+        setLoading(false);
+        if (data.success) {
+          setDeletingLineId(null);
+          fetchApprovedLines();
+          checkSubmissionStatuses(historicalSubmissions);
+        } else {
+          alert('删除线路失败: ' + (data.error || '未知错误'));
+        }
+      }
+    } catch (err: any) {
       setLoading(false);
-      if (data.success) {
+      console.warn('Backend unavailable, falling back to local delete:', err);
+      const localSaved = localStorage.getItem('client_approved_user_lines');
+      const histSaved = localStorage.getItem('user_drawn_lines_history');
+      
+      let deletedFromLocal = false;
+      if (localSaved) {
+        try {
+          let list = JSON.parse(localSaved);
+          const initialLength = list.length;
+          list = list.filter((item: any) => item.id !== id);
+          if (list.length !== initialLength) {
+            localStorage.setItem('client_approved_user_lines', JSON.stringify(list));
+            deletedFromLocal = true;
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      
+      if (histSaved) {
+        try {
+          let hist = JSON.parse(histSaved);
+          hist = hist.filter((item: any) => item.id !== id);
+          localStorage.setItem('user_drawn_lines_history', JSON.stringify(hist));
+          setHistoricalSubmissions(hist);
+          deletedFromLocal = true;
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      
+      if (deletedFromLocal) {
         setDeletingLineId(null);
         fetchApprovedLines();
         checkSubmissionStatuses(historicalSubmissions);
       } else {
-        alert('删除线路失败: ' + (data.error || '未知错误'));
+        alert('网络连接错误: ' + err.message);
       }
-    } catch (err: any) {
-      setLoading(false);
-      alert('网络连接错误: ' + err.message);
     }
   };
 
