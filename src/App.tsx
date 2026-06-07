@@ -17,6 +17,7 @@ import {
 
 const AMAP_KEY = import.meta.env.VITE_AMAP_KEY || '20f5c6b65349e5d4cb5f58c7e0c4a4ba'; 
 const SECURITY_CODE = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 if (typeof window !== 'undefined') {
   (window as any)._AMapSecurityConfig = {
@@ -325,7 +326,7 @@ export default function App() {
         console.log("Firebase is active, fetching approved lines from cloud Firestore...");
         list = await fetchApprovedLinesFromFirebase();
       } else {
-        const url = `${window.location.origin}/api/submissions/approved`;
+        const url = `${API_BASE_URL}/api/submissions/approved`;
         const res = await fetch(url);
         if (!res.ok) {
           throw new Error(`HTTP error! status: ${res.status}`);
@@ -408,7 +409,7 @@ export default function App() {
         data = await checkSubmissionStatusFromFirebase(validIds);
       } else {
         const ids = validIds.join(',');
-        const url = `${window.location.origin}/api/submissions/status?ids=${encodeURIComponent(ids)}`;
+        const url = `${API_BASE_URL}/api/submissions/status?ids=${encodeURIComponent(ids)}`;
         const res = await fetch(url);
         if (!res.ok) {
           throw new Error(`HTTP error! status: ${res.status}`);
@@ -1421,7 +1422,7 @@ export default function App() {
           alert(`提交失败：${result.error || '无法上传该路线到 Firebase，请检查网络后重试。'}`);
         }
       } else {
-        const res = await fetch('/api/submissions/submit', {
+        const res = await fetch(`${API_BASE_URL}/api/submissions/submit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(submissionData)
@@ -1530,7 +1531,7 @@ export default function App() {
         const data = await getPendingSubmissionsFromFirebase();
         setPendingSubmissions(data || []);
       } else {
-        const res = await fetch('/api/admin/pending');
+        const res = await fetch(`${API_BASE_URL}/api/admin/pending`);
         const data = await res.json();
         setPendingSubmissions(data || []);
       }
@@ -1554,7 +1555,7 @@ export default function App() {
           alert('管理员执行操作发生 Firebase 数据库错误，请检查规则配置后重试。');
         }
       } else {
-        const pathUrl = action === 'approve' ? '/api/admin/approve' : '/api/admin/reject';
+        const pathUrl = action === 'approve' ? `${API_BASE_URL}/api/admin/approve` : `${API_BASE_URL}/api/admin/reject`;
         const res = await fetch(pathUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1596,7 +1597,7 @@ export default function App() {
           alert('修改名称失败：云数据库写入异常。');
         }
       } else {
-        const res = await fetch('/api/admin/edit-approved', {
+        const res = await fetch(`${API_BASE_URL}/api/admin/edit-approved`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id, name: newName.trim() })
@@ -1657,7 +1658,7 @@ export default function App() {
           alert('删除线路失败：云数据库删除操作异常。');
         }
       } else {
-        const res = await fetch('/api/admin/delete-approved', {
+        const res = await fetch(`${API_BASE_URL}/api/admin/delete-approved`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id })
@@ -4687,7 +4688,7 @@ export default function App() {
                         </div>
                         <h3 className="text-xl font-black text-slate-900 tracking-tight">{t('title')}</h3>
                         <div className="px-4 py-1.5 bg-slate-100 rounded-full">
-                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">v3.1</span>
+                           <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">v3.2</span>
                         </div>
                         <div className="flex flex-col items-center mt-2 gap-3">
                            <span 
