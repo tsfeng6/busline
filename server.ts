@@ -2,7 +2,6 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
-import { createServer as createViteServer } from 'vite';
 
 // Conversions for Firestore REST API JSON structure
 function fromFirestore(doc: any): any {
@@ -86,7 +85,8 @@ async function startServer() {
   app.use(express.json());
 
   // Storage Directories (Local Fallback)
-  const DATA_DIR = path.join(process.cwd(), 'data');
+  // Use /tmp for serverless environments (Tencent SCF / AWS Lambda) which only allow writing there.
+  const DATA_DIR = path.join('/tmp', 'data');
   const PENDING_DIR = path.join(DATA_DIR, 'pending');
   const APPROVED_DIR = path.join(DATA_DIR, 'approved');
 
@@ -476,6 +476,7 @@ async function startServer() {
 
   // Vite middleware setup
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
