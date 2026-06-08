@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { BusStop, BusLine, LineSegment } from './types';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 
@@ -200,6 +200,12 @@ export default function App() {
 
   const [namingStopIdx, setNamingStopIdx] = useState<number | null>(null);
   const [namingValue, setNamingValue] = useState('');
+
+  const [drawingSubMode, setDrawingSubMode] = useState<'snap' | 'straight'>('snap');
+  const drawingSubModeRef = useRef(drawingSubMode);
+  useEffect(() => {
+    drawingSubModeRef.current = drawingSubMode;
+  }, [drawingSubMode]);
 
   const [showDrawNotice, setShowDrawNotice] = useState(false);
   const [noticeCountdown, setNoticeCountdown] = useState(0);
@@ -1203,7 +1209,8 @@ export default function App() {
   };
 
   // --- USER DRAWING OPERATIONS AND ROUTING HANDLERS ---
-  const handleDrawingMapClick = useCallback((e: any) => {
+  const handleCloseLoop = useCallback(() => {
+    if (drawnPoints.length < 2) return;
     const AMap = (window as any).AMap;
     if (!AMap) return;
 
@@ -1212,39 +1219,35 @@ export default function App() {
       return;
     }
 
-    const clickedLngLat = { lng: e.lnglat.lng, lat: e.lnglat.lat };
-    const currentPoints = drawnPointsRef.current;
+    const firstPt = drawnPoints[0];
+    const lastPt = drawnPoints[drawnPoints.length - 1];
 
-    // 1. First point
-    if (currentPoints.length === 0) {
-      const firstPt = {
-        id: 'pt_' + Date.now(),
-        lng: clickedLngLat.lng,
-        lat: clickedLngLat.lat,
-        name: '',
-        isStop: true,
-        pathFromPrev: []
-      };
-      setUndoStack(u => [...u, currentPoints]);
-      setRedoStack([]);
-      setDrawnPoints([firstPt]);
-      
-      // Immediately trigger naming modal for first stop
-      setTimeout(() => {
-        setNamingStopIdx(0);
-        setNamingValue('');
-      }, 100);
+    const p1 = new AMap.LngLat(lastPt.lng, lastPt.lat);
+    const p2 = new AMap.LngLat(firstPt.lng, firstPt.lat);
+    const dist = AMap.GeometryUtil.distance(p1, p2);
+    if (dist < 10) {
+      alert('线路已经是闭合的！');
       return;
     }
 
-    // 2. Subsequent points (limit distance <= 5km)
-    const lastPt = currentPoints[currentPoints.length - 1];
-    const p1 = new AMap.LngLat(lastPt.lng, lastPt.lat);
-    const p2 = new AMap.LngLat(clickedLngLat.lng, clickedLngLat.lat);
-    const dist = AMap.GeometryUtil.distance(p1, p2);
+    if (drawingSubModeRef.current === 'straight') {
+      const newPt = {
+        id: 'pt_' + Date.now(),
+        lng: firstPt.lng,
+        lat: firstPt.lat,
+        name: firstPt.name || '站点1',
+        isStop: true,
+        pathFromPrev: [
+          { lng: lastPt.lng, lat: lastPt.lat },
+          { lng: firstPt.lng, lat: firstPt.lat }
+        ]
+      };
 
-    if (dist > 5000) {
-      alert('两点之间的距离不能超过 5 千米！当前距离: ' + (dist / 1000).toFixed(2) + ' km');
+      const currentSnapshot = drawnPointsRef.current;
+      setUndoStack(u => [...u, currentSnapshot]);
+      setRedoStack([]);
+      setDrawnPoints(curr => [...curr, newPt]);
+      setSelectedPointIdx(currentSnapshot.length);
       return;
     }
 
@@ -1276,6 +1279,122 @@ export default function App() {
 
           const newPt = {
             id: 'pt_' + Date.now(),
+            lng: firstPt.lng,
+            lat: firstPt.lat,
+            name: firstPt.name || '站点1',
+            isStop: true,
+            pathFromPrev: pathStepCoordinates
+          };
+
+          const currentSnapshot = drawnPointsRef.current;
+          setUndoStack(u => [...u, currentSnapshot]);
+          setRedoStack([]);
+          
+          setDrawnPoints(curr => {
+            const updated = [...curr];
+            if (updated.length > 0) {
+              updated[updated.length - 1] = {
+                ...updated[updated.length - 1],
+                lng: snappedStart.lng,
+                lat: snappedStart.lat
+              };
+            }
+            return [...updated, newPt];
+          });
+          setSelectedPointIdx(currentSnapshot.length);
+        } else {
+          alert('无法在此处闭合，未找到可行路线！');
+        }
+      } else {
+        alert('无法在此处闭合，未找到可行路线！');
+      }
+    });
+  }, [drawnPoints, mapInstance]);
+
+  const handleDrawingMapClick = useCallback((e: any) => {
+    const AMap = (window as any).AMap;
+    if (!AMap) return;
+
+    if (isRoutingRef.current) {
+      console.log("路由搜索中，忽略重复点击");
+      return;
+    }
+
+    const clickedLngLat = { lng: e.lnglat.lng, lat: e.lnglat.lat };
+    const currentPoints = drawnPointsRef.current;
+
+    // 1. First point
+    if (currentPoints.length === 0) {
+      const firstPt = {
+        id: 'pt_' + Date.now(),
+        lng: clickedLngLat.lng,
+        lat: clickedLngLat.lat,
+        name: '站点1',
+        isStop: true,
+        pathFromPrev: []
+      };
+      setUndoStack(u => [...u, currentPoints]);
+      setRedoStack([]);
+      setDrawnPoints([firstPt]);
+      setSelectedPointIdx(0);
+      return;
+    }
+
+    // 2. Subsequent points (no distance limits)
+    const lastPt = currentPoints[currentPoints.length - 1];
+
+    if (drawingSubModeRef.current === 'straight') {
+      const newPt = {
+        id: 'pt_' + Date.now(),
+        lng: clickedLngLat.lng,
+        lat: clickedLngLat.lat,
+        name: '',
+        isStop: false,
+        pathFromPrev: [
+          { lng: lastPt.lng, lat: lastPt.lat },
+          { lng: clickedLngLat.lng, lat: clickedLngLat.lat }
+        ]
+      };
+      setUndoStack(u => [...u, currentPoints]);
+      setRedoStack([]);
+      setDrawnPoints(curr => [...curr, newPt]);
+      setSelectedPointIdx(currentPoints.length);
+      return;
+    }
+
+    const p1 = new AMap.LngLat(lastPt.lng, lastPt.lat);
+    const p2 = new AMap.LngLat(clickedLngLat.lng, clickedLngLat.lat);
+
+    isRoutingRef.current = true;
+    setLoading(true);
+    const driving = new AMap.Driving({
+      policy: AMap.DrivingPolicy.LEAST_TIME,
+      map: null
+    });
+
+    driving.search(p1, p2, (status: string, result: any) => {
+      isRoutingRef.current = false;
+      setLoading(false);
+      if (status === 'complete' && result.routes && result.routes[0]) {
+        const pathStepCoordinates: { lng: number, lat: number }[] = [];
+        
+        result.routes[0].steps.forEach((step: any) => {
+          step.path.forEach((p: any) => {
+            const lastPathPt = pathStepCoordinates[pathStepCoordinates.length - 1];
+            if (!lastPathPt || lastPathPt.lng !== p.lng || lastPathPt.lat !== p.lat) {
+              pathStepCoordinates.push({ lng: p.lng, lat: p.lat });
+            }
+          });
+        });
+
+        if (pathStepCoordinates.length > 0) {
+          const snappedStart = pathStepCoordinates[0];
+          const snappedEnd = pathStepCoordinates[pathStepCoordinates.length - 1];
+
+          const currentSnapshot = drawnPointsRef.current;
+
+          const newPt = {
+            id: 'pt_' + Date.now(),
             lng: snappedEnd.lng,
             lat: snappedEnd.lat,
             name: '',
@@ -1283,7 +1402,6 @@ export default function App() {
             pathFromPrev: pathStepCoordinates
           };
 
-          const currentSnapshot = drawnPointsRef.current;
           setUndoStack(u => [...u, currentSnapshot]);
           setRedoStack([]);
           
@@ -1311,8 +1429,15 @@ export default function App() {
 
   const handleAddStopAtSelected = () => {
     if (selectedPointIdx === null) return;
+    const pt = drawnPoints[selectedPointIdx];
     setNamingStopIdx(selectedPointIdx);
-    setNamingValue(drawnPoints[selectedPointIdx].name || '');
+    
+    if (pt.isStop && pt.name) {
+      setNamingValue(pt.name);
+    } else {
+      const currentStopCount = drawnPointsRef.current.filter(p => p.isStop).length;
+      setNamingValue(`站点${currentStopCount + 1}`);
+    }
   };
 
   const handleSaveStopName = () => {
@@ -3663,7 +3788,7 @@ export default function App() {
                     setShowExitConfirm(false);
                   }}
                   className="backdrop-blur-xl bg-white/90 border border-white/50 w-[42px] h-[42px] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex items-center justify-center text-slate-700 hover:text-emerald-600 hover:bg-white transition-all active:scale-95 group"
-                  title="进入线路自绘模式"
+                  title="进入线路绘制模式"
                 >
                   <Paintbrush className="w-5 h-5 text-slate-700 group-hover:text-emerald-600 transition-transform group-hover:scale-110" />
                 </button>
@@ -3740,14 +3865,162 @@ export default function App() {
       <main className="relative flex-1">
         <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
 
-        {loading && (
-          <div className="absolute inset-0 bg-white/40 backdrop-blur-md z-30 flex items-center justify-center">
-            <div className="flex flex-col items-center gap-4">
-              <div className="relative">
-                <Loader2 className="w-12 h-12 text-blue-600 animate-spin" />
-                <Bus className="w-5 h-5 text-blue-600 absolute inset-0 m-auto" />
+        {/* Custom Drawing Mode Left Sidebar for Stations (Requirement 2) */}
+        {isDrawingMode && drawnPoints.length > 0 && (
+          <div className="absolute top-24 left-4 z-20 w-[240px] md:w-[260px] max-h-[calc(100vh-240px)] bg-slate-900/95 backdrop-blur-2xl border border-slate-700/80 text-white shadow-[0_20px_50px_rgba(0,0,0,0.4)] rounded-[24px] overflow-hidden flex flex-col pointer-events-auto border-t-4 border-t-emerald-500/80 animate-in fade-in slide-in-from-left-4 duration-300">
+            {/* Header */}
+            <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/40">
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-lg bg-emerald-500 flex items-center justify-center text-white">
+                  <List className="w-3.5 h-3.5" />
+                </div>
+                <span className="font-black text-[13px] text-slate-100 tracking-tight">站点</span>
               </div>
-              <p className="font-bold text-slate-600 tracking-widest uppercase text-xs">{t('initializing')}</p>
+              <span className="text-[10px] font-black text-emerald-400 bg-emerald-950/60 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                {drawnPoints.filter(p => p.isStop).length} 站
+              </span>
+            </div>
+
+            {/* List Body */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-2 flex flex-col gap-1.5 scroll-smooth text-slate-100">
+              {(() => {
+                let stopCounter = 0;
+                return drawnPoints.map((pt, idx) => {
+                  if (!pt.isStop) return null;
+                  stopCounter++;
+                  const currentStopNum = stopCounter;
+                  const isSelected = selectedPointIdx === idx;
+                  
+                  return (
+                    <div
+                      key={pt.id || idx}
+                      onClick={() => {
+                        setSelectedPointIdx(idx);
+                        if (mapInstance) {
+                          mapInstance.setCenter([pt.lng, pt.lat]);
+                        }
+                      }}
+                      className={`group flex items-center justify-between p-2.5 rounded-2xl border transition-all duration-200 cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-500/10 border-emerald-500/50 shadow-sm'
+                          : 'bg-slate-900/40 hover:bg-slate-800/60 border-slate-800/80 hover:border-slate-700'
+                      }`}
+                    >
+                      {/* Circle Stop indicator with order index number */}
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <div className={`w-5 h-5 rounded-full font-black text-[10px] flex items-center justify-center shrink-0 transition-transform ${
+                          isSelected
+                            ? 'bg-emerald-500 text-white shadow-sm scale-110'
+                            : 'bg-slate-800 text-slate-400 group-hover:bg-slate-700 group-hover:scale-105'
+                        }`}>
+                          {currentStopNum}
+                        </div>
+                        
+                        <div className="flex flex-col min-w-0">
+                          <span className={`text-[11px] font-black leading-tight tracking-tight truncate ${isSelected ? 'text-emerald-300' : 'text-slate-200'}`}>
+                            {pt.name || `站点${currentStopNum}`}
+                          </span>
+                          <span className="text-[8px] text-slate-500 font-mono tracking-tighter truncate leading-none mt-0.5">
+                            {pt.lng.toFixed(5)}, {pt.lat.toFixed(5)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Actions on hover/select */}
+                      <div className="flex items-center gap-0.5 shrink-0 pl-1">
+                        {/* Loop close shortcut */}
+                        {idx === 0 && drawnPoints.length >= 2 && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCloseLoop();
+                            }}
+                            className="w-6.5 h-6.5 flex items-center justify-center text-orange-400 hover:text-orange-300 hover:bg-orange-950/50 rounded-lg transition-colors"
+                            title="闭合交路（创建环线）"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="stroke-current" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+                            </svg>
+                          </button>
+                        )}
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setNamingStopIdx(idx);
+                            setNamingValue(pt.name || '');
+                          }}
+                          className="w-6.5 h-6.5 flex items-center justify-center text-slate-400 hover:text-emerald-400 hover:bg-slate-800 rounded-lg transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100"
+                          title="修改站点名称"
+                        >
+                          <Edit3 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+        )}
+
+        {loading && (
+          <div className="absolute inset-0 bg-white/60 backdrop-blur-md z-30 flex items-center justify-center">
+            <div className="flex flex-col items-center justify-center">
+              <svg width="84" height="84" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0 drop-shadow-md">
+                <motion.path 
+                  d="M4 17H20" 
+                  stroke="#22c55e" 
+                  strokeWidth="2.5" 
+                  strokeLinecap="round"
+                  animate={{
+                    pathLength: [0, 1, 1, 1, 1],
+                    pathOffset: [0, 0, 0, 1, 1],
+                    opacity: [0, 1, 1, 0, 0]
+                  }}
+                  transition={{
+                    duration: 1.6,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                    times: [0, 0.2, 0.4, 0.6, 1.0]
+                  }}
+                />
+                <motion.path 
+                  d="M17 4V20" 
+                  stroke="#ef4444" 
+                  strokeWidth="2.5" 
+                  strokeLinecap="round"
+                  animate={{
+                    pathLength: [0, 0, 1, 1, 1, 1],
+                    pathOffset: [0, 0, 0, 0, 1, 1],
+                    opacity: [0, 0, 1, 1, 0, 0]
+                  }}
+                  transition={{
+                    duration: 1.6,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                    times: [0, 0.15, 0.35, 0.55, 0.75, 1.0]
+                  }}
+                />
+                <motion.path 
+                  d="M8 20V13L13 8H22" 
+                  stroke="#eab308" 
+                  strokeWidth="2.5" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                  animate={{
+                    pathLength: [0, 0, 1, 1, 1, 1],
+                    pathOffset: [0, 0, 0, 0, 1, 1],
+                    opacity: [0, 0, 1, 1, 0, 0]
+                  }}
+                  transition={{
+                    duration: 1.6,
+                    repeat: Infinity,
+                    ease: "easeInOut",
+                    times: [0, 0.3, 0.5, 0.7, 0.9, 1.0]
+                  }}
+                />
+              </svg>
             </div>
           </div>
         )}
@@ -3846,7 +4119,6 @@ export default function App() {
           <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-30 w-[95%] max-w-3xl backdrop-blur-2xl bg-slate-900/95 text-white border border-slate-700/80 rounded-3xl p-4 shadow-[0_20px_50px_rgba(0,0,0,0.5)] flex flex-col md:flex-row items-center justify-between gap-4 pointer-events-auto">
             {/* Left instructions or stats */}
             <div className="flex items-center gap-3">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
               <button
                 onClick={openNoticeManually}
                 className="backdrop-blur-md bg-slate-800 hover:bg-slate-700/80 border border-slate-700/80 p-2 rounded-xl text-emerald-400 hover:text-emerald-300 transition-all active:scale-95 flex items-center justify-center shrink-0"
@@ -3855,7 +4127,7 @@ export default function App() {
                 <Info className="w-3.5 h-3.5" />
               </button>
               <div className="flex flex-col">
-                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">自绘模式</span>
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">绘制模式</span>
                 <span className="text-xs font-bold text-slate-200">
                   {drawnPoints.length === 0 
                     ? '点击地图即可绘制' 
@@ -3874,6 +4146,36 @@ export default function App() {
               >
                 查看历史提交
               </button>
+
+              {/* Mode Switcher Group */}
+              <div className="flex items-center bg-slate-850 border border-slate-800 rounded-xl p-0.5 shadow-inner shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setDrawingSubMode('snap')}
+                  className={`px-3 py-1.5 rounded-lg flex items-center gap-1 text-xs font-black transition-all ${
+                    drawingSubMode === 'snap'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                  }`}
+                  title="智能吸附：沿道路智能寻路吸附"
+                >
+                  <Magnet className="w-3.5 h-3.5" />
+                  <span>智能吸附</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDrawingSubMode('straight')}
+                  className={`px-3 py-1.5 rounded-lg flex items-center gap-1 text-xs font-black transition-all ${
+                    drawingSubMode === 'straight'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                  }`}
+                  title="直线：点击位置直接连直线"
+                >
+                  <GitCommit className="w-3.5 h-3.5" />
+                  <span>直线</span>
+                </button>
+              </div>
 
               <button
                 onClick={handleAddStopAtSelected}
@@ -3963,10 +4265,10 @@ export default function App() {
         {namingStopIdx !== null && (
           <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/20 backdrop-blur-sm pointer-events-auto">
             <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl w-full max-w-sm flex flex-col gap-4 text-white">
-              <h3 className="text-base font-black tracking-tight text-center">添加新站</h3>
+              <h3 className="text-base font-black tracking-tight text-center">修改站点名称</h3>
               <input
                 type="text"
-                placeholder="输入新站名"
+                placeholder="输入站点名称"
                 value={namingValue}
                 onChange={e => setNamingValue(e.target.value)}
                 className="px-4 py-3 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-blue-500 text-xs font-bold w-full"
@@ -3976,13 +4278,6 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (namingStopIdx === 0) {
-                      // Abort first point and exit naming modal smoothly
-                      setDrawnPoints([]);
-                      setNamingStopIdx(null);
-                      setNamingValue('');
-                      return;
-                    }
                     setNamingStopIdx(null);
                     setNamingValue('');
                   }}
