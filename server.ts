@@ -7,7 +7,14 @@ import { eq, inArray, desc } from 'drizzle-orm';
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  
+  // Self-healing Port Selection:
+  // On Zeabur, we must bind to process.env.PORT so the proxy can reach our container.
+  // On AI Studio, the internal proxy strictly expects port 3000 even if process.env.PORT is injected as 8080.
+  let PORT = Number(process.env.PORT) || 3000;
+  if (process.env.APP_URL && (process.env.APP_URL.includes('run.app') || process.env.APP_URL.includes('aistudio'))) {
+    PORT = 3000;
+  }
 
   try {
     await runMigration();
