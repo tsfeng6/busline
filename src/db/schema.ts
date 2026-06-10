@@ -9,5 +9,8 @@ export const submissions = pgTable('submissions', {
   path: json('path').default([]),
   via_stops: json('via_stops').default([]),
   status: varchar('status', { length: 50 }).notNull().default('pending'), // 'pending', 'approved', 'rejected'
+  dataSourceText: text('data_source_text'),
+  dataSourceImage: text('data_source_image'),
+  rejectReason: text('reject_reason'),
   timestamp: timestamp('timestamp').notNull().defaultNow(),
 });

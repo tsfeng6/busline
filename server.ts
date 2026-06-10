@@ -7,7 +7,7 @@ import { eq, inArray, desc } from 'drizzle-orm';
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = 3000;
 
   try {
     await runMigration();
@@ -30,7 +30,7 @@ async function startServer() {
   // API 1: Submit a line
   app.post('/api/submissions/submit', async (req, res) => {
     try {
-      const { id, name, creatorNickname, city, district, path: linePath, via_stops, status, timestamp } = req.body;
+      const { id, name, creatorNickname, city, district, path: linePath, via_stops, status, timestamp, dataSourceText, dataSourceImage } = req.body;
       if (!id || !name || !creatorNickname || !city) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
@@ -47,6 +47,8 @@ async function startServer() {
           path: linePath || [],
           via_stops: via_stops || [],
           status: status || 'pending',
+          dataSourceText: dataSourceText || null,
+          dataSourceImage: dataSourceImage || null,
           timestamp: new Date(timestamp || Date.now())
         }).onConflictDoUpdate({
           target: submissions.id,
@@ -58,6 +60,8 @@ async function startServer() {
             path: linePath || [],
             via_stops: via_stops || [],
             status: status || 'pending',
+            dataSourceText: dataSourceText || null,
+            dataSourceImage: dataSourceImage || null,
             timestamp: new Date(timestamp || Date.now())
           }
         });
@@ -88,12 +92,19 @@ async function startServer() {
       const statuses: Record<string, string> = {};
 
       if (ids.length > 0) {
-        const results = await db.select({ id: submissions.id, status: submissions.status })
+        const results = await db.select({ 
+          id: submissions.id, 
+          status: submissions.status,
+          rejectReason: submissions.rejectReason 
+        })
           .from(submissions)
           .where(inArray(submissions.id, ids));
           
         results.forEach(row => {
           statuses[row.id] = row.status;
+          if (row.rejectReason) {
+            statuses[row.id + '_reason'] = row.rejectReason;
+          }
         });
       }
 
@@ -166,7 +177,11 @@ async function startServer() {
       const fileId = sanitizeId(id);
       
       await db.update(submissions)
-        .set({ status: 'approved' })
+        .set({ 
+          status: 'approved',
+          dataSourceText: null,
+          dataSourceImage: null
+        })
         .where(eq(submissions.id, fileId));
 
       res.json({ success: true, message: 'Submission approved and published' });
@@ -180,13 +195,18 @@ async function startServer() {
   app.post('/api/admin/reject', async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: 'DB not setup' });
-      const { id } = req.body;
+      const { id, rejectReason } = req.body;
       if (!id) return res.status(400).json({ error: 'Missing Id' });
 
       const fileId = sanitizeId(id);
       
       await db.update(submissions)
-        .set({ status: 'rejected' })
+        .set({ 
+          status: 'rejected', 
+          rejectReason: rejectReason || null,
+          dataSourceText: null,
+          dataSourceImage: null
+        })
         .where(eq(submissions.id, fileId));
 
       res.json({ success: true, message: 'Submission rejected' });
