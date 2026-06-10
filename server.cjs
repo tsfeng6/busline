@@ -37445,7 +37445,7 @@ var submissions = pgTable("submissions", {
 
 // src/db/index.ts
 var import_dotenv = __toESM(require_main(), 1);
-import_dotenv.default.config();
+import_dotenv.default.config({ override: true });
 var { Pool: Pool3 } = esm_default;
 var pool = new Pool3({
   connectionString: process.env.DATABASE_URL
