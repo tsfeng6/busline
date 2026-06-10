@@ -5,12 +5,6 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
-@layer base {
-  html, body {
-    touch-action: manipulation;
-  }
-}
-
 @layer components {
   .custom-scrollbar::-webkit-scrollbar {
     width: 4px;

@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { BusStop, BusLine, LineSegment } from './types';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 
@@ -35,12 +35,12 @@ const getPendingSubmissionsFromFirebase = async () => {
   return response.json();
 };
 
-const updateSubmissionStatusInFirebase = async (id: string, status: string, rejectReason?: string) => {
+const updateSubmissionStatusInFirebase = async (id: string, status: string) => {
   const endpoint = status === 'approved' ? '/api/admin/approve' : '/api/admin/reject';
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, rejectReason }),
+    body: JSON.stringify({ id }),
   });
   if (!response.ok) throw new Error('Failed to update status');
   return response.json();
@@ -110,82 +110,9 @@ const checkIsLineQuery = (str: string): boolean => {
   return false;
 };
 
-const isValidBusLineName = (s: string): boolean => {
-  if (!s || s.length === 0 || s.length > 20) return false;
-  const clean = s.trim();
-  const badSubstrings = ['附近', '交叉口', '靠近', '沿线', '胡同', '街道', '路口', '政府', '医院', '学校', '公寓', '小区', '公园', '中心', '大厦', '大路', '公路', '国道', '省道', '高速'];
-  if (badSubstrings.some(b => clean.includes(b))) {
-    return false;
-  }
-  const hasDigit = /\d+/.test(clean);
-  const hasLetter = /[A-Za-z]+/.test(clean);
-  const busKeywords = /路|线|专线|临线|支线|区间|快线|快速|捷运|直达|通勤|班车|穿梭|高快|夜班|快车|慢车|大巴|巴士|常规|高峰|社区|地铁|轻轨|公交/;
-  return hasDigit || hasLetter || busKeywords.test(clean);
-};
-
-const getLatLng = (loc: any): [number, number] => {
-  if (!loc) return [0, 0];
-  if (Array.isArray(loc)) return [Number(loc[0] || 0), Number(loc[1] || 0)];
-  const lng = typeof loc.getLng === 'function' ? loc.getLng() : (typeof loc.lng === 'number' ? loc.lng : parseFloat(loc.lng || 0));
-  const lat = typeof loc.getLat === 'function' ? loc.getLat() : (typeof loc.lat === 'number' ? loc.lat : parseFloat(loc.lat || 0));
-  return [lng || 0, lat || 0];
-};
-
-const compressImageToBase64 = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = (event) => {
-      const img = new Image();
-      img.src = event.target?.result as string;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 800;
-        let width = img.width;
-        let height = img.height;
-        
-        if (width > MAX_WIDTH) {
-          height = Math.round((height * MAX_WIDTH) / width);
-          width = MAX_WIDTH;
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-        resolve(dataUrl);
-      };
-      img.onerror = (err) => reject(err);
-    };
-    reader.onerror = (err) => reject(err);
-  });
-};
-
-const parseDataSourceImages = (val: string | null | undefined): string[] => {
-  if (!val) return [];
-  const trimmed = val.trim();
-  if (trimmed.startsWith('[')) {
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return [val];
-    }
-  }
-  return [val];
-};
-
 export default function App() {
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [isBoxSelectMode, setIsBoxSelectMode] = useState(false);
-  const [isBoxSelecting, setIsBoxSelecting] = useState(false);
-  const [boxSelectStartPos, setBoxSelectStartPos] = useState<{ x: number; y: number } | null>(null);
-  const [boxSelectEndPos, setBoxSelectEndPos] = useState<{ x: number; y: number } | null>(null);
-  const [boxSelectedStops, setBoxSelectedStops] = useState<any[]>([]);
-  const [isBoxPanelCollapsed, setIsBoxPanelCollapsed] = useState(false);
-  const allMapStopsRef = useRef<Map<string, any>>(new Map());
-
   const getStopColor = useCallback((count: number, defaultColor: string) => {
     if (!stationLineStatsRef.current || count === 0) return defaultColor;
     if (count <= 2) return '#06b6d4'; // Cyan
@@ -194,7 +121,6 @@ export default function App() {
   }, []);
 
   const mapClickHandlerRef = useRef<any>(null);
-  const defaultMapClickHandlerRef = useRef<any>(null);
   const [loading, setLoading] = useState(true);
   const [zoomLevel, setZoomLevel] = useState(() => {
     const saved = localStorage.getItem('map_zoom');
@@ -238,15 +164,6 @@ export default function App() {
   useEffect(() => {
     filterAirportBusRef.current = filterAirportBus;
   }, [filterAirportBus]);
-
-  const [filterIntervalBus, setFilterIntervalBus] = useState(() => {
-    const saved = localStorage.getItem('app_filter_interval_bus');
-    return saved === 'true';
-  });
-  const filterIntervalBusRef = useRef(filterIntervalBus);
-  useEffect(() => {
-    filterIntervalBusRef.current = filterIntervalBus;
-  }, [filterIntervalBus]);
 
   const [enableCityWideSearch, setEnableCityWideSearch] = useState(() => {
     return localStorage.getItem('app_experimental_citywide') === 'true';
@@ -325,12 +242,6 @@ export default function App() {
   const [submitDistrict, setSubmitDistrict] = useState('');
   const [submitLineName, setSubmitLineName] = useState('');
   const [submitUserNickname, setSubmitUserNickname] = useState('');
-  const [submitDataSourceText, setSubmitDataSourceText] = useState('');
-  const [submitDataSourceImages, setSubmitDataSourceImages] = useState<string[]>([]);
-  const [rejectingSubId, setRejectingSubId] = useState<string | null>(null);
-  const [rejectReasonValue, setRejectReasonValue] = useState('');
-  const [notification, setNotification] = useState<{ show: boolean, approved: number, rejected: number, timeStr: string } | null>(null);
-  const [collapsedCities, setCollapsedCities] = useState<Record<string, boolean>>({});
 
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [historicalSubmissions, setHistoricalSubmissions] = useState<any[]>(() => {
@@ -368,259 +279,6 @@ export default function App() {
 
   const drawingGroupRef = useRef<any>(null);
   const isRoutingRef = useRef(false);
-
-  const boxSelectedLines = useMemo(() => {
-    const linesSet = new Set<string>();
-    boxSelectedStops.forEach((stop: any) => {
-      if (stop.lines) {
-        stop.lines.forEach((l: string) => {
-          if (isValidBusLineName(l)) {
-            linesSet.add(l);
-          }
-        });
-      }
-    });
-    return Array.from(linesSet).sort();
-  }, [boxSelectedStops]);
-
-  const mergedSelectedStops = useMemo(() => {
-    const mapByName = new Map<string, {
-      name: string;
-      keys: string[];
-      lines: Set<string>;
-      locations: any[];
-    }>();
-    
-    boxSelectedStops.forEach((stop: any) => {
-      const name = stop.name;
-      let existing = mapByName.get(name);
-      if (!existing) {
-        existing = {
-          name,
-          keys: [],
-          lines: new Set<string>(),
-          locations: []
-        };
-        mapByName.set(name, existing);
-      }
-      existing.keys.push(stop.key);
-      if (stop.location) {
-        existing.locations.push(stop.location);
-      }
-      if (stop.lines) {
-        stop.lines.forEach((l: string) => {
-          if (isValidBusLineName(l)) {
-            existing!.lines.add(l);
-          }
-        });
-      }
-    });
-
-    return Array.from(mapByName.values()).map(g => ({
-      name: g.name,
-      key: g.keys[0],
-      keys: g.keys,
-      lines: Array.from(g.lines),
-      location: g.locations[0]
-    }));
-  }, [boxSelectedStops]);
-
-  const rebuildSelectedStopsFromKeys = (keys: string[]) => {
-    const list: any[] = [];
-    keys.forEach(k => {
-      const stop = allMapStopsRef.current.get(k);
-      if (stop) {
-        list.push({ ...stop, key: k });
-      }
-    });
-    return list;
-  };
-
-  const handleSingleStopSelectionToggle = (key: string, isCtrlPressed: boolean) => {
-    const stop = allMapStopsRef.current.get(key);
-    if (!stop) return;
-    
-    if (isCtrlPressed) {
-      setBoxSelectedStops(prev => {
-        const index = prev.findIndex(s => s.key === key);
-        if (index > -1) {
-          return prev.filter((_, i) => i !== index);
-        } else {
-          return [...prev, { ...stop, key }];
-        }
-      });
-    } else {
-      setBoxSelectedStops([{ ...stop, key }]);
-    }
-  };
-
-  const handleBoxSelectMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    setBoxSelectStartPos({ x, y });
-    setBoxSelectEndPos({ x, y });
-    setIsBoxSelecting(true);
-  };
-
-  const handleBoxSelectMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isBoxSelecting || !boxSelectStartPos) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    setBoxSelectEndPos({ x, y });
-  };
-
-  const handleBoxSelectMouseUp = async (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isBoxSelecting || !boxSelectStartPos || !boxSelectEndPos) {
-      setIsBoxSelecting(false);
-      return;
-    }
-    
-    setIsBoxSelecting(false);
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    const x1 = boxSelectStartPos.x;
-    const y1 = boxSelectStartPos.y;
-    const x2 = x;
-    const y2 = y;
-    
-    const width = Math.abs(x2 - x1);
-    const height = Math.abs(y2 - y1);
-    
-    const map = mapRef.current;
-    if (!map) return;
-    
-    const isClick = width < 5 && height < 5;
-    
-    if (isClick) {
-      if (markerGroupRef.current) {
-        const overlays = markerGroupRef.current.getOverlays();
-        let closestOverlay: any = null;
-        let minPixelDist = 25;
-        
-        overlays.forEach((o: any) => {
-          const center = o.getCenter();
-          if (center) {
-            const containerPixel = map.lngLatToContainer(center);
-            const cx = typeof containerPixel.getX === 'function' ? containerPixel.getX() : containerPixel.x;
-            const cy = typeof containerPixel.getY === 'function' ? containerPixel.getY() : containerPixel.y;
-            const dist = Math.sqrt(Math.pow(cx - x1, 2) + Math.pow(cy - y1, 2));
-            if (dist < minPixelDist) {
-              minPixelDist = dist;
-              closestOverlay = o;
-            }
-          }
-        });
-        
-        if (closestOverlay) {
-          const ext = closestOverlay.getExtData ? closestOverlay.getExtData() : null;
-          if (ext && ext.key) {
-            handleSingleStopSelectionToggle(ext.key, e.ctrlKey || e.metaKey);
-          }
-        }
-      }
-    } else {
-      const minX = Math.min(x1, x2);
-      const maxX = Math.max(x1, x2);
-      const minY = Math.min(y1, y2);
-      const maxY = Math.max(y1, y2);
-      
-      if (markerGroupRef.current) {
-        const overlays = markerGroupRef.current.getOverlays();
-        const selectedKeys: string[] = [];
-        
-        overlays.forEach((o: any) => {
-          const center = o.getCenter();
-          if (center) {
-            const containerPixel = map.lngLatToContainer(center);
-            const cx = typeof containerPixel.getX === 'function' ? containerPixel.getX() : containerPixel.x;
-            const cy = typeof containerPixel.getY === 'function' ? containerPixel.getY() : containerPixel.y;
-            
-            if (cx >= minX && cx <= maxX && cy >= minY && cy <= maxY) {
-              const ext = o.getExtData ? o.getExtData() : null;
-              if (ext && ext.key) {
-                selectedKeys.push(ext.key);
-              }
-            }
-          }
-        });
-        
-        if (selectedKeys.length > 0) {
-          if (e.ctrlKey || e.metaKey) {
-            setBoxSelectedStops(prev => {
-              const prevKeys = prev.map(s => s.key);
-              const newKeys = [...prevKeys];
-              selectedKeys.forEach(k => {
-                if (!newKeys.includes(k)) {
-                  newKeys.push(k);
-                }
-              });
-              return rebuildSelectedStopsFromKeys(newKeys);
-            });
-          } else {
-            const newStops = rebuildSelectedStopsFromKeys(selectedKeys);
-            setBoxSelectedStops(newStops);
-          }
-        } else {
-          if (!(e.ctrlKey || e.metaKey)) {
-            setBoxSelectedStops([]);
-          }
-        }
-      }
-    }
-    
-    setBoxSelectStartPos(null);
-    setBoxSelectEndPos(null);
-  };
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    if (isBoxSelectMode) {
-      map.setStatus({ dragEnable: false, doubleClickZoom: false });
-    } else {
-      map.setStatus({ dragEnable: true, doubleClickZoom: true });
-    }
-  }, [isBoxSelectMode]);
-
-  useEffect(() => {
-    if (!markerGroupRef.current) return;
-    const overlays = markerGroupRef.current.getOverlays();
-    const selectedKeys = new Set(boxSelectedStops.map(s => s.key));
-    
-    overlays.forEach((o: any) => {
-      const ext = o.getExtData ? o.getExtData() : null;
-      if (ext && ext.key) {
-        const isSelected = selectedKeys.has(ext.key);
-        if (isSelected) {
-          o.setOptions({
-            strokeColor: '#f43f5e',
-            strokeWeight: 4,
-            radius: 10,
-            fillColor: '#fda4af'
-          });
-          if (o.setZIndex) o.setZIndex(100);
-        } else {
-          const count = stopCountCacheRef.current.get(ext.key) || 0;
-          const originalColor = stationLineStatsRef.current ? getStopColor(count, '#3b82f6') : '#3b82f6';
-          o.setOptions({
-            strokeColor: '#fff',
-            strokeWeight: 2,
-            radius: 8,
-            fillColor: originalColor
-          });
-          if (o.setZIndex) o.setZIndex(30);
-        }
-      }
-    });
-  }, [boxSelectedStops, cacheUpdateTick, stationLineStats]);
 
   // Helper SHA-256 for browser hashing
   const sha256 = async (message: string) => {
@@ -801,36 +459,6 @@ export default function App() {
         data = await res.json();
       }
       
-      // Compare with existing local statuses to find newly processed items
-      let newlyApproved = 0;
-      let newlyRejected = 0;
-      let transitionTime: number | null = null;
-
-      historicalList.forEach((h: any) => {
-        if (h && h.id && data[h.id]) {
-          const prevStatus = h.status || 'pending';
-          const newStatus = data[h.id];
-          if (prevStatus === 'pending' && (newStatus === 'approved' || newStatus === 'rejected')) {
-            if (newStatus === 'approved') newlyApproved++;
-            if (newStatus === 'rejected') newlyRejected++;
-            if (!transitionTime || h.timestamp > transitionTime) {
-              transitionTime = h.timestamp;
-            }
-          }
-        }
-      });
-
-      if (newlyApproved > 0 || newlyRejected > 0) {
-        const d = transitionTime ? new Date(transitionTime) : new Date();
-        const timeStr = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
-        setNotification({
-          show: true,
-          approved: newlyApproved,
-          rejected: newlyRejected,
-          timeStr
-        });
-      }
-
       // Merge with custom statuses of lines locally saved/approved
       const mergedStatuses = { ...data };
       historicalList.forEach((h: any) => {
@@ -839,22 +467,6 @@ export default function App() {
         }
       });
       setSubmissionStatuses(mergedStatuses);
-
-      // Save transitions to local storage immediately so notification only triggers once on this page session
-      const updatedHistory = historicalList.map((h: any) => {
-        if (h && h.id && data[h.id]) {
-          const reasonKey = h.id + '_reason';
-          const rejectReason = data[reasonKey];
-          return {
-            ...h,
-            status: data[h.id],
-            rejectReason: rejectReason || h.rejectReason || undefined
-          };
-        }
-        return h;
-      });
-      setHistoricalSubmissions(updatedHistory);
-      localStorage.setItem('user_drawn_lines_history', JSON.stringify(updatedHistory));
     } catch (err) {
       console.error('Failed to check statuses, using local fallback:', err);
       // Fallback: assume all local history items are 'approved' or keep original status
@@ -886,7 +498,6 @@ export default function App() {
       general: '通用',
       dataFilter: '数据筛选',
       filterAirportBus: '过滤机场巴士',
-      filterIntervalBus: '过滤区间车',
       filterUserSubmissions: '过滤用户添加',
       stationLineStats: '站点线路统计',
       about: '关于',
@@ -925,7 +536,6 @@ export default function App() {
       general: '通用',
       dataFilter: '數據篩選',
       filterAirportBus: '過濾機場巴士',
-      filterIntervalBus: '過濾區間車',
       filterUserSubmissions: '過濾用戶添加',
       stationLineStats: '站點線路統計',
       about: '關於',
@@ -964,7 +574,6 @@ export default function App() {
       general: 'General',
       dataFilter: 'Data Filter',
       filterAirportBus: 'Filter Airport Bus',
-      filterIntervalBus: 'Filter Interval/Short-turn',
       filterUserSubmissions: 'Filter User Submitted',
       stationLineStats: 'Station Line Stats',
       about: 'About',
@@ -1069,24 +678,9 @@ export default function App() {
 
   const renderBusLine = (line: any, AMap: any, map: any, clear = true, showMarkers = true, shouldFitView = true) => {
     const path = line.path.map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat]);
-    let polylineObj: any = null;
     
     if (lineGroupRef.current) {
-      if (clear) {
-        // If there was an active single line polyline, remove it first
-        if (activeBusLinePolylineRef.current) {
-          lineGroupRef.current.removeOverlay(activeBusLinePolylineRef.current);
-          activeBusLinePolylineRef.current = null;
-        }
-        // Faint out all existing road search polylines
-        roadOverlaysRef.current.forEach((polyline: any) => {
-          polyline.setOptions({
-            strokeOpacity: 0.09,
-            outlineColor: 'transparent',
-            borderWeight: 0
-          });
-        });
-      }
+      if (clear) lineGroupRef.current.clearOverlays();
       const polyline = new AMap.Polyline({
         path: path,
         strokeColor: line.isUserSubmitted ? '#BA55D3' : (clear ? '#3b82f6' : getRandomPastelColor()),
@@ -1099,10 +693,8 @@ export default function App() {
         borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
         zIndex: 50
       });
-      polylineObj = polyline;
       if (clear) {
         setActiveBusLine(line);
-        activeBusLinePolylineRef.current = polyline;
         polyline.on('click', (e: any) => {
           const clickLngLat = [e.lnglat.getLng(), e.lnglat.getLat()];
           
@@ -1235,20 +827,9 @@ export default function App() {
     }
 
     if (markerGroupRef.current && showMarkers) {
-      if (clear) {
-        markerGroupRef.current.clearOverlays();
-        allMapStopsRef.current.clear();
-      }
+      if (clear) markerGroupRef.current.clearOverlays();
       const markers = line.via_stops.map((stop: any) => {
         const count = stopCountCacheRef.current.get(`${stop.location.lng},${stop.location.lat}`) || 0;
-        const stopKey = `${stop.location.lng},${stop.location.lat}`;
-        allMapStopsRef.current.set(stopKey, {
-          name: stop.name,
-          location: stop.location,
-          lines: [line.name],
-          city: currentCity
-        });
-
         const marker = new AMap.CircleMarker({
           center: [stop.location.lng, stop.location.lat],
           radius: 6,
@@ -1260,8 +841,7 @@ export default function App() {
           extData: { key: `${stop.location.lng},${stop.location.lat}`, type: 'busLineStop' }
         });
         marker.on('click', async () => {
-          const stopLatLng = getLatLng(stop.location);
-          setSelectionPos(stopLatLng);
+          setSelectionPos([stop.location.lng, stop.location.lat]);
           setSelectedStop({
             name: stop.name,
             address: t('loadingDetails'),
@@ -1270,7 +850,7 @@ export default function App() {
           });
           
           // Fetch full details to show all lines
-          const details = await fetchStopDetails(stop.name, stopLatLng, AMap, currentCity);
+          const details = await fetchStopDetails(stop.name, [stop.location.lng, stop.location.lat], AMap, currentCity);
           if (details) {
             setSelectedStop({ ...details, city: currentCity });
           } else {
@@ -1286,7 +866,7 @@ export default function App() {
       });
       markerGroupRef.current.addOverlays(markers);
     }
-    if (shouldFitView && polylineObj) map.setFitView(polylineObj);
+    if (shouldFitView) map.setFitView();
   };
 
   const showStopConnectivity = async (stopLines: string[]) => {
@@ -1378,19 +958,13 @@ export default function App() {
               if (localStorage.getItem('app_filter_user_submissions') === 'true') {
                 return false;
               }
-              if (filterIntervalBusRef.current && ul.name.includes('区间')) {
-                return false;
-              }
               return ul.via_stops.some((vs: any) => {
                 const cleanVs = vs.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').trim();
                 return cleanVs === cleanStopName;
               });
             })
             .map(ul => ul.name);
-          val.lines = Array.from(new Set([...val.lines, ...matchUserLines])).filter((l: string) => 
-            (!filterIntervalBusRef.current || !l.includes('区间')) &&
-            (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(l))
-          );
+          val.lines = Array.from(new Set([...val.lines, ...matchUserLines]));
         }
         resolve(val);
       };
@@ -1467,9 +1041,7 @@ export default function App() {
           const addressStr = poi.address || '';
           if (addressStr) aggregatedAddresses.add(addressStr);
           const shortLines = addressStr.split(';').map((s: string) => s.trim()).filter((s: string) => 
-            s.length > 0 && 
-            (!filterIntervalBusRef.current || !s.includes('区间')) && 
-            (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
+            s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
           );
           shortLines.forEach((l: string) => aggregatedShortLines.add(l));
         });
@@ -1542,10 +1114,9 @@ export default function App() {
     if (!AMap) return;
 
     if (item.location) {
-      const itemLatLng = getLatLng(item.location);
-      map.setCenter(itemLatLng);
+      map.setCenter([item.location.lng, item.location.lat]);
       if (map.getZoom() < 16) map.setZoom(16);
-      setSelectionPos(itemLatLng);
+      setSelectionPos([item.location.lng, item.location.lat]);
     }
     
     setSelectedStop({
@@ -1555,7 +1126,7 @@ export default function App() {
       city: currentCity
     });
 
-    const pos = item.location ? getLatLng(item.location) : (selectionPos || [0, 0]);
+    const pos = item.location ? [item.location.lng, item.location.lat] : (selectionPos || [0, 0]);
     const details = await fetchStopDetails(item.name, pos as [number, number], AMap, currentCity);
     if (details) {
       setSelectedStop({ ...details, city: currentCity });
@@ -1564,10 +1135,8 @@ export default function App() {
         name: item.name,
         address: item.address,
         lines: (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
-          s.length > 0 && 
-          (!filterIntervalBusRef.current || !s.includes('区间')) && 
-          (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
-        ).filter(isValidBusLineName),
+          s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
+        ),
         city: currentCity
       });
     }
@@ -1589,36 +1158,6 @@ export default function App() {
     const next = !filterAirportBus;
     setFilterAirportBus(next);
     localStorage.setItem('app_filter_airport_bus', next.toString());
-    setCacheUpdateTick(v => v + 1);
-
-    if (mapInstance) {
-      if (activeBusLine) {
-        renderBusLine(activeBusLine, (window as any).AMap, mapInstance, true, true, false);
-      } else if (selectedSegmentLines && selectedSegmentLines.length > 0) {
-        const AMap = (window as any).AMap;
-        aggregateAndVisualize(selectedSegmentLines, mapInstance, AMap);
-      } else {
-        handleSearch();
-      }
-    }
-  };
-
-  const toggleFilterIntervalBus = () => {
-    const next = !filterIntervalBus;
-    setFilterIntervalBus(next);
-    localStorage.setItem('app_filter_interval_bus', next.toString());
-    setCacheUpdateTick(v => v + 1);
-
-    if (mapInstance) {
-      if (activeBusLine) {
-        renderBusLine(activeBusLine, (window as any).AMap, mapInstance, true, true, false);
-      } else if (selectedSegmentLines && selectedSegmentLines.length > 0) {
-        const AMap = (window as any).AMap;
-        aggregateAndVisualize(selectedSegmentLines, mapInstance, AMap);
-      } else {
-        handleSearch();
-      }
-    }
   };
 
   const toggleFilterUserSubmissions = () => {
@@ -2016,8 +1555,6 @@ export default function App() {
       path: fullPolyline,
       via_stops: stops,
       status: 'pending',
-      dataSourceText: submitDataSourceText || '',
-      dataSourceImage: submitDataSourceImages.length > 0 ? JSON.stringify(submitDataSourceImages) : null,
       timestamp: Date.now()
     };
 
@@ -2041,8 +1578,6 @@ export default function App() {
           setIsDrawingMode(false);
           setShowSubmitModal(false);
           setSubmitLineName('');
-          setSubmitDataSourceText('');
-          setSubmitDataSourceImages([]);
           checkSubmissionStatuses(updatedHistory);
         } else {
           alert(`提交失败：${result.error || '无法保存该路线到服务器，请检查网络后重试。'}`);
@@ -2065,8 +1600,6 @@ export default function App() {
           setIsDrawingMode(false);
           setShowSubmitModal(false);
           setSubmitLineName('');
-          setSubmitDataSourceText('');
-          setSubmitDataSourceImages([]);
         } else {
           alert('提交失败: ' + (resData.error || '未知错误'));
         }
@@ -2132,14 +1665,14 @@ export default function App() {
     }
   };
 
-  const handleAdminAction = async (id: string, action: 'approve' | 'reject', rejectReason?: string) => {
+  const handleAdminAction = async (id: string, action: 'approve' | 'reject') => {
     try {
       setLoading(true);
       if (isFirebaseEnabled()) {
-        const success = await updateSubmissionStatusInFirebase(id, action === 'approve' ? 'approved' : 'rejected', rejectReason);
+        const success = await updateSubmissionStatusInFirebase(id, action === 'approve' ? 'approved' : 'rejected');
         setLoading(false);
         if (success) {
-          alert(action === 'approve' ? '审核通过，已将该线路设置为正式发布状态！所有人现在都可以实时看到了！' : '线路已被拒绝，其退回原因已记录。');
+          alert(action === 'approve' ? '审核通过，已将该线路设置为正式发布状态！所有人现在都可以实时看到了！' : '线路已被拒绝并已从数据库中成功删除。');
           fetchPendingSubmissions();
           fetchApprovedLines();
           checkSubmissionStatuses(historicalSubmissions);
@@ -2151,13 +1684,13 @@ export default function App() {
         const res = await fetch(pathUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, rejectReason })
+          body: JSON.stringify({ id })
         });
         const data = await res.json();
         setLoading(false);
 
         if (data.success) {
-          alert(action === 'approve' ? '审核通过，已将该线路从“审核”文件夹移至正式发布的“用户提交”文件夹！' : '线路已被拒绝，其退回原因已记录。');
+          alert(action === 'approve' ? '审核通过，已将该线路从“审核”文件夹移至正式发布的“用户提交”文件夹！' : '线路已被拒绝并已自动删除服务器文件数据。');
           fetchPendingSubmissions();
           fetchApprovedLines();
           checkSubmissionStatuses(historicalSubmissions);
@@ -2480,9 +2013,6 @@ export default function App() {
         if (result.lineInfo && filterAirportBusRef.current) {
           result.lineInfo = result.lineInfo.filter((l: any) => !/机场(巴士|大巴|专线|快线)/.test(l.name));
         }
-        if (result.lineInfo && filterIntervalBusRef.current) {
-          result.lineInfo = result.lineInfo.filter((l: any) => !l.name.includes('区间'));
-        }
         if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
           let targetLine = result.lineInfo[0];
           const exactMatch = result.lineInfo.find((l: any) => l.name === item.name);
@@ -2501,10 +2031,9 @@ export default function App() {
         }
       });
     } else if (item.location) {
-      const itemLatLng = getLatLng(item.location);
-      map.setCenter(itemLatLng);
+      map.setCenter([item.location.lng, item.location.lat]);
       map.setZoom(17);
-      setSelectionPos(itemLatLng);
+      setSelectionPos([item.location.lng, item.location.lat]);
       
       const cleanItemName = item.name.replace(/\(.*?\)|（.*?）/g, '').replace(/\s*-\s*\d+$/, '').trim();
 
@@ -2516,7 +2045,7 @@ export default function App() {
       });
 
       // Try to fetch more details (lines)
-      const details = await fetchStopDetails(cleanItemName, itemLatLng, AMap, currentCity);
+      const details = await fetchStopDetails(cleanItemName, [item.location.lng, item.location.lat], AMap, currentCity);
       if (details) {
         setSelectedStop({ ...details, city: currentCity });
       } else {
@@ -2525,10 +2054,8 @@ export default function App() {
         
         if (isTransitPOI) {
            lines = (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
-             s.length > 0 && 
-             (!filterIntervalBusRef.current || !s.includes('区间')) && 
-             (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
-           ).filter(isValidBusLineName);
+             s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
+           ).filter((s: string) => /\d+路|\d+线|专线|临线|快速公交/.test(s));
         }
 
         setSelectedStop({
@@ -2598,9 +2125,6 @@ export default function App() {
       lineSearch.search(val, (status: string, result: any) => {
         if (result.lineInfo && filterAirportBusRef.current) {
           result.lineInfo = result.lineInfo.filter((l: any) => !/机场(巴士|大巴|专线|快线)/.test(l.name));
-        }
-        if (result.lineInfo && filterIntervalBusRef.current) {
-          result.lineInfo = result.lineInfo.filter((l: any) => !l.name.includes('区间'));
         }
         if (status === 'complete' && result.lineInfo) {
           resolve(result.lineInfo.map((l: any) => ({
@@ -2732,9 +2256,6 @@ export default function App() {
           if (result.lineInfo && filterAirportBusRef.current) {
             result.lineInfo = result.lineInfo.filter((l: any) => !/机场(巴士|大巴|专线|快线)/.test(l.name));
           }
-          if (result.lineInfo && filterIntervalBusRef.current) {
-            result.lineInfo = result.lineInfo.filter((l: any) => !l.name.includes('区间'));
-          }
           if (s === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
             renderBusLine(result.lineInfo[0], AMap, mapRef.current);
             resolve('done');
@@ -2771,12 +2292,6 @@ export default function App() {
   const lineGroupRef = useRef<any>(null);
   const selectionMarkerRef = useRef<any>(null);
   const geocoderRef = useRef<any>(null);
-
-  // Search results preservation refs
-  const roadOverlaysRef = useRef<any[]>([]);
-  const roadStopMarkersRef = useRef<any[]>([]);
-  const roadStopsDataRef = useRef<Map<string, any>>(new Map());
-  const activeBusLinePolylineRef = useRef<any | null>(null);
 
   const [containerPos, setContainerPos] = useState<{ x: number, y: number } | null>(null);
 
@@ -2922,7 +2437,7 @@ export default function App() {
         saveMapState();
       });
 
-      const defaultClickHandler = (e: any) => {
+      mapClickHandlerRef.current = (e: any) => {
         if (isDrawingModeRef.current) {
           handleDrawingMapClick(e);
           return;
@@ -2948,42 +2463,18 @@ export default function App() {
             const busStop = pois.find((p: any) => p.type.includes('公交车站'));
             
             if (busStop) {
-              const stopPos = getLatLng(busStop.location);
-              setSelectionPos(stopPos);
+              setSelectionPos([busStop.location.lng, busStop.location.lat]);
               setSelectedSegmentName(null);
               setSelectedSegmentLines(null);
-              
-              const initialLines = (busStop.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
-                s.length > 0 && 
-                (!filterIntervalBusRef.current || !s.includes('区间')) && 
-                (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
-              ).filter(isValidBusLineName);
-
               setSelectedStop({
                 name: busStop.name,
                 location: busStop.location,
                 address: preciseLocation || busStop.address,
-                lines: initialLines,
+                lines: (busStop.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
+                  s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))
+                ).filter((s: string) => /\d+路|\d+线|专线|临线|快速公交/.test(s)),
                 city: currentCity,
                 isBusStop: true
-              });
-
-              // Fetch details async to get full correctness
-              fetchStopDetails(busStop.name, stopPos as [number, number], AMap, currentCity).then((details: any) => {
-                if (details) {
-                  setSelectedStop((prev: any) => {
-                    if (prev && prev.name === busStop.name) {
-                      // Apply interval filters to loaded lines as well
-                      const filteredLoaded = (details.lines || []).filter((l: string) => 
-                        (!filterIntervalBusRef.current || !l.includes('区间')) &&
-                        (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(l))
-                      );
-                      const mergedLines = Array.from(new Set([...(prev.lines || []), ...filteredLoaded]));
-                      return { ...prev, ...details, lines: mergedLines, city: currentCity };
-                    }
-                    return prev;
-                  });
-                }
               });
             } else {
               // Clicked elsewhere, set selection but check if it's a road
@@ -3008,9 +2499,7 @@ export default function App() {
         });
       };
       
-      defaultMapClickHandlerRef.current = defaultClickHandler;
-      mapClickHandlerRef.current = defaultClickHandler;
-      map.on('click', defaultClickHandler);
+      map.on('click', mapClickHandlerRef.current);
     }).catch(e => {
       console.error(e);
       setLoading(false);
@@ -3175,18 +2664,11 @@ export default function App() {
         
         // High performance clear
         markerGroupRef.current.clearOverlays();
-        allMapStopsRef.current.clear();
 
         const markers: any[] = [];
         pois.forEach((poi: any) => {
-          const linesAr = (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
+          const linesAr = (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间'));
           const key = `${poi.location.lng},${poi.location.lat}`;
-          allMapStopsRef.current.set(key, {
-            name: poi.name,
-            location: poi.location,
-            lines: linesAr,
-            city: currentCity
-          });
           stopCountCacheRef.current.set(key, linesAr.length);
           
           const marker = new AMap.CircleMarker({
@@ -3202,46 +2684,25 @@ export default function App() {
           });
 
           marker.on('click', () => {
-            const stopPos = [poi.location.lng, poi.location.lat];
-            setSelectionPos(stopPos);
+            setSelectionPos([poi.location.lng, poi.location.lat]);
             setSelectedSegmentLines(null);
             setSelectedSegmentName(null);
-            const initialLines = (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
             setSelectedStop({
               name: poi.name,
               address: poi.address,
-              lines: initialLines,
+              lines: (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间')),
               city: currentCity
-            });
-
-            // Fetch details async to get the full lines list
-            fetchStopDetails(poi.name, stopPos as [number, number], AMap, currentCity).then((details: any) => {
-              if (details) {
-                setSelectedStop((prev: any) => {
-                  if (prev && prev.name === poi.name) {
-                    const filteredLoaded = (details.lines || []).filter((l: string) => 
-                      (!filterIntervalBusRef.current || !l.includes('区间')) &&
-                      (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(l))
-                    );
-                    const mergedLines = Array.from(new Set([...(prev.lines || []), ...filteredLoaded]));
-                    return { ...prev, ...details, lines: mergedLines, city: currentCity };
-                  }
-                  return prev;
-                });
-              }
             });
           });
           markers.push(marker);
         });
 
         markerGroupRef.current.addOverlays(markers);
-        roadStopMarkersRef.current = markers;
-        roadStopsDataRef.current = new Map(allMapStopsRef.current);
 
         const lineNamesSet = new Set<string>();
         pois.forEach((poi: any) => {
           const linesString = poi.address || '';
-          const lines = linesString.split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
+          const lines = linesString.split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间'));
           lines.forEach((l: string) => lineNamesSet.add(l));
         });
 
@@ -3298,7 +2759,7 @@ export default function App() {
               }
             }
             if (addIt) {
-              const lines = (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
+              const lines = (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && !s.includes('区间'));
               trueStopsMap.set(key, { ...poi, lines: new Set(lines) });
             }
           }
@@ -3307,16 +2768,9 @@ export default function App() {
         // Redraw with precise platforms
         if (trueStopsMap.size > 0) {
           markerGroupRef.current.clearOverlays();
-          allMapStopsRef.current.clear();
           const trueMarkers: any[] = [];
           trueStopsMap.forEach((poi: any, key: string) => {
             const linesArray = Array.from(poi.lines);
-            allMapStopsRef.current.set(key, {
-              name: poi.name,
-              location: poi.location,
-              lines: linesArray,
-              city: currentCity
-            });
             stopCountCacheRef.current.set(key, linesArray.length);
             const marker = new AMap.CircleMarker({
               center: [poi.location.lng, poi.location.lat],
@@ -3331,42 +2785,19 @@ export default function App() {
             });
             
             marker.on('click', () => {
-              const stopPos = getLatLng(poi.location);
-              setSelectionPos(stopPos);
+              setSelectionPos([poi.location.lng, poi.location.lat]);
               setSelectedSegmentLines(null);
               setSelectedSegmentName(null);
-              const filteredInitial = linesArray.filter((l: string) => 
-                (!filterIntervalBusRef.current || !l.includes('区间'))
-              ).filter(isValidBusLineName);
               setSelectedStop({
                 name: poi.name,
-                address: Array.from(new Set(filteredInitial.map((l: string) => l.split('(')[0].split('#')[0]))).join('; '),
-                lines: filteredInitial,
+                address: Array.from(new Set(linesArray.map((l: string) => l.split('(')[0].split('#')[0]))).join('; '),
+                lines: linesArray,
                 city: currentCity
-              });
-
-              // Fetch details async to get the full correct lines list
-              fetchStopDetails(poi.name, stopPos, AMap, currentCity).then((details: any) => {
-                if (details) {
-                  setSelectedStop((prev: any) => {
-                    if (prev && prev.name === poi.name) {
-                      const filteredLoaded = (details.lines || []).filter((l: string) => 
-                        (!filterIntervalBusRef.current || !l.includes('区间')) &&
-                        (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(l))
-                      );
-                      const mergedLines = Array.from(new Set([...(prev.lines || []), ...filteredLoaded]));
-                      return { ...prev, ...details, lines: mergedLines, city: currentCity };
-                    }
-                    return prev;
-                  });
-                }
               });
             });
             trueMarkers.push(marker);
           });
           markerGroupRef.current.addOverlays(trueMarkers);
-          roadStopMarkersRef.current = trueMarkers;
-          roadStopsDataRef.current = new Map(allMapStopsRef.current);
           setStats(prev => ({ ...prev, stops: trueMarkers.length }));
         }
 
@@ -3423,34 +2854,15 @@ export default function App() {
   };
 
   const handleClear = () => {
-    if (mapRef.current && mapClickHandlerRef.current) {
-      mapRef.current.off('click', mapClickHandlerRef.current);
-    }
-    if (mapRef.current && defaultMapClickHandlerRef.current) {
-      mapRef.current.on('click', defaultMapClickHandlerRef.current);
-      mapClickHandlerRef.current = defaultMapClickHandlerRef.current;
-    }
-
     if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
     if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
     
-    // Clear local caches and states fully as requested
-    fetchedLinesCache.current.clear();
-    allMapStopsRef.current.clear();
-    setBoxSelectedStops([]);
-    setIsBoxSelectMode(false);
-    setSearchQuery('');
-    setActiveBusLine(null);
     setStats({ stops: 0, lines: 0 });
     setSelectedSegmentLines(null);
     setSelectedStop(null);
     setSelectionPos(null);
     setSelectedSegmentName(null);
     setSelectedSegmentAddress(null);
-    roadOverlaysRef.current = [];
-    roadStopMarkersRef.current = [];
-    roadStopsDataRef.current.clear();
-    activeBusLinePolylineRef.current = null;
   };
 
   const aggregateAndVisualize = (activeLineSet: string[], map: any, AMap: any) => {
@@ -3862,8 +3274,6 @@ export default function App() {
 
     lineGroupRef.current.clearOverlays();
     lineGroupRef.current.addOverlays(allOverlays);
-    roadOverlaysRef.current = allOverlays;
-    activeBusLinePolylineRef.current = null;
 
     if (mapClickHandlerRef.current) {
       map.off('click', mapClickHandlerRef.current);
@@ -4188,7 +3598,7 @@ export default function App() {
                    });
                    if (bestStation && minDist < 0.0005) {
                       const linesStr = bestStation.buslines ? bestStation.buslines.map((l: any)=>l.name).filter(Boolean) : [];
-                      lineCount = linesStr.filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')) && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))).length;
+                      lineCount = linesStr.filter((s: string) => s.length > 0 && !s.includes('区间') && (!filterAirportBusRef.current || !/机场(巴士|大巴|专线|快线)/.test(s))).length;
                    }
                 }
                 stopCountCacheRef.current.set(key, lineCount || 1);
@@ -4376,8 +3786,6 @@ export default function App() {
                     setRedoStack([]);
                     setSelectedPointIdx(null);
                     setShowExitConfirm(false);
-                    setIsBoxSelectMode(false);
-                    setBoxSelectedStops([]);
                   }}
                   className="backdrop-blur-xl bg-white/90 border border-white/50 w-[42px] h-[42px] rounded-full shadow-[0_4px_20px_rgba(0,0,0,0.15)] flex items-center justify-center text-slate-700 hover:text-emerald-600 hover:bg-white transition-all active:scale-95 group"
                   title="进入线路绘制模式"
@@ -4455,34 +3863,11 @@ export default function App() {
       </header>
 
       <main className="relative flex-1">
-        <div className="relative w-full h-full">
-          <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
-          
-          {isBoxSelectMode && (
-            <div 
-              onMouseDown={handleBoxSelectMouseDown}
-              onMouseMove={handleBoxSelectMouseMove}
-              onMouseUp={handleBoxSelectMouseUp}
-              className="absolute inset-0 z-10 cursor-crosshair select-none"
-            >
-              {isBoxSelecting && boxSelectStartPos && boxSelectEndPos && (
-                <div 
-                  className="absolute border-2 border-dashed border-rose-500 bg-rose-500/10 rounded pointer-events-none"
-                  style={{
-                    left: Math.min(boxSelectStartPos.x, boxSelectEndPos.x),
-                    top: Math.min(boxSelectStartPos.y, boxSelectEndPos.y),
-                    width: Math.abs(boxSelectEndPos.x - boxSelectStartPos.x),
-                    height: Math.abs(boxSelectEndPos.y - boxSelectStartPos.y),
-                  }}
-                />
-              )}
-            </div>
-          )}
-        </div>
+        <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
 
         {/* Custom Drawing Mode Left Sidebar for Stations (Requirement 2) */}
         {isDrawingMode && drawnPoints.length > 0 && (
-          <div className="absolute top-24 left-4 z-20 w-[240px] md:w-[260px] max-h-[calc(100vh-240px)] bg-slate-900/95 backdrop-blur-2xl border border-slate-700/80 text-white shadow-[0_20px_50px_rgba(0,0,0,0.4)] rounded-[24px] overflow-hidden flex flex-col pointer-events-auto border-t border-t-slate-800 animate-in fade-in slide-in-from-left-4 duration-300">
+          <div className="absolute top-24 left-4 z-20 w-[240px] md:w-[260px] max-h-[calc(100vh-240px)] bg-slate-900/95 backdrop-blur-2xl border border-slate-700/80 text-white shadow-[0_20px_50px_rgba(0,0,0,0.4)] rounded-[24px] overflow-hidden flex flex-col pointer-events-auto border-t-4 border-t-emerald-500/80 animate-in fade-in slide-in-from-left-4 duration-300">
             {/* Header */}
             <div className="p-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-950/40">
               <div className="flex items-center gap-2">
@@ -4576,160 +3961,6 @@ export default function App() {
                 });
               })()}
             </div>
-          </div>
-        )}
-
-        {boxSelectedStops.length > 0 && (
-          <div className="absolute top-24 left-4 z-40 w-[calc(100vw-32px)] md:w-[340px] max-h-[45vh] md:max-h-[calc(100vh-140px)] backdrop-blur-2xl bg-white/95 border border-slate-200/60 shadow-2xl rounded-3xl overflow-hidden flex flex-col pointer-events-auto animate-in fade-in slide-in-from-left-4 duration-300">
-            {/* Minimalist Header without titles/subtexts */}
-            <div className="p-3 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-              <div 
-                onClick={() => setIsBoxPanelCollapsed(!isBoxPanelCollapsed)}
-                className="flex items-center gap-2 cursor-pointer flex-1 select-none"
-              >
-                <div className="w-6 h-6 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-sm shadow-blue-500/20">
-                  <BoxSelect className="w-4 h-4" />
-                </div>
-                <span className="font-black text-xs text-slate-600 tracking-tight">统计</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <button 
-                  onClick={() => setBoxSelectedStops([])}
-                  className="p-1 px-2.5 rounded-full hover:bg-slate-200/60 text-slate-400 hover:text-slate-700 text-xs font-black transition-colors"
-                >
-                  清除
-                </button>
-                <button 
-                  onClick={() => setIsBoxPanelCollapsed(!isBoxPanelCollapsed)}
-                  className="p-1 px-2 rounded-lg bg-slate-100 hover:bg-slate-200/60 text-slate-500 text-xs font-bold transition-all"
-                >
-                  {isBoxPanelCollapsed ? "展开" : "收起"}
-                </button>
-              </div>
-            </div>
-
-            {!isBoxPanelCollapsed && (
-              <>
-                {/* Counts Stats Row (Swapped order: Lines first, Stops second) */}
-                <div className="grid grid-cols-2 divide-x divide-slate-100 border-b border-slate-100 bg-slate-50/20 text-center py-2.5">
-                  <div>
-                    <span className="block text-lg font-black text-blue-600 leading-none">{boxSelectedLines.length}</span>
-                    <span className="text-[9px] font-bold text-slate-400 tracking-wider uppercase mt-1 inline-block">线路</span>
-                  </div>
-                  <div>
-                    <span className="block text-lg font-black text-slate-800 leading-none">{mergedSelectedStops.length}</span>
-                    <span className="text-[9px] font-bold text-slate-400 tracking-wider uppercase mt-1 inline-block">站点</span>
-                  </div>
-                </div>
-
-                {/* Scrollable Contents */}
-                <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
-                  
-                  {/* Swapped List 1: Selected Stops now in Grid Button format */}
-                  <div>
-                    <div className="flex items-center gap-1.5 mb-2 px-1">
-                      <div className="w-1.5 h-3 bg-red-400 rounded-full" />
-                      <span className="text-xs font-black text-slate-700">站点 ({mergedSelectedStops.length})</span>
-                    </div>
-                    {mergedSelectedStops.length === 0 ? (
-                      <p className="text-xs text-slate-400 italic px-1 py-1.5">无站点</p>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto custom-scrollbar pr-1">
-                        {mergedSelectedStops.map((stop: any) => {
-                          return (
-                            <button
-                              key={stop.key}
-                              onClick={(e) => {
-                                if (e.ctrlKey || e.metaKey) {
-                                  stop.keys.forEach((k: string) => {
-                                    handleSingleStopSelectionToggle(k, true);
-                                  });
-                                } else {
-                                  if (mapRef.current) {
-                                    const latlng = getLatLng(stop.location);
-                                    mapRef.current.setCenter(latlng);
-                                    mapRef.current.setZoom(17);
-                                    setSelectionPos(latlng);
-                                  }
-                                }
-                              }}
-                              className="w-full text-left p-2 rounded-xl border border-slate-100 bg-white hover:border-red-500/30 hover:bg-rose-50/10 transition-all flex flex-col gap-0.5 shadow-sm active:scale-95 group relative"
-                            >
-                              <div className="flex items-center gap-1 pr-3 min-w-0">
-                                <MapPin className="w-3 h-3 text-red-500 shrink-0" />
-                                <span className="font-black text-[11px] text-slate-800 group-hover:text-red-500 truncate leading-none">
-                                  {stop.name}
-                                </span>
-                              </div>
-                              <span className="text-[9px] text-slate-400 font-medium truncate w-[130px]">
-                                {stop.lines?.length || 0} 条线路
-                              </span>
-                              <span 
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  stop.keys.forEach((k: string) => {
-                                    handleSingleStopSelectionToggle(k, true);
-                                  });
-                                }}
-                                className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-slate-100 text-slate-300 hover:text-red-500 transition-all"
-                                title="移除"
-                              >
-                                <X className="w-3.5 h-3.5" />
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Swapped List 2: Contained Lines now in Spacious Vertical Card list format */}
-                  <div>
-                    <div className="flex items-center gap-1.5 mb-2 px-1">
-                      <div className="w-1.5 h-3 bg-blue-500 rounded-full" />
-                      <span className="text-xs font-black text-slate-700">线路 ({boxSelectedLines.length})</span>
-                    </div>
-                    {boxSelectedLines.length === 0 ? (
-                      <p className="text-xs text-slate-400 italic px-1 py-2">所选站点内无公交线路</p>
-                    ) : (
-                      <div className="space-y-1.5 max-h-40 overflow-y-auto custom-scrollbar pr-1">
-                        {boxSelectedLines.map((lineName: string) => {
-                          const info = parseLineInfo(lineName);
-                          const isUserSub = fetchedLinesCache.current.get(lineName)?.isUserSubmitted || approvedUserLines.some(ul => ul.name === lineName);
-                          return (
-                            <div
-                              key={lineName}
-                              onClick={() => handleManualSearch({ name: lineName, type: 'busline' })}
-                              className="flex items-center justify-between p-2 rounded-xl bg-slate-50 border border-slate-100/50 hover:bg-slate-100 hover:border-slate-200 transition-all cursor-pointer group"
-                            >
-                              <div className="flex items-center gap-2 min-w-0">
-                                <Bus className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-1.5 min-w-0">
-                                    <span className="font-black text-[11px] text-slate-800 truncate block leading-none">
-                                      {info.name}
-                                    </span>
-                                    {isUserSub && (
-                                      <span className="px-1 py-0.5 rounded bg-purple-50 text-[8px] font-bold text-[#BA55D3] border border-purple-100 scale-90 origin-left">
-                                        用户
-                                      </span>
-                                    )}
-                                  </div>
-                                  <span className="text-[9px] text-slate-400 font-medium truncate block mt-0.5 leading-none">
-                                    {info.start !== '-' ? `${info.start} ⇌ ${info.end}` : '双向 / 环线'}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                </div>
-              </>
-            )}
           </div>
         )}
 
@@ -4866,33 +4097,6 @@ export default function App() {
                 </AnimatePresence>
               </motion.button>
               
-              <AnimatePresence>
-                {(activeBusLine || stats.lines > 0) && (
-                  <motion.button 
-                    initial={{ scale: 0, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0, opacity: 0 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsBoxSelectMode(prev => {
-                        const next = !prev;
-                        if (!next) {
-                          setBoxSelectedStops([]);
-                        }
-                        return next;
-                      });
-                    }}
-                    className={`backdrop-blur-xl border h-14 w-14 rounded-3xl shadow-xl flex items-center justify-center transition-all active:scale-95
-                      ${isBoxSelectMode 
-                        ? 'bg-rose-500 hover:bg-rose-600 border-rose-500 text-white shadow-rose-500/20' 
-                        : 'bg-white/80 border-slate-200 text-slate-500 hover:text-blue-600 hover:bg-white'}`}
-                    title={isBoxSelectMode ? "关闭框选模式" : "开启框选模式"}
-                  >
-                    <BoxSelect className="w-5 h-5" />
-                  </motion.button>
-                )}
-              </AnimatePresence>
-
               <AnimatePresence>
                 {(stats.stops > 0 || stats.lines > 0) && (
                   <motion.button 
@@ -5148,97 +4352,6 @@ export default function App() {
                     className="px-3 py-2.5 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-emerald-500 text-xs font-bold placeholder:text-slate-500 w-full"
                   />
                 </div>
-
-                <div className="flex flex-col gap-1">
-                  <label className="text-[10px] font-bold text-slate-400">数据来源 (可选)</label>
-                  <textarea
-                    placeholder="例如：线路方案公示网站链接、公交迷公告网址"
-                    value={submitDataSourceText}
-                    onChange={e => setSubmitDataSourceText(e.target.value)}
-                    className="px-3 py-1.5 bg-slate-800 text-white rounded-xl border border-slate-700 outline-none focus:border-emerald-500 text-[11px] font-bold placeholder:text-slate-500 w-full h-12 resize-none"
-                  />
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 flex items-center justify-between">
-                    <span>上传数据来源文件 (可选)</span>
-                    {submitDataSourceImages.length > 0 && (
-                      <button 
-                        type="button" 
-                        onClick={() => setSubmitDataSourceImages([])}
-                        className="text-[9px] text-red-400 hover:text-red-300 font-bold"
-                      >
-                        清除所有图片 ({submitDataSourceImages.length}/5)
-                      </button>
-                    )}
-                  </label>
-                  
-                  {/* Grid of uploaded image previews */}
-                  {submitDataSourceImages.length > 0 && (
-                    <div className="grid grid-cols-5 gap-1.5 mb-1.5">
-                      {submitDataSourceImages.map((imgBase64, idx) => (
-                        <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border border-slate-700 bg-slate-900 group">
-                          <img 
-                            src={imgBase64} 
-                            alt={`Preview ${idx + 1}`} 
-                            className="w-full h-full object-cover"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSubmitDataSourceImages(prev => prev.filter((_, i) => i !== idx));
-                            }}
-                            className="absolute top-1 right-1 p-0.5 bg-red-600 hover:bg-red-500 rounded-full text-white cursor-pointer shadow-md transition"
-                            title="删除图片"
-                          >
-                            <X className="w-2.5 h-2.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      id="data-source-image-file"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const files = Array.from(e.target.files || []);
-                        if (files.length > 0) {
-                          const newTotal = submitDataSourceImages.length + files.length;
-                          if (newTotal > 5) {
-                            alert(`本次最多只能上传5张图片（当前已添加${submitDataSourceImages.length}张，您又选择了${files.length}张）`);
-                          }
-                          const sliceCount = Math.max(0, 5 - submitDataSourceImages.length);
-                          const allowedFiles = files.slice(0, sliceCount);
-                          
-                          try {
-                            setLoading(true);
-                            const promises = allowedFiles.map(file => compressImageToBase64(file));
-                            const compressedList = await Promise.all(promises);
-                            setSubmitDataSourceImages(prev => [...prev, ...compressedList]);
-                            setLoading(false);
-                          } catch (err) {
-                            setLoading(false);
-                            alert('图片文件读取失败，请检查文件类型。');
-                          }
-                        }
-                      }}
-                    />
-                    <label
-                      htmlFor="data-source-image-file"
-                      className="flex-1 px-3 py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700 border-dashed rounded-xl text-center text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer"
-                    >
-                      添加图片 (已添加 {submitDataSourceImages.length} / 5)
-                    </label>
-                  </div>
-                  <span className="text-[9px] text-slate-500 leading-tight">
-                    说明：上传数据来源（例如多张线路公告、站台公示照片等）可让线路上传审核更易通过
-                  </span>
-                </div>
               </div>
 
               <div className="flex justify-end gap-3 mt-2">
@@ -5331,19 +4444,14 @@ export default function App() {
                     const status = submissionStatuses[hist.id] || hist.status || 'pending';
                     return (
                       <div key={hist.id} className="p-3.5 bg-slate-800/80 border border-slate-700/50 rounded-xl flex items-center justify-between gap-3 text-xs">
-                        <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+                        <div className="flex flex-col gap-1.5">
                           <div className="flex items-center gap-2">
                             <span className="font-extrabold text-white text-sm">{hist.name}</span>
                             <span className="text-[10px] text-slate-400">By {hist.creatorNickname}</span>
                           </div>
-                          <span className="text-[10px] text-slate-300 font-medium truncate">
+                          <span className="text-[10px] text-slate-300 font-medium">
                             途经: {hist.via_stops.map((vs: any) => vs.name).join(' → ')}
                           </span>
-                          {status === 'rejected' && (hist.rejectReason || submissionStatuses[hist.id + '_reason']) && (
-                            <span className="text-[10px] text-red-300 font-bold bg-red-950/40 px-2 py-1 rounded border border-red-900/30 block mt-0.5 max-w-full break-words">
-                              未通过原因: {hist.rejectReason || submissionStatuses[hist.id + '_reason']}
-                            </span>
-                          )}
                           <span className="text-[9px] text-slate-500">
                             城市: {hist.city} {hist.district} • {new Date(hist.timestamp).toLocaleString()}
                           </span>
@@ -5416,7 +4524,7 @@ export default function App() {
               <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3 shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                  <h3 className="text-sm font-black tracking-tight">审核</h3>
+                  <h3 className="text-sm font-black tracking-tight">自绘待审核中心</h3>
                 </div>
                 <div className="flex items-center gap-2">
                   <button 
@@ -5426,11 +4534,7 @@ export default function App() {
                     刷新
                   </button>
                   <button 
-                    onClick={() => {
-                      setShowAuditModal(false);
-                      setRejectingSubId(null);
-                      setRejectReasonValue('');
-                    }}
+                    onClick={() => setShowAuditModal(false)}
                     className="p-1 hover:bg-slate-800 rounded-md text-slate-400 hover:text-white"
                   >
                     <X className="w-4 h-4" />
@@ -5473,97 +4577,28 @@ export default function App() {
                             <span className="italic text-slate-500">仅有轨迹</span>
                           )}
                         </div>
-
-                        {sub.dataSourceText && (
-                          <div className="mt-1 p-2 rounded bg-slate-800/60 text-slate-300 text-[9px] border border-slate-750">
-                            <span className="font-bold text-slate-450">数据来源: </span>
-                            {sub.dataSourceText}
-                          </div>
-                        )}
-
-                        {sub.dataSourceImage && (() => {
-                          const imgs = parseDataSourceImages(sub.dataSourceImage);
-                          if (imgs.length === 0) return null;
-                          return (
-                            <div className="mt-1.5" onClick={e => e.stopPropagation()}>
-                              <span className="font-bold text-slate-400 block text-[9px] mb-1">照片凭证 ({imgs.length} 张):</span>
-                              <div className="flex flex-wrap gap-1.5">
-                                {imgs.map((imgSrc, imgIdx) => (
-                                  <div key={imgIdx} className="relative group/pic overflow-hidden w-[60px] h-[60px] rounded-lg border border-slate-750 bg-slate-900 transition hover:border-emerald-500/50">
-                                    <img 
-                                      src={imgSrc} 
-                                      alt={`Proof ${imgIdx + 1}`} 
-                                      className="w-full h-full object-cover cursor-zoom-in"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        const w = window.open();
-                                        w?.document.write(`<html><body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center"><img src="${imgSrc}" style="max-width:100%;max-height:100%;object-fit:contain"/></body></html>`);
-                                      }}
-                                    />
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })()}
                       </div>
 
-                      {rejectingSubId === sub.id ? (
-                        <div className="w-full flex flex-col gap-1.5 mt-1 bg-slate-900/80 p-2.5 rounded-xl border border-red-500/30" onClick={(e) => e.stopPropagation()}>
-                          <span className="text-[9px] text-red-400 font-bold">退回因由 (可选)：</span>
-                          <input 
-                            type="text"
-                            placeholder="请填写原因（例如：部分节点走向不够平滑）"
-                            value={rejectReasonValue}
-                            onChange={(e) => setRejectReasonValue(e.target.value)}
-                            className="w-full px-2 py-1 bg-slate-850 text-white rounded-lg border border-slate-700 outline-none text-[10px] font-bold"
-                            autoFocus
-                          />
-                          <div className="flex justify-end gap-1.5">
-                            <button
-                              onClick={() => {
-                                setRejectingSubId(null);
-                                setRejectReasonValue('');
-                              }}
-                              className="px-2 py-0.5 text-[9px] text-slate-400 hover:text-white"
-                            >
-                              取消
-                            </button>
-                            <button
-                              onClick={() => {
-                                handleAdminAction(sub.id, 'reject', rejectReasonValue);
-                                setRejectingSubId(null);
-                                setRejectReasonValue('');
-                              }}
-                              className="px-2 py-0.5 text-[9px] bg-red-600 hover:bg-red-500 text-white font-extrabold rounded-md shadow"
-                            >
-                              确认退回
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 justify-end shrink-0" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setRejectingSubId(sub.id);
-                              setRejectReasonValue('');
-                            }}
-                            className="px-2.5 py-1.5 border border-red-500/20 text-red-400 hover:bg-red-500/15 rounded-lg font-bold transition-all text-[10px]"
-                          >
-                            拒绝
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleAdminAction(sub.id, 'approve');
-                            }}
-                            className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500 rounded-lg font-black transition-all text-[10px]"
-                          >
-                            批准发布
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex items-center gap-1.5 justify-end shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAdminAction(sub.id, 'reject');
+                          }}
+                          className="px-2.5 py-1.5 border border-red-500/20 text-red-400 hover:bg-red-500/15 rounded-lg font-bold transition-all text-[10px]"
+                        >
+                          拒绝
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAdminAction(sub.id, 'approve');
+                          }}
+                          className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500 rounded-lg font-black transition-all text-[10px]"
+                        >
+                          批准发布
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -5572,44 +4607,14 @@ export default function App() {
           </div>
         )}
 
-        {/* Audit Status Notification Banner */}
-        {notification && notification.show && (
-          <div className="fixed top-20 right-4 z-[110] w-[320px] bg-slate-900 border border-emerald-500/40 p-4 rounded-2xl shadow-2xl flex flex-col gap-2.5 pointer-events-auto text-white">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-2 text-emerald-400 font-extrabold text-xs">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                <span>发布审核结果提醒</span>
-              </div>
-              <button 
-                onClick={() => setNotification(null)}
-                className="text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <p className="text-[11px] leading-relaxed text-slate-300 font-medium">
-              您在 <span className="font-bold text-amber-300">{notification.timeStr}</span> 上传的线路：已通过审核 <span className="text-emerald-400 font-extrabold">{notification.approved}</span> 个，不通过 <span className="text-red-400 font-extrabold">{notification.rejected}</span> 个。
-            </p>
-            <button
-              onClick={() => {
-                setShowHistoryModal(true);
-                setNotification(null);
-              }}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 hover:border-emerald-400 text-white rounded-xl text-[10px] font-extrabold text-center cursor-pointer transition shadow shadow-emerald-600/20"
-            >
-              点击以查看详情
-            </button>
-          </div>
-        )}
-
         {/* Admin Data Management Dashboard Overlay Panel */}
         {showManageModal && (
-          <div className="fixed top-20 right-4 z-[100] flex flex-col pointer-events-auto w-[360px] h-[550px] max-w-[calc(100vw-32px)]">
+          <div className="fixed top-20 right-4 z-[100] flex flex-col pointer-events-auto w-[420px] h-[550px] max-w-[calc(100vw-32px)]">
             <div className="bg-slate-900/95 backdrop-blur-2xl border border-slate-700/50 p-5 rounded-3xl shadow-2xl flex flex-col text-white h-full">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3 shrink-0">
                 <div className="flex items-center gap-2">
                   <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
-                  <h3 className="text-sm font-black tracking-tight">数据管理</h3>
+                  <h3 className="text-sm font-black tracking-tight">自绘数据发布管理</h3>
                 </div>
                 <div className="flex items-center gap-2">
                   <button 
@@ -5634,148 +4639,123 @@ export default function App() {
                 提示：点击任意卡片加载预览；支持编辑与删除。
               </p>
 
-              <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-3">
+              <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-2.5">
                 {approvedUserLines.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-slate-500 py-16 gap-2 text-xs">
                     <span>正式发布的线路列表为空</span>
                   </div>
-                ) : (() => {
-                  const groups: Record<string, any[]> = {};
-                  approvedUserLines.forEach(line => {
-                    const city = line.city || '其他城市';
-                    if (!groups[city]) groups[city] = [];
-                    groups[city].push(line);
-                  });
-
-                  return Object.entries(groups).map(([city, lines]) => {
-                    const isCollapsed = collapsedCities[city];
+                ) : (
+                  approvedUserLines.map((line) => {
+                    const isEditing = editingLineId === line.id;
                     return (
-                      <div key={city} className="flex flex-col gap-2 border border-slate-800/40 p-2.5 rounded-2xl bg-slate-900/45 shrink-0">
-                        {/* City Accordion Header */}
-                        <div 
-                          onClick={() => setCollapsedCities(prev => ({ ...prev, [city]: !prev[city] }))}
-                          className="flex items-center justify-between text-[11px] font-extrabold text-blue-400 bg-slate-850 px-3 py-2 rounded-xl cursor-pointer hover:bg-slate-800 select-none"
-                        >
-                          <span className="flex items-center gap-1.5">
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                            <span>{city} ({lines.length} 个线路)</span>
-                          </span>
-                          <span className="text-[9px] text-slate-500 font-bold">
-                            {isCollapsed ? '展开▼' : '折叠▲'}
-                          </span>
+                      <div 
+                        key={line.id} 
+                        onClick={() => handlePreviewLineOnMap(line)}
+                        className="p-3 bg-slate-850/80 border border-slate-850 hover:border-purple-500/50 rounded-xl flex flex-col gap-3 text-xs transition-all cursor-pointer hover:bg-slate-800 group relative"
+                        title="点击进行地图预览"
+                      >
+                        <div className="flex flex-col gap-1.5">
+                          {isEditing ? (
+                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                              <input 
+                                type="text"
+                                value={editingLineName}
+                                onChange={(e) => setEditingLineName(e.target.value)}
+                                className="px-2 py-1 bg-slate-800 border border-slate-600 rounded text-xs text-white max-w-[150px] font-bold"
+                                autoFocus
+                              />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditApprovedLine(line.id, editingLineName);
+                                }}
+                                className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white text-[9px] font-black rounded"
+                              >
+                                保存
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingLineId(null);
+                                }}
+                                className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[9px] font-bold rounded"
+                              >
+                                取消
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="font-extrabold text-purple-400 text-sm truncate max-w-[180px]">{line.name}</span>
+                              <span className="px-1.5 py-0.5 rounded-md bg-slate-700 text-[8px] font-black text-slate-300 shrink-0">
+                                {line.city} • {line.district || '所有区'}
+                              </span>
+                            </div>
+                          )}
+                          <div className="text-slate-400 text-[9px]">
+                            绘图者: {line.creatorNickname || '匿名'}
+                          </div>
+                          <div className="text-slate-300 text-[10px] line-clamp-2 leading-relaxed">
+                            <span className="font-bold text-slate-400">途径车站: </span>
+                            {line.via_stops && line.via_stops.length > 0 ? (
+                              line.via_stops.map((vs: any) => vs.name).join(' → ')
+                            ) : (
+                              <span className="italic text-slate-500">（仅精细线路轨迹）</span>
+                            )}
+                          </div>
                         </div>
 
-                        {/* Collapsible Line Items */}
-                        {!isCollapsed && (
-                          <div className="flex flex-col gap-2 pl-0.5 mt-0.5">
-                            {lines.map((line) => {
-                              const isEditing = editingLineId === line.id;
-                              return (
-                                <div 
-                                  key={line.id} 
-                                  onClick={() => handlePreviewLineOnMap(line)}
-                                  className="p-2.5 bg-slate-850 hover:bg-slate-800 border border-slate-800 hover:border-purple-500/30 rounded-xl flex flex-col gap-2 transition-all cursor-pointer relative"
-                                  title="点击进行地图预览"
-                                >
-                                  <div className="flex flex-col gap-0.5">
-                                    {isEditing ? (
-                                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                                        <input 
-                                          type="text"
-                                          value={editingLineName}
-                                          onChange={(e) => setEditingLineName(e.target.value)}
-                                          className="px-2 py-0.5 bg-slate-800 border border-slate-600 rounded text-[11px] text-white max-w-[120px] font-bold"
-                                          autoFocus
-                                        />
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleEditApprovedLine(line.id, editingLineName);
-                                          }}
-                                          className="px-1.5 py-0.5 bg-purple-600 hover:bg-purple-500 text-white text-[8px] font-black rounded"
-                                        >
-                                          保存
-                                        </button>
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setEditingLineId(null);
-                                          }}
-                                          className="px-1.5 py-0.5 bg-slate-700 hover:bg-slate-600 text-slate-300 text-[8px] font-bold rounded"
-                                        >
-                                          取消
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <div className="flex items-center justify-between gap-1">
-                                        <span className="font-extrabold text-white text-[11px] truncate max-w-[150px]">{line.name}</span>
-                                        <span className="px-1.5 py-0.5 rounded bg-slate-700 text-[8px] font-black text-slate-400 shrink-0">
-                                          {line.district || '全区'}
-                                        </span>
-                                      </div>
-                                    )}
-                                    <div className="text-slate-500 text-[8px]">
-                                      发布者: {line.creatorNickname || '匿名'}
-                                    </div>
-                                  </div>
-
-                                  <div className="flex items-center gap-1 justify-end shrink-0 mt-0.5" onClick={(e) => e.stopPropagation()}>
-                                    {!isEditing && (
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setEditingLineId(line.id);
-                                          setEditingLineName(line.name);
-                                        }}
-                                        className="px-1.5 py-0.5 border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-700 rounded font-bold transition-all text-[8px] flex items-center gap-0.5"
-                                      >
-                                        <Edit3 className="w-2 h-2" />
-                                        <span>名</span>
-                                      </button>
-                                    )}
-                                    {deletingLineId === line.id ? (
-                                      <div className="flex items-center gap-1 shrink-0 bg-red-950/40 p-0.5 rounded border border-red-500/20">
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleDeleteApprovedLine(line.id);
-                                          }}
-                                          className="px-1.5 py-0.5 bg-red-600 hover:bg-red-500 text-white rounded font-bold text-[8px] transition-colors"
-                                        >
-                                          确认
-                                        </button>
-                                        <button
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            setDeletingLineId(null);
-                                          }}
-                                          className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-bold text-[8px] transition-colors"
-                                        >
-                                          否
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          setDeletingLineId(line.id);
-                                        }}
-                                        className="px-1.5 py-0.5 border border-red-500/20 text-red-400 hover:bg-red-500/15 rounded font-bold transition-all text-[8px] flex items-center gap-0.5"
-                                      >
-                                        <Trash2 className="w-2 h-2" />
-                                        <span>删</span>
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1.5 justify-end shrink-0" onClick={(e) => e.stopPropagation()}>
+                          {!isEditing && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingLineId(line.id);
+                                setEditingLineName(line.name);
+                              }}
+                              className="px-2 py-1 border border-slate-700 text-slate-300 hover:text-white hover:bg-slate-700 rounded font-bold transition-all text-[9px] flex items-center gap-0.5"
+                            >
+                              <Edit3 className="w-2.5 h-2.5" />
+                              <span>修改名称</span>
+                            </button>
+                          )}
+                          {deletingLineId === line.id ? (
+                            <div className="flex items-center gap-1 shrink-0 bg-red-950/40 p-0.5 rounded border border-red-500/20">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteApprovedLine(line.id);
+                                }}
+                                className="px-1.5 py-0.5 bg-red-600 hover:bg-red-500 text-white rounded font-bold text-[9px] transition-colors"
+                              >
+                                确认删除
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setDeletingLineId(null);
+                                }}
+                                className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded font-bold text-[9px] transition-colors"
+                              >
+                                取消
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeletingLineId(line.id);
+                              }}
+                              className="px-2 py-1 border border-red-500/20 text-red-400 hover:bg-red-500/15 rounded font-bold transition-all text-[9px] flex items-center gap-0.5"
+                            >
+                              <Trash2 className="w-2.5 h-2.5" />
+                              <span>删除</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     );
-                  });
-                })()}
+                  })
+                )}
               </div>
             </div>
           </div>
@@ -5957,20 +4937,6 @@ export default function App() {
                           </div>
 
                           <div className="flex items-center justify-between p-1">
-                            <span className="text-xs font-bold text-slate-700">{t('filterIntervalBus')}</span>
-                            <button 
-                              onClick={toggleFilterIntervalBus}
-                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${filterIntervalBus ? 'bg-blue-500' : 'bg-slate-300'}`}
-                            >
-                              <motion.div 
-                                layout
-                                animate={{ x: filterIntervalBus ? 24 : 0 }}
-                                className="w-4 h-4 bg-white rounded-full shadow-sm"
-                              />
-                            </button>
-                          </div>
-
-                          <div className="flex items-center justify-between p-1">
                             <span className="text-xs font-bold text-slate-700">{t('filterUserSubmissions')}</span>
                             <button 
                               onClick={toggleFilterUserSubmissions}
@@ -6138,14 +5104,12 @@ export default function App() {
         <AnimatePresence>
           {(selectedStop || selectedSegmentLines) && (
             <motion.div
-              layout
-              transition={{ type: "spring", stiffness: 260, damping: 26 }}
-              initial={{ opacity: 0, y: 20 }}
+              initial={{ opacity: 0, y: 30 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              className={`fixed bottom-[100px] left-4 right-4 md:top-[96px] md:bottom-auto md:left-4 md:right-auto z-50 pointer-events-auto`}
+              exit={{ opacity: 0, y: 30 }}
+              className={`fixed bottom-[100px] left-4 right-4 md:top-[96px] md:bottom-auto md:left-4 md:right-auto z-50 pointer-events-auto transition-all duration-300`}
             >
-              <div className="backdrop-blur-2xl bg-white/95 border border-white/50 p-3 md:p-6 rounded-3xl md:rounded-[2.5rem] shadow-2xl w-full md:w-[360px] md:max-h-[calc(100vh-220px)] overflow-hidden flex flex-col relative">
+              <div className="backdrop-blur-2xl bg-white/95 border border-white/50 p-3 md:p-6 rounded-3xl md:rounded-[2.5rem] shadow-2xl w-full md:w-[360px] md:max-h-[calc(100vh-220px)] overflow-hidden flex flex-col md:border-t-4 md:border-t-blue-500 relative">
                 <button 
                   onClick={() => {
                     setSelectedStop(null);
@@ -6265,37 +5229,16 @@ export default function App() {
         <AnimatePresence>
           {activeBusLine && (
             <motion.div
-              layout
-              transition={{ type: "spring", stiffness: 260, damping: 26 }}
-              initial={{ opacity: 0, x: -20 }}
+              initial={{ opacity: 0, x: -30 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              className={`fixed ${selectedStop || selectedSegmentName ? 'bottom-[220px]' : 'bottom-[100px]'} md:bottom-auto left-4 right-4 md:top-24 md:left-4 z-40 md:w-64 pointer-events-auto md:h-[calc(100vh-220px)]`}
+              exit={{ opacity: 0, x: -30 }}
+              className={`fixed ${selectedStop || selectedSegmentName ? 'bottom-[220px]' : 'bottom-[100px]'} md:bottom-auto left-4 right-4 md:top-24 md:left-4 z-40 md:w-64 pointer-events-auto transition-all duration-300 md:h-[calc(100vh-220px)]`}
             >
-              <div className="backdrop-blur-2xl bg-white/95 border border-white/50 rounded-3xl md:rounded-[2rem] shadow-2xl h-[100px] md:h-full flex flex-col overflow-hidden relative">
+              <div className="backdrop-blur-2xl bg-white/95 border border-white/50 rounded-3xl md:rounded-[2rem] shadow-2xl h-[100px] md:h-full flex flex-col overflow-hidden relative md:border-t-4 md:border-t-blue-500">
                 <button 
                   onClick={() => {
                     setActiveBusLine(null);
-                    if (lineGroupRef.current && activeBusLinePolylineRef.current) {
-                      lineGroupRef.current.removeOverlay(activeBusLinePolylineRef.current);
-                      activeBusLinePolylineRef.current = null;
-                    }
-                    roadOverlaysRef.current.forEach((polyline: any) => {
-                      polyline.setOptions({
-                        strokeOpacity: 0.9,
-                        outlineColor: '#ffffff',
-                        borderWeight: lineThickness === 'thin' ? 0.5 : 1.5
-                      });
-                    });
-                    if (markerGroupRef.current) {
-                      markerGroupRef.current.clearOverlays();
-                      markerGroupRef.current.addOverlays(roadStopMarkersRef.current);
-                    }
-                    allMapStopsRef.current = new Map(roadStopsDataRef.current);
-                    setStats(prev => ({ 
-                      ...prev, 
-                      stops: roadStopMarkersRef.current.length 
-                    }));
+                    handleClear();
                   }}
                   className="absolute top-2.5 right-2.5 md:top-3 md:right-3 p-1.5 md:p-2 hover:bg-slate-100 rounded-xl transition-colors bg-white shadow-sm border border-slate-100 z-10"
                 >
