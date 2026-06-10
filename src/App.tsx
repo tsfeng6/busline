@@ -259,6 +259,25 @@ export default function App() {
     const saved = localStorage.getItem('app_line_thickness');
     return (saved === 'thin' || saved === 'thick') ? saved : 'thick';
   });
+  const [showReferenceArea, setShowReferenceArea] = useState(() => {
+    const saved = sessionStorage.getItem('app_show_reference_area');
+    return saved === null ? true : saved === 'true';
+  });
+  const showReferenceAreaRef = useRef(showReferenceArea);
+  useEffect(() => {
+    showReferenceAreaRef.current = showReferenceArea;
+  }, [showReferenceArea]);
+
+  const referenceBoxRef = useRef<any | null>(null);
+  const referenceAreaTextRef = useRef<any | null>(null);
+  const isPosOutsideReferenceArea = (lng: number, lat: number) => {
+    if (showReferenceAreaRef.current && referenceBoxRef.current) {
+      const box = referenceBoxRef.current;
+      return (lng < box.minLng || lng > box.maxLng || lat < box.minLat || lat > box.maxLat);
+    }
+    return false;
+  };
+
   const [showToolbox, setShowToolbox] = useState(false);
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [activeBusLine, setActiveBusLine] = useState<any | null>(null);
@@ -897,6 +916,7 @@ export default function App() {
       showStations: '显示站点',
       showBaseMap: '显示底图',
       showMoreInfo: '详细信息',
+      showReferenceArea: '显示参考区域',
       lineThickness: '线条粗细',
       thick: '粗线条',
       thin: '细线条',
@@ -936,6 +956,7 @@ export default function App() {
       showStations: '顯示站點',
       showBaseMap: '顯示底圖',
       showMoreInfo: '詳細資訊',
+      showReferenceArea: '顯示參考區域',
       lineThickness: '線條粗細',
       thick: '粗線條',
       thin: '細線條',
@@ -975,6 +996,7 @@ export default function App() {
       showStations: 'Stations',
       showBaseMap: 'Base Map',
       showMoreInfo: 'Details',
+      showReferenceArea: 'Show Reference Area',
       lineThickness: 'Line Thickness',
       thick: 'Thick',
       thin: 'Thin',
@@ -1033,6 +1055,22 @@ export default function App() {
     }
   }, [lineThickness]);
 
+  useEffect(() => {
+    sessionStorage.setItem('app_show_reference_area', String(showReferenceArea));
+    
+    // Auto-redraw reference area and clip lines after changing the setting
+    if (mapInstance) {
+      const AMap = (window as any).AMap;
+      drawReferenceArea(mapInstance, AMap);
+      
+      if (activeBusLine) {
+        renderBusLine(activeBusLine, AMap, mapInstance, true, true, false);
+      } else if (selectedSegmentLines && selectedSegmentLines.length > 0) {
+        aggregateAndVisualize(selectedSegmentLines, mapInstance, AMap);
+      }
+    }
+  }, [showReferenceArea, mapInstance]);
+
   const [baseMapVisible, setBaseMapVisible] = useState(true);
   const [selectionPos, setSelectionPos] = useState<[number, number] | null>(null);
   const [selectedSegmentName, setSelectedSegmentName] = useState<string | null>(null);
@@ -1067,9 +1105,349 @@ export default function App() {
     });
   };
 
+  const clipSegmentToBox = (
+    p1: [number, number],
+    p2: [number, number],
+    minLng: number,
+    maxLng: number,
+    minLat: number,
+    maxLat: number
+  ): [[number, number], [number, number]] | null => {
+    let [x1, y1] = p1;
+    let [x2, y2] = p2;
+
+    let t0 = 0.0;
+    let t1 = 1.0;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+
+    const boundaries = [
+      { p: -dx, q: x1 - minLng }, // minLng (left)
+      { p: dx, q: maxLng - x1 },  // maxLng (right)
+      { p: -dy, q: y1 - minLat }, // minLat (bottom)
+      { p: dy, q: maxLat - y1 }   // maxLat (top)
+    ];
+
+    for (let i = 0; i < 4; i++) {
+      const { p, q } = boundaries[i];
+      if (p === 0) {
+        if (q < 0) return null; // Parallel and outside
+      } else {
+        const t = q / p;
+        if (p < 0) {
+          if (t > t1) return null;
+          if (t > t0) t0 = t;
+        } else {
+          if (t < t0) return null;
+          if (t < t1) t1 = t;
+        }
+      }
+    }
+
+    if (t0 > t1) return null;
+
+    return [
+      [x1 + t0 * dx, y1 + t0 * dy],
+      [x1 + t1 * dx, y1 + t1 * dy]
+    ];
+  };
+
+  const clipPathToBox = (
+    path: [number, number][],
+    minLng: number,
+    maxLng: number,
+    minLat: number,
+    maxLat: number
+  ): [number, number][][] => {
+    const clippedPaths: [number, number][][] = [];
+    let currentSegment: [number, number][] = [];
+
+    for (let i = 0; i < path.length - 1; i++) {
+      const p1 = path[i];
+      const p2 = path[i + 1];
+      const clipped = clipSegmentToBox(p1, p2, minLng, maxLng, minLat, maxLat);
+      if (clipped) {
+        const [cp1, cp2] = clipped;
+        if (currentSegment.length === 0) {
+          currentSegment.push(cp1);
+        } else {
+          const last = currentSegment[currentSegment.length - 1];
+          const distSq = Math.pow(last[0] - cp1[0], 2) + Math.pow(last[1] - cp1[1], 2);
+          if (distSq > 1e-10) {
+            clippedPaths.push(currentSegment);
+            currentSegment = [cp1];
+          }
+        }
+        currentSegment.push(cp2);
+      } else {
+        if (currentSegment.length > 0) {
+          clippedPaths.push(currentSegment);
+          currentSegment = [];
+        }
+      }
+    }
+    if (currentSegment.length > 0) {
+      clippedPaths.push(currentSegment);
+    }
+    return clippedPaths;
+  };
+
+  const getBoxForStops = (stops: any[]) => {
+    let minLng = Infinity;
+    let maxLng = -Infinity;
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+
+    stops.forEach((stop: any) => {
+      if (stop && stop.location) {
+        const lng = stop.location.lng;
+        const lat = stop.location.lat;
+        if (typeof lng === 'number' && typeof lat === 'number') {
+          if (lng < minLng) minLng = lng;
+          if (lng > maxLng) maxLng = lng;
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+        }
+      }
+    });
+
+    if (minLng === Infinity) return null;
+
+    const lngDiff = maxLng - minLng;
+    const latDiff = maxLat - minLat;
+    // Increased padding margin slightly to ensure comfortable gap between box borders and the outermost bus stops
+    const lngPadding = Math.max(lngDiff * 0.12, 0.003);
+    const latPadding = Math.max(latDiff * 0.12, 0.003);
+
+    return {
+      minLng: minLng - lngPadding,
+      maxLng: maxLng + lngPadding,
+      minLat: minLat - latPadding,
+      maxLat: maxLat + latPadding
+    };
+  };
+
+  function syncStopMarkersToMap(map: any, AMap: any) {
+    if (!markerGroupRef.current) return;
+    
+    try {
+      markerGroupRef.current.clearOverlays();
+    } catch (e) {
+      console.warn('Failed to clear overlays', e);
+    }
+    
+    if (!showStations) {
+      setStats((prev: any) => ({ ...prev, stops: 0 }));
+      return;
+    }
+    
+    const rawMarkers = activeRawMarkersRef.current || [];
+    let visibleMarkers = rawMarkers;
+
+    // Filter using active keys in allMapStopsRef if allMapStopsRef has active stops
+    if (allMapStopsRef.current && allMapStopsRef.current.size > 0) {
+      visibleMarkers = visibleMarkers.filter((marker: any) => {
+        const ext = marker.getExtData ? marker.getExtData() : null;
+        if (ext && ext.key) {
+          return allMapStopsRef.current.has(ext.key);
+        }
+        return true;
+      });
+    }
+    
+    const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
+    if (showReferenceAreaRef.current && box) {
+      visibleMarkers = rawMarkers.filter((marker: any) => {
+        let latlng: [number, number] | null = null;
+        const ext = marker.getExtData ? marker.getExtData() : null;
+        if (ext && ext.key) {
+          const parts = ext.key.split(',').map(Number);
+          if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            latlng = [parts[0], parts[1]];
+          }
+        }
+        if (!latlng) {
+          if (typeof marker.getCenter === 'function') {
+            const center = marker.getCenter();
+            if (center) latlng = [center.getLng(), center.getLat()];
+          } else if (typeof marker.getPosition === 'function') {
+            const pos = marker.getPosition();
+            if (pos) latlng = [pos.getLng(), pos.getLat()];
+          }
+        }
+        
+        if (latlng) {
+          const [lng, lat] = latlng;
+          return (lng >= box.minLng && lng <= box.maxLng && lat >= box.minLat && lat <= box.maxLat);
+        }
+        return true;
+      });
+    }
+    
+    try {
+      if (visibleMarkers.length > 0) {
+        markerGroupRef.current.addOverlays(visibleMarkers);
+      }
+    } catch (e) {
+      console.warn('Failed to add overlays', e);
+    }
+    
+    setStats((prev: any) => ({ ...prev, stops: visibleMarkers.length }));
+  }
+
+  const drawReferenceArea = (map: any, AMap: any) => {
+    if (referenceAreaOverlayRef.current) {
+      try {
+        map.remove(referenceAreaOverlayRef.current);
+      } catch (e) {
+        console.warn('Failed to remove reference area overlay', e);
+      }
+      referenceAreaOverlayRef.current = null;
+    }
+
+    if (referenceAreaTextRef.current) {
+      try {
+        map.remove(referenceAreaTextRef.current);
+      } catch (e) {
+        console.warn('Failed to remove reference area text overlay', e);
+      }
+      referenceAreaTextRef.current = null;
+    }
+
+    if (!showReferenceAreaRef.current || !map || !AMap) {
+      // Keep the computed referenceBoxRef.current in memory so it doesn't get lost
+      // when toggling showReferenceArea off and on, but sync markers to hide/show restriction
+      syncStopMarkersToMap(map, AMap);
+      return null;
+    }
+
+    let box = referenceBoxRef.current;
+    if (!box) {
+      const stopsList = Array.from(allMapStopsRef.current.values());
+      box = getBoxForStops(stopsList);
+      if (box) {
+        referenceBoxRef.current = box;
+      }
+    }
+
+    if (!box) {
+      syncStopMarkersToMap(map, AMap);
+      return null;
+    }
+
+    const rectangle = new AMap.Rectangle({
+      bounds: new AMap.Bounds(
+        new AMap.LngLat(box.minLng, box.minLat),
+        new AMap.LngLat(box.maxLng, box.maxLat)
+      ),
+      strokeColor: '#000000',
+      strokeWeight: 4,
+      strokeOpacity: 0.95,
+      fillColor: '#000000',
+      fillOpacity: 0.01,
+      zIndex: 10,
+      bubble: true
+    });
+
+    rectangle.setMap(map);
+    referenceAreaOverlayRef.current = rectangle;
+
+    syncStopMarkersToMap(map, AMap);
+
+    // Setup dark label badge above the reference area
+    const centerLng = (box.minLng + box.maxLng) / 2;
+    const createTextLabel = (textStr: string) => {
+      if (referenceAreaTextRef.current) {
+        try {
+          map.remove(referenceAreaTextRef.current);
+        } catch (e) {
+          console.warn('Failed to remove text label', e);
+        }
+        referenceAreaTextRef.current = null;
+      }
+
+      const textMarker = new AMap.Text({
+        text: textStr,
+        anchor: 'bottom-center',
+        position: [centerLng, box.maxLat],
+        style: {
+          'background-color': '#111827',
+          'border-color': '#111827',
+          'color': '#ffffff',
+          'font-size': '12px',
+          'font-weight': 'bold',
+          'padding': '4px 10px',
+          'border-radius': '6px',
+          'box-shadow': '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)',
+          'border-width': '0px',
+          'white-space': 'nowrap',
+          'letter-spacing': '0.05em'
+        },
+        offset: new AMap.Pixel(0, -8),
+        zIndex: 100
+      });
+      textMarker.setMap(map);
+      referenceAreaTextRef.current = textMarker;
+    };
+
+    let defaultLabel = '参考区域';
+    if (selectedSegmentName && selectedSegmentName !== "正在获取路段信息...") {
+      defaultLabel = selectedSegmentName;
+    } else if (selectedStop) {
+      defaultLabel = selectedStop.name;
+    } else if (currentCity) {
+      defaultLabel = currentCity;
+    }
+
+    createTextLabel(defaultLabel);
+
+    if (AMap.Geocoder) {
+      if (!geocoderRef.current) {
+        geocoderRef.current = new AMap.Geocoder({
+          radius: 1000,
+          extensions: 'base'
+        });
+      }
+      geocoderRef.current.getAddress([centerLng, (box.minLat + box.maxLat) / 2], (status: string, result: any) => {
+        if (status === 'complete' && result.regeocode) {
+          const addrComp = result.regeocode.addressComponent;
+          const district = addrComp.district || '';
+          const township = addrComp.township || '';
+          let preciseLabel = '';
+          if (district) {
+            preciseLabel = district;
+            if (township && !township.startsWith('无')) {
+              preciseLabel += ' · ' + township;
+            }
+          } else {
+            preciseLabel = addrComp.city || addrComp.province || defaultLabel;
+          }
+          if (preciseLabel) {
+            createTextLabel(preciseLabel);
+          }
+        }
+      });
+    }
+
+    return box;
+  };
+
   const renderBusLine = (line: any, AMap: any, map: any, clear = true, showMarkers = true, shouldFitView = true) => {
     const path = line.path.map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat]);
     let polylineObj: any = null;
+    
+    let displayPaths = [path];
+    if (showReferenceAreaRef.current) {
+      const box = getBoxForStops(line.via_stops);
+      if (box) {
+        const clipped = clipPathToBox(path, box.minLng, box.maxLng, box.minLat, box.maxLat);
+        if (clipped.length === 0) {
+          displayPaths = [];
+        } else {
+          displayPaths = clipped;
+        }
+      }
+    }
     
     if (lineGroupRef.current) {
       if (clear) {
@@ -1087,156 +1465,167 @@ export default function App() {
           });
         });
       }
-      const polyline = new AMap.Polyline({
-        path: path,
-        strokeColor: line.isUserSubmitted ? '#BA55D3' : (clear ? '#3b82f6' : getRandomPastelColor()),
-        strokeWeight: lineThickness === 'thin' ? 2.5 : 5,
-        strokeOpacity: 0.8,
-        lineJoin: 'round',
-        lineCap: 'round',
-        isOutline: true,
-        outlineColor: '#ffffff',
-        borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
-        zIndex: 50
-      });
-      polylineObj = polyline;
-      if (clear) {
-        setActiveBusLine(line);
-        activeBusLinePolylineRef.current = polyline;
-        polyline.on('click', (e: any) => {
-          const clickLngLat = [e.lnglat.getLng(), e.lnglat.getLat()];
-          
-          if (!(window as any).AMap.GeometryUtil) return;
-          const GeometryUtil = (window as any).AMap.GeometryUtil;
-          
-          // Map stops to path indices
-          const stopIndices = line.via_stops.map((stop: any) => {
-            let minDist = Infinity;
-            let minIdx = 0;
-            for (let i = 0; i < path.length; i++) {
-              const d = GeometryUtil.distance(
-                [stop.location.lng, stop.location.lat],
-                path[i]
-              );
-              if (d < minDist) {
-                minDist = d;
-                minIdx = i;
+      
+      let polyline: any = null;
+      if (displayPaths.length > 0) {
+        polyline = new AMap.Polyline({
+          path: displayPaths,
+          strokeColor: line.isUserSubmitted ? '#BA55D3' : (clear ? '#3b82f6' : getRandomPastelColor()),
+          strokeWeight: lineThickness === 'thin' ? 2.5 : 5,
+          strokeOpacity: 0.8,
+          lineJoin: 'round',
+          lineCap: 'round',
+          isOutline: true,
+          outlineColor: '#ffffff',
+          borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
+          zIndex: 50
+        });
+        polylineObj = polyline;
+        if (clear) {
+          setActiveBusLine(line);
+          activeBusLinePolylineRef.current = polyline;
+          polyline.on('click', (e: any) => {
+            const clickLngLat = [e.lnglat.getLng(), e.lnglat.getLat()];
+            if (isPosOutsideReferenceArea(clickLngLat[0], clickLngLat[1])) {
+              return;
+            }
+            
+            if (!(window as any).AMap.GeometryUtil) return;
+            const GeometryUtil = (window as any).AMap.GeometryUtil;
+            
+            // Map stops to path indices
+            const stopIndices = line.via_stops.map((stop: any) => {
+              let minDist = Infinity;
+              let minIdx = 0;
+              for (let i = 0; i < path.length; i++) {
+                const d = GeometryUtil.distance(
+                  [stop.location.lng, stop.location.lat],
+                  path[i]
+                );
+                if (d < minDist) {
+                  minDist = d;
+                  minIdx = i;
+                }
+              }
+              return minIdx;
+            });
+
+            // Ensure stopIndices are strictly monotonically increasing to avoid overlapping
+            for (let i = 1; i < stopIndices.length; i++) {
+              if (stopIndices[i] <= stopIndices[i - 1]) {
+                stopIndices[i] = stopIndices[i - 1] + 1;
               }
             }
-            return minIdx;
-          });
 
-          // Ensure stopIndices are strictly monotonically increasing to avoid overlapping
-          for (let i = 1; i < stopIndices.length; i++) {
-            if (stopIndices[i] <= stopIndices[i - 1]) {
-              stopIndices[i] = stopIndices[i - 1] + 1;
+            // Find the exact snapped projection on the polyline segments
+            let bestProjected = clickLngLat as [number, number];
+            let bestDistSq = Infinity;
+            let bestSegIdx = 0;
+            
+            const localGetDistSq = (p1: [number, number], p2: [number, number]) => {
+              const dx = p1[0] - p2[0];
+              const dy = p1[1] - p2[1];
+              return dx * dx + dy * dy;
+            };
+            
+            const localGetProjection = (p: [number, number], v: [number, number], w: [number, number]): [number, number] => {
+              const l2 = localGetDistSq(v, w);
+              if (l2 === 0) return v;
+              let t = ((p[0] - v[0]) * (w[0] - v[0]) + (p[1] - v[1]) * (w[1] - v[1])) / l2;
+              t = Math.max(0, Math.min(1, t));
+              return [
+                v[0] + t * (w[0] - v[0]),
+                v[1] + t * (w[1] - v[1])
+              ];
+            };
+
+            for (let i = 0; i < path.length - 1; i++) {
+              const segStart = path[i];
+              const segEnd = path[i+1];
+              const proj = localGetProjection(clickLngLat as [number, number], segStart as [number, number], segEnd as [number, number]);
+              const dSq = localGetDistSq(clickLngLat as [number, number], proj);
+              if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                bestProjected = proj;
+                bestSegIdx = i;
+              }
             }
-          }
+            
+            const clickMinIdx = bestSegIdx;
 
-          // Find the exact snapped projection on the polyline segments
-          let bestProjected = clickLngLat as [number, number];
-          let bestDistSq = Infinity;
-          let bestSegIdx = 0;
-          
-          const localGetDistSq = (p1: [number, number], p2: [number, number]) => {
-            const dx = p1[0] - p2[0];
-            const dy = p1[1] - p2[1];
-            return dx * dx + dy * dy;
-          };
-          
-          const localGetProjection = (p: [number, number], v: [number, number], w: [number, number]): [number, number] => {
-            const l2 = localGetDistSq(v, w);
-            if (l2 === 0) return v;
-            let t = ((p[0] - v[0]) * (w[0] - v[0]) + (p[1] - v[1]) * (w[1] - v[1])) / l2;
-            t = Math.max(0, Math.min(1, t));
-            return [
-              v[0] + t * (w[0] - v[0]),
-              v[1] + t * (w[1] - v[1])
-            ];
-          };
-
-          for (let i = 0; i < path.length - 1; i++) {
-            const segStart = path[i];
-            const segEnd = path[i+1];
-            const proj = localGetProjection(clickLngLat as [number, number], segStart as [number, number], segEnd as [number, number]);
-            const dSq = localGetDistSq(clickLngLat as [number, number], proj);
-            if (dSq < bestDistSq) {
-              bestDistSq = dSq;
-              bestProjected = proj;
-              bestSegIdx = i;
+            // Find surrounding stops
+            let prevStopIdx = 0;
+            for (let i = 0; i < stopIndices.length - 1; i++) {
+              if (clickMinIdx >= stopIndices[i] && clickMinIdx <= stopIndices[i+1]) {
+                prevStopIdx = i;
+                break;
+              }
             }
-          }
-          
-          const clickMinIdx = bestSegIdx;
+            if (clickMinIdx > stopIndices[stopIndices.length - 1]) prevStopIdx = stopIndices.length - 2;
+            
+            let nextStopIdx = prevStopIdx + 1;
+            if (nextStopIdx >= line.via_stops.length) nextStopIdx = line.via_stops.length - 1;
 
-          // Find surrounding stops
-          let prevStopIdx = 0;
-          for (let i = 0; i < stopIndices.length - 1; i++) {
-            if (clickMinIdx >= stopIndices[i] && clickMinIdx <= stopIndices[i+1]) {
-              prevStopIdx = i;
-              break;
-            }
-          }
-          if (clickMinIdx > stopIndices[stopIndices.length - 1]) prevStopIdx = stopIndices.length - 2;
-          
-          let nextStopIdx = prevStopIdx + 1;
-          if (nextStopIdx >= line.via_stops.length) nextStopIdx = line.via_stops.length - 1;
-
-          setSelectionPos(bestProjected);
-          setSelectedSegmentName(null);
-          setSelectedSegmentLines(null);
-          
-          let queryLngLat = bestProjected;
-          const snapSegStart = path[bestSegIdx];
-          const snapSegEnd = path[bestSegIdx + 1];
-          if (snapSegStart && snapSegEnd) {
-             const dx = snapSegEnd[0] - snapSegStart[0];
-             const dy = snapSegEnd[1] - snapSegStart[1];
-             const len = Math.sqrt(dx*dx + dy*dy);
-             if (len > 0.0001) {
-               const shiftAmt = 0.0003; // ~30 meters
-               const distToEnd = Math.sqrt(Math.pow(snapSegEnd[0] - queryLngLat[0], 2) + Math.pow(snapSegEnd[1] - queryLngLat[1], 2));
-               if (distToEnd > shiftAmt) {
-                 queryLngLat = [queryLngLat[0] + (dx/len)*shiftAmt, queryLngLat[1] + (dy/len)*shiftAmt];
-               } else {
-                 queryLngLat = [queryLngLat[0] - (dx/len)*shiftAmt, queryLngLat[1] - (dy/len)*shiftAmt];
+            setSelectionPos(bestProjected);
+            setSelectedSegmentName(null);
+            setSelectedSegmentLines(null);
+            
+            let queryLngLat = bestProjected;
+            const snapSegStart = path[bestSegIdx];
+            const snapSegEnd = path[bestSegIdx + 1];
+            if (snapSegStart && snapSegEnd) {
+               const dx = snapSegEnd[0] - snapSegStart[0];
+               const dy = snapSegEnd[1] - snapSegStart[1];
+               const len = Math.sqrt(dx*dx + dy*dy);
+               if (len > 0.0001) {
+                 const shiftAmt = 0.0003; // ~30 meters
+                 const distToEnd = Math.sqrt(Math.pow(snapSegEnd[0] - queryLngLat[0], 2) + Math.pow(snapSegEnd[1] - queryLngLat[1], 2));
+                 if (distToEnd > shiftAmt) {
+                   queryLngLat = [queryLngLat[0] + (dx/len)*shiftAmt, queryLngLat[1] + (dy/len)*shiftAmt];
+                 } else {
+                   queryLngLat = [queryLngLat[0] - (dx/len)*shiftAmt, queryLngLat[1] - (dy/len)*shiftAmt];
+                 }
                }
-             }
-          }
-
-          const geocoder = new AMap.Geocoder({ radius: 30, extensions: 'all' });
-          geocoder.getAddress(queryLngLat as [number, number], (status: string, result: any) => {
-            if (status === 'complete' && result.info === 'OK') {
-              const comp = result.regeocode.addressComponent;
-              const preciseLocation = [
-                comp.province,
-                comp.city !== comp.province ? comp.city : '',
-                comp.district,
-                comp.township
-              ].filter(Boolean).join('');
-              
-              const nearestRoad = result.regeocode.roads && result.regeocode.roads.length > 0 ? result.regeocode.roads[0].name : '';
-              const genericPoi = result.regeocode.pois && result.regeocode.pois.length > 0 ? result.regeocode.pois[0].name : '当前位置';
-              const fallbackName = nearestRoad || genericPoi;
-              
-              setSelectedStop({
-                name: fallbackName,
-                address: preciseLocation || result.regeocode.formattedAddress,
-                lines: [],
-                city: currentCity,
-                isBusStop: false,
-                segmentName: `${line.via_stops[prevStopIdx].name} - ${line.via_stops[nextStopIdx].name}`
-              });
             }
+
+            const geocoder = new AMap.Geocoder({ radius: 30, extensions: 'all' });
+            geocoder.getAddress(queryLngLat as [number, number], (status: string, result: any) => {
+              if (status === 'complete' && result.info === 'OK') {
+                const comp = result.regeocode.addressComponent;
+                const preciseLocation = [
+                  comp.province,
+                  comp.city !== comp.province ? comp.city : '',
+                  comp.district,
+                  comp.township
+                ].filter(Boolean).join('');
+                
+                const nearestRoad = result.regeocode.roads && result.regeocode.roads.length > 0 ? result.regeocode.roads[0].name : '';
+                const genericPoi = result.regeocode.pois && result.regeocode.pois.length > 0 ? result.regeocode.pois[0].name : '当前位置';
+                const fallbackName = nearestRoad || genericPoi;
+                
+                setSelectedStop({
+                  name: fallbackName,
+                  address: preciseLocation || result.regeocode.formattedAddress,
+                  lines: [],
+                  city: currentCity,
+                  isBusStop: false,
+                  segmentName: `${line.via_stops[prevStopIdx].name} - ${line.via_stops[nextStopIdx].name}`
+                });
+              }
+            });
           });
-        });
+        }
+        lineGroupRef.current.addOverlay(polyline);
+      } else {
+        if (clear) {
+          setActiveBusLine(line);
+          activeBusLinePolylineRef.current = null;
+        }
       }
-      lineGroupRef.current.addOverlay(polyline);
     }
 
     if (markerGroupRef.current && showMarkers) {
       if (clear) {
-        markerGroupRef.current.clearOverlays();
         allMapStopsRef.current.clear();
       }
       const markers = line.via_stops.map((stop: any) => {
@@ -1261,6 +1650,9 @@ export default function App() {
         });
         marker.on('click', async () => {
           const stopLatLng = getLatLng(stop.location);
+          if (isPosOutsideReferenceArea(stopLatLng[0], stopLatLng[1])) {
+            return;
+          }
           setSelectionPos(stopLatLng);
           setSelectedStop({
             name: stop.name,
@@ -1284,9 +1676,11 @@ export default function App() {
         });
         return marker;
       });
-      markerGroupRef.current.addOverlays(markers);
+      activeRawMarkersRef.current = markers;
+      syncStopMarkersToMap(map, AMap);
     }
     if (shouldFitView && polylineObj) map.setFitView(polylineObj);
+    drawReferenceArea(map, AMap);
   };
 
   const showStopConnectivity = async (stopLines: string[]) => {
@@ -2775,8 +3169,10 @@ export default function App() {
   // Search results preservation refs
   const roadOverlaysRef = useRef<any[]>([]);
   const roadStopMarkersRef = useRef<any[]>([]);
+  const activeRawMarkersRef = useRef<any[]>([]);
   const roadStopsDataRef = useRef<Map<string, any>>(new Map());
   const activeBusLinePolylineRef = useRef<any | null>(null);
+  const referenceAreaOverlayRef = useRef<any | null>(null);
 
   const [containerPos, setContainerPos] = useState<{ x: number, y: number } | null>(null);
 
@@ -2929,6 +3325,9 @@ export default function App() {
         }
         if (map.getZoom() < 14) return;
         const [lng, lat] = [e.lnglat.getLng(), e.lnglat.getLat()];
+        if (isPosOutsideReferenceArea(lng, lat)) {
+          return;
+        }
         
         const geocoder = new AMap.Geocoder();
         geocoder.getAddress([lng, lat], (status: string, result: any) => {
@@ -3026,12 +3425,8 @@ export default function App() {
 
   // Controlling visibility of station markers
   useEffect(() => {
-    if (markerGroupRef.current) {
-      if (showStations) {
-        markerGroupRef.current.show();
-      } else {
-        markerGroupRef.current.hide();
-      }
+    if (mapInstance && (window as any).AMap) {
+      drawReferenceArea(mapInstance, (window as any).AMap);
     }
   }, [showStations, mapInstance]);
 
@@ -3079,6 +3474,9 @@ export default function App() {
   const handleSearch = async () => {
     const map = mapRef.current;
     if (!map) return;
+
+    // Reset reference box so the new search initiates a fresh reference bounds calculation
+    referenceBoxRef.current = null;
 
     const currentZoom = map.getZoom();
     if (!enableCityWideSearch && currentZoom < 12) {
@@ -3203,6 +3601,9 @@ export default function App() {
 
           marker.on('click', () => {
             const stopPos = [poi.location.lng, poi.location.lat];
+            if (isPosOutsideReferenceArea(stopPos[0], stopPos[1])) {
+              return;
+            }
             setSelectionPos(stopPos);
             setSelectedSegmentLines(null);
             setSelectedSegmentName(null);
@@ -3234,8 +3635,9 @@ export default function App() {
           markers.push(marker);
         });
 
-        markerGroupRef.current.addOverlays(markers);
+        activeRawMarkersRef.current = markers;
         roadStopMarkersRef.current = markers;
+        syncStopMarkersToMap(map, AMap);
         roadStopsDataRef.current = new Map(allMapStopsRef.current);
 
         const lineNamesSet = new Set<string>();
@@ -3332,6 +3734,9 @@ export default function App() {
             
             marker.on('click', () => {
               const stopPos = getLatLng(poi.location);
+              if (isPosOutsideReferenceArea(stopPos[0], stopPos[1])) {
+                return;
+              }
               setSelectionPos(stopPos);
               setSelectedSegmentLines(null);
               setSelectedSegmentName(null);
@@ -3364,10 +3769,10 @@ export default function App() {
             });
             trueMarkers.push(marker);
           });
-          markerGroupRef.current.addOverlays(trueMarkers);
+          activeRawMarkersRef.current = trueMarkers;
           roadStopMarkersRef.current = trueMarkers;
+          syncStopMarkersToMap(map, AMap);
           roadStopsDataRef.current = new Map(allMapStopsRef.current);
-          setStats(prev => ({ ...prev, stops: trueMarkers.length }));
         }
 
       }
@@ -3434,6 +3839,16 @@ export default function App() {
     if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
     if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
     
+    if (referenceAreaOverlayRef.current && mapRef.current) {
+      try {
+        mapRef.current.remove(referenceAreaOverlayRef.current);
+      } catch (e) {
+        console.warn('Failed to remove reference area on clear', e);
+      }
+      referenceAreaOverlayRef.current = null;
+    }
+    referenceBoxRef.current = null;
+    
     // Clear local caches and states fully as requested
     fetchedLinesCache.current.clear();
     allMapStopsRef.current.clear();
@@ -3449,6 +3864,7 @@ export default function App() {
     setSelectedSegmentAddress(null);
     roadOverlaysRef.current = [];
     roadStopMarkersRef.current = [];
+    activeRawMarkersRef.current = [];
     roadStopsDataRef.current.clear();
     activeBusLinePolylineRef.current = null;
   };
@@ -3463,6 +3879,21 @@ export default function App() {
         expandedLineNames.push(...matches);
       }
     });
+
+    // If selectedSegmentLines is active, filter allMapStopsRef to only include stops belonging to the selected lines
+    if (selectedSegmentLines && selectedSegmentLines.length > 0) {
+      const activeLineNamesSet = new Set(expandedLineNames.map(name => name.split('(')[0]));
+      const filteredStops = new Map<string, any>();
+      roadStopsDataRef.current.forEach((stop, key) => {
+        const hasMatchingLine = stop.lines.some((l: string) => activeLineNamesSet.has(l.split('(')[0]));
+        if (hasMatchingLine) {
+          filteredStops.set(key, stop);
+        }
+      });
+      if (filteredStops.size > 0) {
+        allMapStopsRef.current = filteredStops;
+      }
+    }
 
     // Add approved user-submitted lines if not filtered out
     const isFilteredOut = localStorage.getItem('app_filter_user_submissions') === 'true';
@@ -3842,28 +4273,45 @@ export default function App() {
     };
 
     const allOverlays: any[] = [];
+    let box: any = null;
+    if (showReferenceAreaRef.current) {
+      box = getBoxForStops(Array.from(allMapStopsRef.current.values()));
+    }
+
     colorGroups.forEach((paths, color) => {
-      const joinedPaths = joinSegments(paths);
-      const polyline = new AMap.Polyline({
-        path: joinedPaths,
-        strokeColor: color,
-        strokeWeight: lineThickness === 'thin' ? 3 : 6,
-        strokeOpacity: 0.9,
-        lineJoin: 'round',
-        lineCap: 'round',
-        isOutline: true,
-        outlineColor: '#ffffff',
-        borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
-        bubble: true,
-        zIndex: color === '#ef4444' ? 15 : (color === '#eab308' ? 12 : 10)
-      });
-      allOverlays.push(polyline);
+      let joinedPaths = joinSegments(paths);
+      if (showReferenceAreaRef.current && box) {
+        const clippedJoined: Array<[number, number][]> = [];
+        joinedPaths.forEach(singlePath => {
+          const clipped = clipPathToBox(singlePath, box.minLng, box.maxLng, box.minLat, box.maxLat);
+          clippedJoined.push(...clipped);
+        });
+        joinedPaths = clippedJoined;
+      }
+
+      if (joinedPaths.length > 0) {
+        const polyline = new AMap.Polyline({
+          path: joinedPaths,
+          strokeColor: color,
+          strokeWeight: lineThickness === 'thin' ? 3 : 6,
+          strokeOpacity: 0.9,
+          lineJoin: 'round',
+          lineCap: 'round',
+          isOutline: true,
+          outlineColor: '#ffffff',
+          borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
+          bubble: true,
+          zIndex: color === '#ef4444' ? 15 : (color === '#eab308' ? 12 : 10)
+        });
+        allOverlays.push(polyline);
+      }
     });
 
     lineGroupRef.current.clearOverlays();
     lineGroupRef.current.addOverlays(allOverlays);
     roadOverlaysRef.current = allOverlays;
     activeBusLinePolylineRef.current = null;
+    drawReferenceArea(map, AMap);
 
     if (mapClickHandlerRef.current) {
       map.off('click', mapClickHandlerRef.current);
@@ -3875,6 +4323,9 @@ export default function App() {
         return;
       }
       const clickLngLat = [e.lnglat.lng, e.lnglat.lat] as [number, number];
+      if (isPosOutsideReferenceArea(clickLngLat[0], clickLngLat[1])) {
+        return;
+      }
       const gX = (clickLngLat[0] * GRID_SIZE) | 0;
       const gY = (clickLngLat[1] * GRID_SIZE) | 0;
       
@@ -3928,6 +4379,9 @@ export default function App() {
           const closestSegmentProjectedTrue = getProjection(clickLngLat, closest.data.start, closest.data.end);
           const closestSegmentProjectedVisual = getProjection(clickLngLat, closest.data.offsetStart, closest.data.offsetEnd);
           
+          // Reset reference box for this new clicked segment query so a new box is calculated
+          referenceBoxRef.current = null;
+
           setSelectionPos(closestSegmentProjectedVisual as [number, number]);
           setSelectedStop(null);
           setSelectedSegmentName("正在获取路段信息...");
@@ -3977,6 +4431,7 @@ export default function App() {
 
     map.on('click', onMapClick);
     mapClickHandlerRef.current = onMapClick;
+    drawReferenceArea(map, AMap);
   };
 
   const handleScreenshot = async () => {
@@ -4245,7 +4700,7 @@ export default function App() {
               <div className="flex items-center justify-center pl-4 pr-2 shrink-0 h-full">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
                   <path d="M4 17H20" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" />
-                  <path d="M17 4V20" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" />
+                  <path d="M17 4V20" stroke="#ef4444" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                   <path d="M8 20V13L13 8H22" stroke="#eab308" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </div>
@@ -5217,7 +5672,7 @@ export default function App() {
                           
                           try {
                             setLoading(true);
-                            const promises = allowedFiles.map(file => compressImageToBase64(file));
+                            const promises = allowedFiles.map(file => compressImageToBase64(file as File));
                             const compressedList = await Promise.all(promises);
                             setSubmitDataSourceImages(prev => [...prev, ...compressedList]);
                             setLoading(false);
@@ -5895,6 +6350,20 @@ export default function App() {
                               />
                             </button>
                           </div>
+
+                          <div className="flex items-center justify-between p-1">
+                            <span className="text-xs font-bold text-slate-700">{t('showReferenceArea')}</span>
+                            <button 
+                              onClick={() => setShowReferenceArea(prev => !prev)}
+                              className={`w-12 h-6 rounded-full transition-all relative flex items-center px-1 ${showReferenceArea ? 'bg-blue-500' : 'bg-slate-300'}`}
+                            >
+                              <motion.div 
+                                layout
+                                animate={{ x: showReferenceArea ? 24 : 0 }}
+                                className="w-4 h-4 bg-white rounded-full shadow-sm"
+                              />
+                            </button>
+                          </div>
                         </div>
 
                         <div className="h-px bg-slate-100 w-full" />
@@ -6152,6 +6621,30 @@ export default function App() {
                     setSelectedSegmentLines(null);
                     setSelectionPos(null);
                     setSelectedSegmentName(null);
+
+                    // Restore original lines visual and stops when closing segment lines or selected stop
+                    if (mapInstance && (window as any).AMap) {
+                      const AMap = (window as any).AMap;
+                      
+                      // Restore allMapStopsRef
+                      allMapStopsRef.current = new Map(roadStopsDataRef.current);
+                      
+                      // Restore stats.stops and marker group overlays
+                      activeRawMarkersRef.current = roadStopMarkersRef.current;
+                      syncStopMarkersToMap(mapInstance, AMap);
+                      
+                      // Draw reference area for the restored state
+                      drawReferenceArea(mapInstance, AMap);
+
+                      // Re-run aggregateAndVisualize with the original search line names!
+                      const originalLines = new Set<string>();
+                      roadStopsDataRef.current.forEach(stop => {
+                        stop.lines.forEach((line: string) => originalLines.add(line));
+                      });
+                      if (originalLines.size > 0) {
+                        aggregateAndVisualize(Array.from(originalLines), mapInstance, AMap);
+                      }
+                    }
                   }}
                   className="absolute top-3 right-3 md:top-5 md:right-5 p-1.5 md:p-2.5 hover:bg-slate-100 rounded-xl md:rounded-2xl transition-colors bg-white shadow-sm border border-slate-100 z-10"
                 >
@@ -6287,15 +6780,12 @@ export default function App() {
                         borderWeight: lineThickness === 'thin' ? 0.5 : 1.5
                       });
                     });
-                    if (markerGroupRef.current) {
-                      markerGroupRef.current.clearOverlays();
-                      markerGroupRef.current.addOverlays(roadStopMarkersRef.current);
-                    }
+                    activeRawMarkersRef.current = roadStopMarkersRef.current;
                     allMapStopsRef.current = new Map(roadStopsDataRef.current);
-                    setStats(prev => ({ 
-                      ...prev, 
-                      stops: roadStopMarkersRef.current.length 
-                    }));
+                    if (mapInstance && (window as any).AMap) {
+                      syncStopMarkersToMap(mapInstance, (window as any).AMap);
+                      drawReferenceArea(mapInstance, (window as any).AMap);
+                    }
                   }}
                   className="absolute top-2.5 right-2.5 md:top-3 md:right-3 p-1.5 md:p-2 hover:bg-slate-100 rounded-xl transition-colors bg-white shadow-sm border border-slate-100 z-10"
                 >
