@@ -3,7 +3,7 @@ import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import pkg from 'pg';
 import * as schema from './schema';
 import dotenv from 'dotenv';
-dotenv.config();
+dotenv.config({ override: true });
 
 const { Pool } = pkg;
 
