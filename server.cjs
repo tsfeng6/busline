@@ -14412,8 +14412,8 @@ var require_text = __commonJS({
     var debug = require_src()("body-parser:text");
     var read = require_read();
     var typeis = require_type_is();
-    module2.exports = text3;
-    function text3(options) {
+    module2.exports = text2;
+    function text2(options) {
       var opts = options || {};
       var defaultCharset = opts.defaultCharset || "utf-8";
       var inflate = opts.inflate !== false;
@@ -26194,11 +26194,11 @@ var require_utils5 = __commonJS({
       const outer = await md5(Buffer.concat([Buffer.from(inner), salt]));
       return "md5" + outer;
     }
-    async function sha256(text3) {
-      return await subtleCrypto.digest("SHA-256", text3);
+    async function sha256(text2) {
+      return await subtleCrypto.digest("SHA-256", text2);
     }
-    async function hashByName(hashName, text3) {
-      return await subtleCrypto.digest(hashName, text3);
+    async function hashByName(hashName, text2) {
+      return await subtleCrypto.digest(hashName, text2);
     }
     async function hmacSha256(keyBuffer, msg) {
       const key = await subtleCrypto.importKey("raw", keyBuffer, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -26419,21 +26419,21 @@ var require_sasl = __commonJS({
         throw new Error("SASL: SCRAM-SERVER-FINAL-MESSAGE: server signature does not match");
       }
     }
-    function isPrintableChars(text3) {
-      if (typeof text3 !== "string") {
+    function isPrintableChars(text2) {
+      if (typeof text2 !== "string") {
         throw new TypeError("SASL: text must be a string");
       }
-      return text3.split("").map((_, i) => text3.charCodeAt(i)).every((c) => c >= 33 && c <= 43 || c >= 45 && c <= 126);
+      return text2.split("").map((_, i) => text2.charCodeAt(i)).every((c) => c >= 33 && c <= 43 || c >= 45 && c <= 126);
     }
-    function isBase64(text3) {
-      return /^(?:[a-zA-Z0-9+/]{4})*(?:[a-zA-Z0-9+/]{2}==|[a-zA-Z0-9+/]{3}=)?$/.test(text3);
+    function isBase64(text2) {
+      return /^(?:[a-zA-Z0-9+/]{4})*(?:[a-zA-Z0-9+/]{2}==|[a-zA-Z0-9+/]{3}=)?$/.test(text2);
     }
-    function parseAttributePairs(text3) {
-      if (typeof text3 !== "string") {
+    function parseAttributePairs(text2) {
+      if (typeof text2 !== "string") {
         throw new TypeError("SASL: attribute pairs text must be a string");
       }
       return new Map(
-        text3.split(",").map((attrValue) => {
+        text2.split(",").map((attrValue) => {
           if (!/^.=/.test(attrValue)) {
             throw new Error("SASL: Invalid attribute pair entry");
           }
@@ -27297,9 +27297,9 @@ var require_messages = __commonJS({
     };
     exports2.ReadyForQueryMessage = ReadyForQueryMessage;
     var CommandCompleteMessage = class {
-      constructor(length, text3) {
+      constructor(length, text2) {
         this.length = length;
-        this.text = text3;
+        this.text = text2;
         this.name = "commandComplete";
       }
     };
@@ -27448,8 +27448,8 @@ var require_serializer = __commonJS({
         /* code.startup */
       );
     };
-    var query = (text3) => {
-      return writer.addCString(text3).flush(
+    var query = (text2) => {
+      return writer.addCString(text2).flush(
         81
         /* code.query */
       );
@@ -27569,8 +27569,8 @@ var require_serializer = __commonJS({
       return msg.name ? cstringMessage(68, `${msg.type}${msg.name || ""}`) : msg.type === "P" ? emptyDescribePortal : emptyDescribeStatement;
     };
     var close = (msg) => {
-      const text3 = `${msg.type}${msg.name || ""}`;
-      return cstringMessage(67, text3);
+      const text2 = `${msg.type}${msg.name || ""}`;
+      return cstringMessage(67, text2);
     };
     var copyData = (chunk) => {
       return writer.add(chunk).flush(
@@ -27842,8 +27842,8 @@ var require_parser = __commonJS({
       return new messages_1.ReadyForQueryMessage(LATEINIT_LENGTH, status);
     };
     var parseCommandCompleteMessage = (reader) => {
-      const text3 = reader.cstring();
-      return new messages_1.CommandCompleteMessage(LATEINIT_LENGTH, text3);
+      const text2 = reader.cstring();
+      return new messages_1.CommandCompleteMessage(LATEINIT_LENGTH, text2);
     };
     var parseCopyData = (reader, length) => {
       const chunk = reader.bytes(length - 4);
@@ -28210,8 +28210,8 @@ var require_connection = __commonJS({
         }
         return this.stream.write(buffer);
       }
-      query(text3) {
-        this._send(serialize.query(text3));
+      query(text2) {
+        this._send(serialize.query(text2));
       }
       // send parse message
       parse(query) {
@@ -29548,9 +29548,9 @@ var require_pg_pool = __commonJS({
         this._idle.push(new IdleItem(client, idleListener, tid));
         this._pulseQueue();
       }
-      query(text3, values, cb) {
-        if (typeof text3 === "function") {
-          const response2 = promisify(this.Promise, text3);
+      query(text2, values, cb) {
+        if (typeof text2 === "function") {
+          const response2 = promisify(this.Promise, text2);
           setImmediate(function() {
             return response2.callback(new Error("Passing a function as the first parameter to pool.query is not supported"));
           });
@@ -29578,7 +29578,7 @@ var require_pg_pool = __commonJS({
           client.once("error", onError);
           this.log("dispatching query");
           try {
-            client.query(text3, values, (err2, res) => {
+            client.query(text2, values, (err2, res) => {
               this.log("query dispatched");
               client.removeListener("error", onError);
               if (clientReleased) {
@@ -30130,8 +30130,8 @@ var require_main = __commonJS({
     function supportsAnsi() {
       return process.stdout.isTTY;
     }
-    function dim(text3) {
-      return supportsAnsi() ? `\x1B[2m${text3}\x1B[0m` : text3;
+    function dim(text2) {
+      return supportsAnsi() ? `\x1B[2m${text2}\x1B[0m` : text2;
     }
     var LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/mg;
     function parse(src) {
@@ -37437,6 +37437,9 @@ var submissions = pgTable("submissions", {
   via_stops: json("via_stops").default([]),
   status: varchar("status", { length: 50 }).notNull().default("pending"),
   // 'pending', 'approved', 'rejected'
+  dataSourceText: text("data_source_text"),
+  dataSourceImage: text("data_source_image"),
+  rejectReason: text("reject_reason"),
   timestamp: timestamp("timestamp").notNull().defaultNow()
 });
 
@@ -37459,7 +37462,7 @@ async function runMigration() {
 // server.ts
 async function startServer() {
   const app = (0, import_express.default)();
-  const PORT = process.env.PORT || 3e3;
+  const PORT = Number(process.env.PORT) || 3e3;
   try {
     await runMigration();
   } catch (e) {
@@ -37473,7 +37476,7 @@ async function startServer() {
   const sanitizeId = (id) => id.replace(/[^a-zA-Z0-9_\-]/g, "");
   app.post("/api/submissions/submit", async (req, res) => {
     try {
-      const { id, name, creatorNickname, city, district, path: linePath, via_stops, status, timestamp: timestamp2 } = req.body;
+      const { id, name, creatorNickname, city, district, path: linePath, via_stops, status, timestamp: timestamp2, dataSourceText, dataSourceImage } = req.body;
       if (!id || !name || !creatorNickname || !city) {
         return res.status(400).json({ error: "Missing required fields" });
       }
@@ -37488,6 +37491,8 @@ async function startServer() {
           path: linePath || [],
           via_stops: via_stops || [],
           status: status || "pending",
+          dataSourceText: dataSourceText || null,
+          dataSourceImage: dataSourceImage || null,
           timestamp: new Date(timestamp2 || Date.now())
         }).onConflictDoUpdate({
           target: submissions.id,
@@ -37499,6 +37504,8 @@ async function startServer() {
             path: linePath || [],
             via_stops: via_stops || [],
             status: status || "pending",
+            dataSourceText: dataSourceText || null,
+            dataSourceImage: dataSourceImage || null,
             timestamp: new Date(timestamp2 || Date.now())
           }
         });
@@ -37524,9 +37531,16 @@ async function startServer() {
       const ids = idsStr.split(",").map(sanitizeId);
       const statuses = {};
       if (ids.length > 0) {
-        const results = await db.select({ id: submissions.id, status: submissions.status }).from(submissions).where(inArray(submissions.id, ids));
+        const results = await db.select({
+          id: submissions.id,
+          status: submissions.status,
+          rejectReason: submissions.rejectReason
+        }).from(submissions).where(inArray(submissions.id, ids));
         results.forEach((row) => {
           statuses[row.id] = row.status;
+          if (row.rejectReason) {
+            statuses[row.id + "_reason"] = row.rejectReason;
+          }
         });
       }
       ids.forEach((id) => {
@@ -37576,7 +37590,11 @@ async function startServer() {
       const { id } = req.body;
       if (!id) return res.status(400).json({ error: "Missing Id" });
       const fileId = sanitizeId(id);
-      await db.update(submissions).set({ status: "approved" }).where(eq(submissions.id, fileId));
+      await db.update(submissions).set({
+        status: "approved",
+        dataSourceText: null,
+        dataSourceImage: null
+      }).where(eq(submissions.id, fileId));
       res.json({ success: true, message: "Submission approved and published" });
     } catch (err) {
       console.error("Approve error:", err);
@@ -37586,10 +37604,15 @@ async function startServer() {
   app.post("/api/admin/reject", async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: "DB not setup" });
-      const { id } = req.body;
+      const { id, rejectReason } = req.body;
       if (!id) return res.status(400).json({ error: "Missing Id" });
       const fileId = sanitizeId(id);
-      await db.update(submissions).set({ status: "rejected" }).where(eq(submissions.id, fileId));
+      await db.update(submissions).set({
+        status: "rejected",
+        rejectReason: rejectReason || null,
+        dataSourceText: null,
+        dataSourceImage: null
+      }).where(eq(submissions.id, fileId));
       res.json({ success: true, message: "Submission rejected" });
     } catch (err) {
       console.error("Reject error:", err);
