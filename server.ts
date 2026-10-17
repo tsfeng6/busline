@@ -2,33 +2,116 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { db, runMigration } from './src/db/index';
-import { submissions } from './src/db/schema';
+import { submissions, appSettings } from './src/db/schema';
 import { eq, inArray, desc } from 'drizzle-orm';
 
 async function startServer() {
   const app = express();
   
   // Self-healing Port Selection:
-  // On Zeabur, we must bind to process.env.PORT so the proxy can reach our container.
-  // On AI Studio, the internal proxy strictly expects port 3000 even if process.env.PORT is injected as 8080.
-  let PORT = Number(process.env.PORT) || 3000;
-  if (process.env.APP_URL && (process.env.APP_URL.includes('run.app') || process.env.APP_URL.includes('aistudio'))) {
-    PORT = 3000;
+  // On AI Studio, the dev server proxy strictly expects port 3000.
+  // In production outside AI Studio, bind to process.env.PORT if specified.
+  let PORT = 3000;
+  if (process.env.NODE_ENV === 'production' && process.env.PORT && !process.env.APP_URL?.includes('run.app') && !process.env.APP_URL?.includes('aistudio')) {
+    PORT = Number(process.env.PORT);
   }
 
-  try {
-    await runMigration();
-  } catch (e) {
-    console.error('Migration failed:', e);
-  }
+  // Run migration in background without blocking server startup / port binding
+  runMigration().catch((e) => {
+    console.warn('Database migration skipped or connection timed out:', e?.message || e);
+  });
 
   // Middleware
   app.use(cors());
-  app.use(express.json());
+  app.use(express.json({ limit: '10mb' })); // Increase limit for Base64 image payload
+
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'buslineadmin';
+
+  // Server-side authentication middleware
+  const verifyAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const headerPass = req.headers['x-admin-password'] || req.headers['authorization'];
+    let passed = '';
+    if (typeof headerPass === 'string') {
+      passed = headerPass.replace('Bearer ', '').trim();
+    }
+    
+    if (passed !== ADMIN_PASSWORD) {
+      return res.status(401).json({ error: 'Unauthorized: Admin authorization required.' });
+    }
+    next();
+  };
+
+  // API: Validate admin password securely on the server
+  app.post('/api/admin/verify', (req, res) => {
+    const { password } = req.body;
+    if (password === ADMIN_PASSWORD) {
+      res.json({ success: true });
+    } else {
+      res.status(401).json({ error: 'Incorrect admin password.' });
+    }
+  });
 
   // API: Health check
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', storage: 'postgresql' });
+  });
+
+  // GET a setting
+  app.get('/api/settings/wechat_qr', async (req, res) => {
+    try {
+      if (!process.env.DATABASE_URL) {
+        return res.json({ key: 'wechat_qr', value: '', updatedAt: Date.now() });
+      }
+      const result = await db.select()
+        .from(appSettings)
+        .where(eq(appSettings.key, 'wechat_qr'))
+        .limit(1);
+
+      if (result.length > 0) {
+        res.json({
+          key: result[0].key,
+          value: result[0].value,
+          updatedAt: result[0].updatedAt.getTime(),
+        });
+      } else {
+        res.json({ key: 'wechat_qr', value: '', updatedAt: Date.now() });
+      }
+    } catch (err: any) {
+      console.warn('Get setting error (fallback to default):', err?.message || err);
+      res.json({ key: 'wechat_qr', value: '', updatedAt: Date.now() });
+    }
+  });
+
+  // UPDATE a setting (requires admin password verification)
+  app.post('/api/settings/wechat_qr', async (req, res) => {
+    try {
+      const { value, password } = req.body;
+      if (!value) {
+        return res.status(400).json({ error: 'Value is required' });
+      }
+
+      // Verify admin password
+      if (password !== ADMIN_PASSWORD) {
+        return res.status(403).json({ error: 'Unauthorized: Admin password is incorrect.' });
+      }
+
+      await db.insert(appSettings).values({
+        key: 'wechat_qr',
+        value,
+        updatedAt: new Date(),
+      }).onConflictDoUpdate({
+        target: appSettings.key,
+        set: {
+          value,
+          updatedAt: new Date(),
+        }
+      });
+
+      res.json({ success: true, message: 'WeChat QR code updated successfully' });
+    } catch (err: any) {
+      console.error('Update setting error:', err);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Helper to sanitize filename
@@ -147,13 +230,13 @@ async function startServer() {
 
       res.json(mappedLines);
     } catch (err: any) {
-      console.error("Approved list error:", err);
-      res.status(500).json({ error: err.message });
+      console.warn("Approved list error (fallback to empty list):", err?.message || err);
+      res.json([]);
     }
   });
 
   // ADMIN: Get all pending submissions
-  app.get('/api/admin/pending', async (req, res) => {
+  app.get('/api/admin/pending', verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.json([]);
       const lines = await db.select()
@@ -175,7 +258,7 @@ async function startServer() {
   });
 
   // ADMIN: Approve a submission
-  app.post('/api/admin/approve', async (req, res) => {
+  app.post('/api/admin/approve', verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: 'DB not setup' });
       const { id } = req.body;
@@ -199,7 +282,7 @@ async function startServer() {
   });
 
   // ADMIN: Reject a submission
-  app.post('/api/admin/reject', async (req, res) => {
+  app.post('/api/admin/reject', verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: 'DB not setup' });
       const { id, rejectReason } = req.body;
@@ -224,7 +307,7 @@ async function startServer() {
   });
 
   // ADMIN: Edit an approved submission name
-  app.post('/api/admin/edit-approved', async (req, res) => {
+  app.post('/api/admin/edit-approved', verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: 'DB not setup' });
       const { id, name } = req.body;
@@ -244,7 +327,7 @@ async function startServer() {
   });
 
   // ADMIN: Delete an approved submission
-  app.post('/api/admin/delete-approved', async (req, res) => {
+  app.post('/api/admin/delete-approved', verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: 'DB not setup' });
       const { id } = req.body;

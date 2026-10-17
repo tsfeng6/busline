@@ -491,8 +491,7 @@ export function viteApiPlugin() {
           }
 
           // Unhandled route under /api/
-          res.statusCode = 404;
-          res.end(JSON.stringify({ error: 'Not Found' }));
+          return next();
         } catch (e: any) {
           console.error('[Vite Proxy Plugin Error]:', e);
           res.statusCode = 500;

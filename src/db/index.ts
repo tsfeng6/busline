@@ -10,6 +10,7 @@ const { Pool } = pkg;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  connectionTimeoutMillis: 3000,
 });
 
 export const db = drizzle(pool, { schema });
@@ -30,6 +31,12 @@ export async function runMigration() {
         ALTER TABLE "submissions" ADD COLUMN IF NOT EXISTS "data_source_text" text;
         ALTER TABLE "submissions" ADD COLUMN IF NOT EXISTS "data_source_image" text;
         ALTER TABLE "submissions" ADD COLUMN IF NOT EXISTS "reject_reason" text;
+        
+        CREATE TABLE IF NOT EXISTS "app_settings" (
+          "key" varchar(255) PRIMARY KEY,
+          "value" text NOT NULL,
+          "updated_at" timestamp NOT NULL DEFAULT now()
+        );
       `);
       console.log('Database self-healing checks completed successfully.');
     } catch (sqlErr: any) {

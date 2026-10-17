@@ -20,10 +20,10 @@
         "./*"
       ]
     },
-    "allowImportingTsExtensions": true,
     "noEmit": true,
     "types": [
       "vite/client"
     ]
-  }
+  },
+  "include": ["src", "server.ts", "vite-api-plugin.ts", "vite.config.ts"]
 }
