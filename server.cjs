@@ -15288,7 +15288,7 @@ var require_shams = __commonJS({
         return true;
       }
       var obj = {};
-      var sym = /* @__PURE__ */ Symbol("test");
+      var sym = Symbol("test");
       var symObj = Object(sym);
       if (typeof sym === "string") {
         return false;
@@ -15347,7 +15347,7 @@ var require_has_symbols = __commonJS({
       if (typeof origSymbol("foo") !== "symbol") {
         return false;
       }
-      if (typeof /* @__PURE__ */ Symbol("bar") !== "symbol") {
+      if (typeof Symbol("bar") !== "symbol") {
         return false;
       }
       return hasSymbolSham();
@@ -28276,8 +28276,8 @@ var require_split2 = __commonJS({
     "use strict";
     var { Transform } = require("stream");
     var { StringDecoder } = require("string_decoder");
-    var kLast = /* @__PURE__ */ Symbol("last");
-    var kDecoder = /* @__PURE__ */ Symbol("decoder");
+    var kLast = Symbol("last");
+    var kDecoder = Symbol("decoder");
     function transform(chunk, enc, cb) {
       let list;
       if (this.overflow) {
@@ -30101,6 +30101,74 @@ var require_lib6 = __commonJS({
   }
 });
 
+// node_modules/dotenv/package.json
+var require_package = __commonJS({
+  "node_modules/dotenv/package.json"(exports2, module2) {
+    module2.exports = {
+      name: "dotenv",
+      version: "16.6.1",
+      description: "Loads environment variables from .env file",
+      main: "lib/main.js",
+      types: "lib/main.d.ts",
+      exports: {
+        ".": {
+          types: "./lib/main.d.ts",
+          require: "./lib/main.js",
+          default: "./lib/main.js"
+        },
+        "./config": "./config.js",
+        "./config.js": "./config.js",
+        "./lib/env-options": "./lib/env-options.js",
+        "./lib/env-options.js": "./lib/env-options.js",
+        "./lib/cli-options": "./lib/cli-options.js",
+        "./lib/cli-options.js": "./lib/cli-options.js",
+        "./package.json": "./package.json"
+      },
+      scripts: {
+        "dts-check": "tsc --project tests/types/tsconfig.json",
+        lint: "standard",
+        pretest: "npm run lint && npm run dts-check",
+        test: "tap run --allow-empty-coverage --disable-coverage --timeout=60000",
+        "test:coverage": "tap run --show-full-coverage --timeout=60000 --coverage-report=text --coverage-report=lcov",
+        prerelease: "npm test",
+        release: "standard-version"
+      },
+      repository: {
+        type: "git",
+        url: "git://github.com/motdotla/dotenv.git"
+      },
+      homepage: "https://github.com/motdotla/dotenv#readme",
+      funding: "https://dotenvx.com",
+      keywords: [
+        "dotenv",
+        "env",
+        ".env",
+        "environment",
+        "variables",
+        "config",
+        "settings"
+      ],
+      readmeFilename: "README.md",
+      license: "BSD-2-Clause",
+      devDependencies: {
+        "@types/node": "^18.11.3",
+        decache: "^4.6.2",
+        sinon: "^14.0.1",
+        standard: "^17.0.0",
+        "standard-version": "^9.5.0",
+        tap: "^19.2.0",
+        typescript: "^4.8.4"
+      },
+      engines: {
+        node: ">=12"
+      },
+      browser: {
+        fs: false
+      }
+    };
+  }
+});
+
 // node_modules/dotenv/lib/main.js
 var require_main = __commonJS({
   "node_modules/dotenv/lib/main.js"(exports2, module2) {
@@ -30108,31 +30176,8 @@ var require_main = __commonJS({
     var path2 = require("path");
     var os = require("os");
     var crypto3 = require("crypto");
-    var TIPS = [
-      "\u25C8 encrypted .env [www.dotenvx.com]",
-      "\u25C8 secrets for agents [www.dotenvx.com]",
-      "\u2301 auth for agents [www.vestauth.com]",
-      "\u2318 custom filepath { path: '/custom/path/.env' }",
-      "\u2318 enable debugging { debug: true }",
-      "\u2318 override existing { override: true }",
-      "\u2318 suppress logs { quiet: true }",
-      "\u2318 multiple files { path: ['.env.local', '.env'] }"
-    ];
-    function _getRandomTip() {
-      return TIPS[Math.floor(Math.random() * TIPS.length)];
-    }
-    function parseBoolean(value) {
-      if (typeof value === "string") {
-        return !["false", "0", "no", "off", ""].includes(value.toLowerCase());
-      }
-      return Boolean(value);
-    }
-    function supportsAnsi() {
-      return process.stdout.isTTY;
-    }
-    function dim(text2) {
-      return supportsAnsi() ? `\x1B[2m${text2}\x1B[0m` : text2;
-    }
+    var packageJson = require_package();
+    var version2 = packageJson.version;
     var LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/mg;
     function parse(src) {
       const obj = {};
@@ -30181,13 +30226,13 @@ var require_main = __commonJS({
       return DotenvModule.parse(decrypted);
     }
     function _warn(message) {
-      console.error(`\u26A0 ${message}`);
+      console.log(`[dotenv@${version2}][WARN] ${message}`);
     }
     function _debug(message) {
-      console.log(`\u2506 ${message}`);
+      console.log(`[dotenv@${version2}][DEBUG] ${message}`);
     }
     function _log(message) {
-      console.log(`\u25C7 ${message}`);
+      console.log(`[dotenv@${version2}] ${message}`);
     }
     function _dotenvKey(options) {
       if (options && options.DOTENV_KEY && options.DOTENV_KEY.length > 0) {
@@ -30255,10 +30300,10 @@ var require_main = __commonJS({
       return envPath[0] === "~" ? path2.join(os.homedir(), envPath.slice(1)) : envPath;
     }
     function _configVault(options) {
-      const debug = parseBoolean(process.env.DOTENV_CONFIG_DEBUG || options && options.debug);
-      const quiet = parseBoolean(process.env.DOTENV_CONFIG_QUIET || options && options.quiet);
+      const debug = Boolean(options && options.debug);
+      const quiet = options && "quiet" in options ? options.quiet : true;
       if (debug || !quiet) {
-        _log("loading env from encrypted .env.vault");
+        _log("Loading env from encrypted .env.vault");
       }
       const parsed = DotenvModule._parseVault(options);
       let processEnv = process.env;
@@ -30271,17 +30316,13 @@ var require_main = __commonJS({
     function configDotenv(options) {
       const dotenvPath = path2.resolve(process.cwd(), ".env");
       let encoding = "utf8";
-      let processEnv = process.env;
-      if (options && options.processEnv != null) {
-        processEnv = options.processEnv;
-      }
-      let debug = parseBoolean(processEnv.DOTENV_CONFIG_DEBUG || options && options.debug);
-      let quiet = parseBoolean(processEnv.DOTENV_CONFIG_QUIET || options && options.quiet);
+      const debug = Boolean(options && options.debug);
+      const quiet = options && "quiet" in options ? options.quiet : true;
       if (options && options.encoding) {
         encoding = options.encoding;
       } else {
         if (debug) {
-          _debug("no encoding is specified (UTF-8 is used by default)");
+          _debug("No encoding is specified. UTF-8 is used by default");
         }
       }
       let optionPaths = [dotenvPath];
@@ -30303,16 +30344,18 @@ var require_main = __commonJS({
           DotenvModule.populate(parsedAll, parsed, options);
         } catch (e) {
           if (debug) {
-            _debug(`failed to load ${path3} ${e.message}`);
+            _debug(`Failed to load ${path3} ${e.message}`);
           }
           lastError = e;
         }
       }
-      const populated = DotenvModule.populate(processEnv, parsedAll, options);
-      debug = parseBoolean(processEnv.DOTENV_CONFIG_DEBUG || debug);
-      quiet = parseBoolean(processEnv.DOTENV_CONFIG_QUIET || quiet);
+      let processEnv = process.env;
+      if (options && options.processEnv != null) {
+        processEnv = options.processEnv;
+      }
+      DotenvModule.populate(processEnv, parsedAll, options);
       if (debug || !quiet) {
-        const keysCount = Object.keys(populated).length;
+        const keysCount = Object.keys(parsedAll).length;
         const shortPaths = [];
         for (const filePath of optionPaths) {
           try {
@@ -30320,12 +30363,12 @@ var require_main = __commonJS({
             shortPaths.push(relative);
           } catch (e) {
             if (debug) {
-              _debug(`failed to load ${filePath} ${e.message}`);
+              _debug(`Failed to load ${filePath} ${e.message}`);
             }
             lastError = e;
           }
         }
-        _log(`injected env (${keysCount}) from ${shortPaths.join(",")} ${dim(`// tip: ${_getRandomTip()}`)}`);
+        _log(`injecting env (${keysCount}) from ${shortPaths.join(",")}`);
       }
       if (lastError) {
         return { parsed: parsedAll, error: lastError };
@@ -30339,7 +30382,7 @@ var require_main = __commonJS({
       }
       const vaultPath = _vaultPath(options);
       if (!vaultPath) {
-        _warn(`you set DOTENV_KEY but you are missing a .env.vault file at ${vaultPath}`);
+        _warn(`You set DOTENV_KEY but you are missing a .env.vault file at ${vaultPath}. Did you forget to build it?`);
         return DotenvModule.configDotenv(options);
       }
       return DotenvModule._configVault(options);
@@ -30374,7 +30417,6 @@ var require_main = __commonJS({
     function populate(processEnv, parsed, options = {}) {
       const debug = Boolean(options && options.debug);
       const override = Boolean(options && options.override);
-      const populated = {};
       if (typeof parsed !== "object") {
         const err = new Error("OBJECT_REQUIRED: Please check the processEnv argument being passed to populate");
         err.code = "OBJECT_REQUIRED";
@@ -30384,7 +30426,6 @@ var require_main = __commonJS({
         if (Object.prototype.hasOwnProperty.call(processEnv, key)) {
           if (override === true) {
             processEnv[key] = parsed[key];
-            populated[key] = parsed[key];
           }
           if (debug) {
             if (override === true) {
@@ -30395,10 +30436,8 @@ var require_main = __commonJS({
           }
         } else {
           processEnv[key] = parsed[key];
-          populated[key] = parsed[key];
         }
       }
-      return populated;
     }
     var DotenvModule = {
       configDotenv,
@@ -30441,7 +30480,8 @@ var defaults = import_lib.default.defaults;
 var esm_default = import_lib.default;
 
 // node_modules/drizzle-orm/entity.js
-var entityKind = /* @__PURE__ */ Symbol.for("drizzle:entityKind");
+var entityKind = Symbol.for("drizzle:entityKind");
+var hasOwnEntityKind = Symbol.for("drizzle:hasOwnEntityKind");
 function is(value, type) {
   if (!value || typeof value !== "object") {
     return false;
@@ -30676,7 +30716,7 @@ var ColumnBuilder = class {
 };
 
 // node_modules/drizzle-orm/table.utils.js
-var TableName = /* @__PURE__ */ Symbol.for("drizzle:Name");
+var TableName = Symbol.for("drizzle:Name");
 
 // node_modules/drizzle-orm/pg-core/foreign-keys.js
 var ForeignKeyBuilder = class {
@@ -31077,7 +31117,7 @@ var PgEnumObjectColumn = class extends PgColumn {
     return this.enum.enumName;
   }
 };
-var isPgEnumSym = /* @__PURE__ */ Symbol.for("drizzle:isPgEnum");
+var isPgEnumSym = Symbol.for("drizzle:isPgEnum");
 function isPgEnum(obj) {
   return !!obj && typeof obj === "function" && isPgEnumSym in obj && obj[isPgEnumSym] === true;
 }
@@ -31168,17 +31208,17 @@ var tracer = {
 };
 
 // node_modules/drizzle-orm/view-common.js
-var ViewBaseConfig = /* @__PURE__ */ Symbol.for("drizzle:ViewBaseConfig");
+var ViewBaseConfig = Symbol.for("drizzle:ViewBaseConfig");
 
 // node_modules/drizzle-orm/table.js
-var Schema = /* @__PURE__ */ Symbol.for("drizzle:Schema");
-var Columns = /* @__PURE__ */ Symbol.for("drizzle:Columns");
-var ExtraConfigColumns = /* @__PURE__ */ Symbol.for("drizzle:ExtraConfigColumns");
-var OriginalName = /* @__PURE__ */ Symbol.for("drizzle:OriginalName");
-var BaseName = /* @__PURE__ */ Symbol.for("drizzle:BaseName");
-var IsAlias = /* @__PURE__ */ Symbol.for("drizzle:IsAlias");
-var ExtraConfigBuilder = /* @__PURE__ */ Symbol.for("drizzle:ExtraConfigBuilder");
-var IsDrizzleTable = /* @__PURE__ */ Symbol.for("drizzle:IsDrizzleTable");
+var Schema = Symbol.for("drizzle:Schema");
+var Columns = Symbol.for("drizzle:Columns");
+var ExtraConfigColumns = Symbol.for("drizzle:ExtraConfigColumns");
+var OriginalName = Symbol.for("drizzle:OriginalName");
+var BaseName = Symbol.for("drizzle:BaseName");
+var IsAlias = Symbol.for("drizzle:IsAlias");
+var ExtraConfigBuilder = Symbol.for("drizzle:ExtraConfigBuilder");
+var IsDrizzleTable = Symbol.for("drizzle:IsDrizzleTable");
 var Table = class {
   static [entityKind] = "Table";
   /** @internal */
@@ -31594,7 +31634,7 @@ function fillPlaceholders(params, values) {
     return p;
   });
 }
-var IsDrizzleView = /* @__PURE__ */ Symbol.for("drizzle:IsDrizzleView");
+var IsDrizzleView = Symbol.for("drizzle:IsDrizzleView");
 var View = class {
   static [entityKind] = "View";
   /** @internal */
@@ -33298,8 +33338,8 @@ function getPgColumnBuilders() {
 }
 
 // node_modules/drizzle-orm/pg-core/table.js
-var InlineForeignKeys = /* @__PURE__ */ Symbol.for("drizzle:PgInlineForeignKeys");
-var EnableRLS = /* @__PURE__ */ Symbol.for("drizzle:EnableRLS");
+var InlineForeignKeys = Symbol.for("drizzle:PgInlineForeignKeys");
+var EnableRLS = Symbol.for("drizzle:EnableRLS");
 var PgTable = class extends Table {
   static [entityKind] = "PgTable";
   /** @internal */
@@ -37425,22 +37465,28 @@ async function migrate(db2, config) {
 // src/db/schema.ts
 var schema_exports = {};
 __export(schema_exports, {
+  appSettings: () => appSettings,
   submissions: () => submissions
 });
 var submissions = pgTable("submissions", {
   id: varchar("id", { length: 255 }).primaryKey(),
   city: varchar("city", { length: 255 }).notNull(),
   area: varchar("area", { length: 255 }).notNull(),
+  // district
   name: varchar("name", { length: 255 }).notNull(),
   creatorNickname: varchar("creator_nickname", { length: 255 }).notNull(),
-  path: json("path").default([]),
-  via_stops: json("via_stops").default([]),
-  status: varchar("status", { length: 50 }).notNull().default("pending"),
-  // 'pending', 'approved', 'rejected'
+  path: json("path").$type().default([]),
+  via_stops: json("via_stops").$type().default([]),
+  status: varchar("status", { length: 50 }).default("pending").notNull(),
   dataSourceText: text("data_source_text"),
   dataSourceImage: text("data_source_image"),
   rejectReason: text("reject_reason"),
-  timestamp: timestamp("timestamp").notNull().defaultNow()
+  timestamp: timestamp("timestamp").defaultNow().notNull()
+});
+var appSettings = pgTable("app_settings", {
+  key: varchar("key", { length: 255 }).primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull()
 });
 
 // src/db/index.ts
@@ -37448,7 +37494,8 @@ var import_dotenv = __toESM(require_main(), 1);
 import_dotenv.default.config({ override: true });
 var { Pool: Pool3 } = esm_default;
 var pool = new Pool3({
-  connectionString: process.env.DATABASE_URL
+  connectionString: process.env.DATABASE_URL,
+  connectionTimeoutMillis: 3e3
 });
 var db = drizzle(pool, { schema: schema_exports });
 async function runMigration() {
@@ -37466,6 +37513,12 @@ async function runMigration() {
         ALTER TABLE "submissions" ADD COLUMN IF NOT EXISTS "data_source_text" text;
         ALTER TABLE "submissions" ADD COLUMN IF NOT EXISTS "data_source_image" text;
         ALTER TABLE "submissions" ADD COLUMN IF NOT EXISTS "reject_reason" text;
+        
+        CREATE TABLE IF NOT EXISTS "app_settings" (
+          "key" varchar(255) PRIMARY KEY,
+          "value" text NOT NULL,
+          "updated_at" timestamp NOT NULL DEFAULT now()
+        );
       `);
       console.log("Database self-healing checks completed successfully.");
     } catch (sqlErr) {
@@ -37477,19 +37530,83 @@ async function runMigration() {
 // server.ts
 async function startServer() {
   const app = (0, import_express.default)();
-  let PORT = Number(process.env.PORT) || 3e3;
-  if (process.env.APP_URL && (process.env.APP_URL.includes("run.app") || process.env.APP_URL.includes("aistudio"))) {
-    PORT = 3e3;
+  let PORT = 3e3;
+  if (process.env.NODE_ENV === "production" && process.env.PORT && !process.env.APP_URL?.includes("run.app") && !process.env.APP_URL?.includes("aistudio")) {
+    PORT = Number(process.env.PORT);
   }
-  try {
-    await runMigration();
-  } catch (e) {
-    console.error("Migration failed:", e);
-  }
+  runMigration().catch((e) => {
+    console.warn("Database migration skipped or connection timed out:", e?.message || e);
+  });
   app.use((0, import_cors.default)());
-  app.use(import_express.default.json());
+  app.use(import_express.default.json({ limit: "10mb" }));
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "buslineadmin";
+  const verifyAdmin = (req, res, next) => {
+    const headerPass = req.headers["x-admin-password"] || req.headers["authorization"];
+    let passed = "";
+    if (typeof headerPass === "string") {
+      passed = headerPass.replace("Bearer ", "").trim();
+    }
+    if (passed !== ADMIN_PASSWORD) {
+      return res.status(401).json({ error: "Unauthorized: Admin authorization required." });
+    }
+    next();
+  };
+  app.post("/api/admin/verify", (req, res) => {
+    const { password } = req.body;
+    if (password === ADMIN_PASSWORD) {
+      res.json({ success: true });
+    } else {
+      res.status(401).json({ error: "Incorrect admin password." });
+    }
+  });
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok", storage: "postgresql" });
+  });
+  app.get("/api/settings/wechat_qr", async (req, res) => {
+    try {
+      if (!process.env.DATABASE_URL) {
+        return res.json({ key: "wechat_qr", value: "", updatedAt: Date.now() });
+      }
+      const result = await db.select().from(appSettings).where(eq(appSettings.key, "wechat_qr")).limit(1);
+      if (result.length > 0) {
+        res.json({
+          key: result[0].key,
+          value: result[0].value,
+          updatedAt: result[0].updatedAt.getTime()
+        });
+      } else {
+        res.json({ key: "wechat_qr", value: "", updatedAt: Date.now() });
+      }
+    } catch (err) {
+      console.warn("Get setting error (fallback to default):", err?.message || err);
+      res.json({ key: "wechat_qr", value: "", updatedAt: Date.now() });
+    }
+  });
+  app.post("/api/settings/wechat_qr", async (req, res) => {
+    try {
+      const { value, password } = req.body;
+      if (!value) {
+        return res.status(400).json({ error: "Value is required" });
+      }
+      if (password !== ADMIN_PASSWORD) {
+        return res.status(403).json({ error: "Unauthorized: Admin password is incorrect." });
+      }
+      await db.insert(appSettings).values({
+        key: "wechat_qr",
+        value,
+        updatedAt: /* @__PURE__ */ new Date()
+      }).onConflictDoUpdate({
+        target: appSettings.key,
+        set: {
+          value,
+          updatedAt: /* @__PURE__ */ new Date()
+        }
+      });
+      res.json({ success: true, message: "WeChat QR code updated successfully" });
+    } catch (err) {
+      console.error("Update setting error:", err);
+      res.status(500).json({ error: err.message });
+    }
   });
   const sanitizeId = (id) => id.replace(/[^a-zA-Z0-9_\-]/g, "");
   app.post("/api/submissions/submit", async (req, res) => {
@@ -37583,11 +37700,11 @@ async function startServer() {
       }));
       res.json(mappedLines);
     } catch (err) {
-      console.error("Approved list error:", err);
-      res.status(500).json({ error: err.message });
+      console.warn("Approved list error (fallback to empty list):", err?.message || err);
+      res.json([]);
     }
   });
-  app.get("/api/admin/pending", async (req, res) => {
+  app.get("/api/admin/pending", verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.json([]);
       const lines = await db.select().from(submissions).where(eq(submissions.status, "pending")).orderBy(desc(submissions.timestamp));
@@ -37602,7 +37719,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post("/api/admin/approve", async (req, res) => {
+  app.post("/api/admin/approve", verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: "DB not setup" });
       const { id } = req.body;
@@ -37619,7 +37736,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post("/api/admin/reject", async (req, res) => {
+  app.post("/api/admin/reject", verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: "DB not setup" });
       const { id, rejectReason } = req.body;
@@ -37637,7 +37754,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post("/api/admin/edit-approved", async (req, res) => {
+  app.post("/api/admin/edit-approved", verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: "DB not setup" });
       const { id, name } = req.body;
@@ -37650,7 +37767,7 @@ async function startServer() {
       res.status(500).json({ error: err.message });
     }
   });
-  app.post("/api/admin/delete-approved", async (req, res) => {
+  app.post("/api/admin/delete-approved", verifyAdmin, async (req, res) => {
     try {
       if (!process.env.DATABASE_URL) return res.status(500).json({ error: "DB not setup" });
       const { id } = req.body;
