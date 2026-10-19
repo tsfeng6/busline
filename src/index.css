@@ -1,10 +1,74 @@
 @import "tailwindcss";
 
+@theme {
+  --color-m3-primary: #52796F;
+  --color-m3-on-primary: #FFFFFF;
+  --color-m3-primary-container: #D7E6DD;
+  --color-m3-on-primary-container: #1C332B;
+
+  --color-m3-secondary: #5C766B;
+  --color-m3-on-secondary: #FFFFFF;
+  --color-m3-secondary-container: #DFEBE3;
+  --color-m3-on-secondary-container: #1A3127;
+
+  --color-m3-tertiary: #5E7480;
+  --color-m3-on-tertiary: #FFFFFF;
+  --color-m3-tertiary-container: #DCE7EC;
+  --color-m3-on-tertiary-container: #1A2E38;
+
+  --color-m3-error: #B56666;
+  --color-m3-on-error: #FFFFFF;
+  --color-m3-error-container: #F8DFDF;
+  --color-m3-on-error-container: #471D1D;
+
+  --color-m3-surface: #FAFBF9;
+  --color-m3-surface-dim: #E8EFEA;
+  --color-m3-surface-bright: #FFFFFF;
+  --color-m3-surface-container-lowest: #FFFFFF;
+  --color-m3-surface-container-low: #F3F6F4;
+  --color-m3-surface-container: #EDF2EE;
+  --color-m3-surface-container-high: #E6ECE7;
+  --color-m3-surface-container-highest: #DEE6E0;
+
+  --color-m3-outline: #72857A;
+  --color-m3-outline-variant: #D3DCD6;
+
+  --color-morandi-50: #F6F8F6;
+  --color-morandi-100: #EBF0EC;
+  --color-morandi-200: #D8E3DC;
+  --color-morandi-300: #BED1C5;
+  --color-morandi-400: #9BB8A6;
+  --color-morandi-500: #749983;
+  --color-morandi-600: #52796F;
+  --color-morandi-700: #426159;
+  --color-morandi-800: #334B45;
+  --color-morandi-900: #243530;
+}
+
 @layer base {
   body {
     margin: 0;
     padding: 0;
     overflow: hidden;
+    background-color: #F4F6F4;
+    color: #1C2F27;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
 }
+
+/* Custom subtle scrollbar in Morandi sage tone */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #C4D2C9;
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #A0B6AA;
+}
+

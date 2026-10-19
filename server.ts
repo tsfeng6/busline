@@ -9,17 +9,18 @@ async function startServer() {
   const app = express();
   
   // Self-healing Port Selection:
-  // On AI Studio, the dev server proxy strictly expects port 3000.
-  // In production outside AI Studio, bind to process.env.PORT if specified.
-  let PORT = 3000;
-  if (process.env.NODE_ENV === 'production' && process.env.PORT && !process.env.APP_URL?.includes('run.app') && !process.env.APP_URL?.includes('aistudio')) {
-    PORT = Number(process.env.PORT);
+  // On Zeabur, we must bind to process.env.PORT so the proxy can reach our container.
+  // On AI Studio, the internal proxy strictly expects port 3000 even if process.env.PORT is injected as 8080.
+  let PORT = Number(process.env.PORT) || 3000;
+  if (process.env.APP_URL && (process.env.APP_URL.includes('run.app') || process.env.APP_URL.includes('aistudio'))) {
+    PORT = 3000;
   }
 
-  // Run migration in background without blocking server startup / port binding
-  runMigration().catch((e) => {
-    console.warn('Database migration skipped or connection timed out:', e?.message || e);
-  });
+  try {
+    await runMigration();
+  } catch (e) {
+    console.error('Migration failed:', e);
+  }
 
   // Middleware
   app.use(cors());
@@ -77,7 +78,7 @@ async function startServer() {
         res.json({ key: 'wechat_qr', value: '', updatedAt: Date.now() });
       }
     } catch (err: any) {
-      console.warn('Get setting error (fallback to default):', err?.message || err);
+      console.warn('Get setting DB query warning (using fallback):', err.message);
       res.json({ key: 'wechat_qr', value: '', updatedAt: Date.now() });
     }
   });
@@ -207,8 +208,8 @@ async function startServer() {
 
       res.json(statuses);
     } catch (err: any) {
-      console.error("Status error:", err);
-      res.status(500).json({ error: err.message });
+      console.warn("Status DB query warning (using empty fallback):", err.message);
+      res.json({});
     }
   });
 
@@ -230,7 +231,7 @@ async function startServer() {
 
       res.json(mappedLines);
     } catch (err: any) {
-      console.warn("Approved list error (fallback to empty list):", err?.message || err);
+      console.warn("Approved list DB query warning (using empty fallback):", err.message);
       res.json([]);
     }
   });

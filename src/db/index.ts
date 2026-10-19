@@ -10,7 +10,12 @@ const { Pool } = pkg;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  connectionTimeoutMillis: 3000,
+  connectionTimeoutMillis: 8000,
+  idleTimeoutMillis: 30000,
+});
+
+pool.on('error', (err) => {
+  console.warn('PostgreSQL pool idle client warning:', err.message);
 });
 
 export const db = drizzle(pool, { schema });

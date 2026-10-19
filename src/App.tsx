@@ -196,12 +196,27 @@ export default function App() {
   const [boxSelectedStops, setBoxSelectedStops] = useState<any[]>([]);
   const [isBoxPanelCollapsed, setIsBoxPanelCollapsed] = useState(false);
   const allMapStopsRef = useRef<Map<string, any>>(new Map());
+  const fetchedLinesCache = useRef<Map<string, BusLine>>(new Map());
+  const markerGroupRef = useRef<any>(null);
+  const lineGroupRef = useRef<any>(null);
+  const selectionMarkerRef = useRef<any>(null);
+  const geocoderRef = useRef<any>(null);
+
+  // Search results preservation refs
+  const roadOverlaysRef = useRef<any[]>([]);
+  const roadStopMarkersRef = useRef<any[]>([]);
+  const activeRawMarkersRef = useRef<any[]>([]);
+  const roadStopsDataRef = useRef<Map<string, any>>(new Map());
+  const activeBusLinePolylineRef = useRef<any | null>(null);
+  const referenceAreaOverlayRef = useRef<any | null>(null);
+  const searchVersionRef = useRef<number>(0);
+  const isClearedRef = useRef<boolean>(false);
 
   const getStopColor = useCallback((count: number, defaultColor: string) => {
     if (!stationLineStatsRef.current || count === 0) return defaultColor;
-    if (count <= 2) return '#06b6d4'; // Cyan
-    if (count <= 6) return '#f97316'; // Orange
-    return '#a855f7'; // Purple
+    if (count <= 2) return '#5E8271'; // Morandi Sage Green
+    if (count <= 6) return '#C29B63'; // Morandi Warm Ochre
+    return '#B56666'; // Morandi Dusty Terracotta
   }, []);
 
   const mapClickHandlerRef = useRef<any>(null);
@@ -213,6 +228,11 @@ export default function App() {
   });
   const [selectedSegmentLines, setSelectedSegmentLines] = useState<string[] | null>(null);
   const [selectedStop, setSelectedStop] = useState<any | null>(null);
+  const [stationConnectivityCard, setStationConnectivityCard] = useState<{
+    stop: any;
+    checkedLines: Set<string>;
+    transferLimit: number;
+  } | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [showLargeAreaWarning, setShowLargeAreaWarning] = useState(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
@@ -351,9 +371,6 @@ export default function App() {
     return localStorage.getItem('app_experimental_citywide') === 'true';
   });
   const [showCityWideConfirm, setShowCityWideConfirm] = useState(false);
-  const [language, setLanguage] = useState(() => {
-    return localStorage.getItem('app_lang') || 'zh-CN';
-  });
   const [lineThickness, setLineThickness] = useState<'thick' | 'thin'>(() => {
     const saved = localStorage.getItem('app_line_thickness');
     return (saved === 'thin' || saved === 'thick') ? saved : 'thick';
@@ -556,12 +573,20 @@ export default function App() {
   const [deletingLineId, setDeletingLineId] = useState<string | null>(null);
   const [editingLineName, setEditingLineName] = useState('');
   const [pendingSubmissions, setPendingSubmissions] = useState<any[]>([]);
+  const [connectivityToast, setConnectivityToast] = useState<string | null>(null);
 
   const [footerClickCount, setFooterClickCount] = useState(0);
   const [lastFooterClickTime, setLastFooterClickTime] = useState(0);
 
   const drawingGroupRef = useRef<any>(null);
+  const locationMarkerRef = useRef<any>(null);
   const isRoutingRef = useRef(false);
+  const [enableTwoTransferSearch, setEnableTwoTransferSearch] = useState(() => {
+    return localStorage.getItem('app_experimental_two_transfer') === 'true';
+  });
+  useEffect(() => {
+    localStorage.setItem('app_experimental_two_transfer', String(enableTwoTransferSearch));
+  }, [enableTwoTransferSearch]);
 
   const boxSelectedLines = useMemo(() => {
     const linesSet = new Set<string>();
@@ -799,15 +824,15 @@ export default function App() {
         const isSelected = selectedKeys.has(ext.key);
         if (isSelected) {
           o.setOptions({
-            strokeColor: '#f43f5e',
+            strokeColor: '#B56666',
             strokeWeight: 4,
             radius: 10,
-            fillColor: '#fda4af'
+            fillColor: '#F5DDDD'
           });
           if (o.setZIndex) o.setZIndex(100);
         } else {
           const count = stopCountCacheRef.current.get(ext.key) || 0;
-          const originalColor = stationLineStatsRef.current ? getStopColor(count, '#3b82f6') : '#3b82f6';
+          const originalColor = stationLineStatsRef.current ? getStopColor(count, '#52796F') : '#52796F';
           o.setOptions({
             strokeColor: '#fff',
             strokeWeight: 2,
@@ -1083,154 +1108,50 @@ export default function App() {
     }
   }, [historicalSubmissions, showUserSubmittedData]);
 
-  // Translation dictionary
-  const translations: Record<string, any> = {
-    'zh-CN': {
-      settings: '设置',
-      general: '通用',
-      dataFilter: '数据筛选',
-      filterAirportBus: '过滤机场巴士',
-      filterIntervalBus: '过滤区间车',
-      filterUserSubmissions: '过滤用户添加',
-      stationLineStats: '站点线路统计',
-      about: '关于',
-      language: '语言设置',
-      version: '当前版本',
-      startSearch: '检索',
-      searching: '检索中...',
-      showStations: '显示站点',
-      showBaseMap: '显示底图',
-      showMoreInfo: '详细信息',
-      showReferenceArea: '显示参考区域',
-      showUserSubmittedData: '显示用户添加数据',
-      customDrawingDisabledHint: '自定义绘图功能已停用',
-      lineThickness: '线条粗细',
-      thick: '粗线条',
-      thin: '细线条',
-      experimental: '实验功能',
-      cityWideSearch: '全市搜索',
-      cityWideSearchWarning: '警告！全市搜索性能消耗较大，可能会导致设备极度不稳定，请知悉',
-      cancel: '取消',
-      confirmEnable: '确认开启',
-      stats: '统计',
-      stops: '站点',
-      lines: '线路',
-      searchHint: '请放大以检索',
-      locate: '定位',
-      level: '缩放',
-      title: '巴士线路图',
-      searchPlaceholder: '搜索公交站、线路...',
-      loadingDetails: '正在加载详情...',
-      connectivity: '查看通达度',
-      noDirection: '暂无方向信息',
-      warning: '线路加载较多，请等待...',
-      initializing: '系统初始化中',
-      lineLabel: '线路',
-    },
-    'zh-TW': {
-      settings: '設置',
-      general: '通用',
-      dataFilter: '數據篩選',
-      filterAirportBus: '過濾機場巴士',
-      filterIntervalBus: '過濾區間車',
-      filterUserSubmissions: '過濾用戶添加',
-      stationLineStats: '站點線路統計',
-      about: '關於',
-      language: '語言設置',
-      version: '當前版本',
-      startSearch: '檢索',
-      searching: '檢索中...',
-      showStations: '顯示站點',
-      showBaseMap: '顯示底圖',
-      showMoreInfo: '詳細資訊',
-      showReferenceArea: '顯示參考區域',
-      showUserSubmittedData: '顯示用戶添加數據',
-      customDrawingDisabledHint: '自定義繪圖功能已停用',
-      lineThickness: '線條粗細',
-      thick: '粗線條',
-      thin: '細線條',
-      experimental: '實驗功能',
-      cityWideSearch: '全市搜索',
-      cityWideSearchWarning: '警告！全市搜索性能消耗較大，可能會導致設備極度不穩定，請知悉',
-      cancel: '取消',
-      confirmEnable: '確認開啟',
-      stats: '統計',
-      stops: '站點',
-      lines: '線路',
-      searchHint: '請放大以檢索',
-      locate: '定位',
-      level: '縮放',
-      title: '巴士線路圖',
-      searchPlaceholder: '搜索公交站、線路...',
-      loadingDetails: '正在加載詳情...',
-      connectivity: '查看通達度',
-      noDirection: '暫無方向信息',
-      warning: '線路加載較多，請等待...',
-      initializing: '系統初始化中',
-      lineLabel: '線路',
-    },
-    'en': {
-      settings: 'Settings',
-      general: 'General',
-      dataFilter: 'Data Filter',
-      filterAirportBus: 'Filter Airport Bus',
-      filterIntervalBus: 'Filter Interval/Short-turn',
-      filterUserSubmissions: 'Filter User Submitted',
-      stationLineStats: 'Station Line Stats',
-      about: 'About',
-      language: 'Language',
-      version: 'Version',
-      startSearch: 'Search',
-      searching: 'Searching...',
-      showStations: 'Stations',
-      showBaseMap: 'Base Map',
-      showMoreInfo: 'Details',
-      showReferenceArea: 'Show Reference Area',
-      showUserSubmittedData: 'Show user-added data',
-      customDrawingDisabledHint: 'Custom line drawing feature is disabled',
-      lineThickness: 'Line Thickness',
-      thick: 'Thick',
-      thin: 'Thin',
-      experimental: 'Experimental',
-      cityWideSearch: 'City-wide Search',
-      cityWideSearchWarning: 'Warning! City-wide search consumes significant performance and may cause severe device instability. Please be aware.',
-      cancel: 'Cancel',
-      confirmEnable: 'Confirm Enable',
-      stats: 'Stats',
-      stops: 'Stops',
-      lines: 'Lines',
-      searchHint: 'Zoom to search',
-      locate: 'Locate',
-      level: 'Level',
-      title: 'busline',
-      searchPlaceholder: 'Search stops, lines...',
-      loadingDetails: 'loading details...',
-      connectivity: 'connectivity',
-      noDirection: 'no direction data',
-      warning: 'high load, please wait...',
-      initializing: 'initializing system',
-      lineLabel: 'line',
-    }
+  // Translation dictionary (Simplified for Chinese)
+  const translations: Record<string, string> = {
+    settings: '设置',
+    general: '通用',
+    dataFilter: '数据筛选',
+    filterAirportBus: '过滤机场巴士',
+    filterIntervalBus: '过滤区间车',
+    filterUserSubmissions: '过滤用户添加',
+    stationLineStats: '站点线路统计',
+    about: '关于',
+    version: '当前版本',
+    startSearch: '检索',
+    searching: '检索中...',
+    showStations: '显示站点',
+    showBaseMap: '显示底图',
+    showMoreInfo: '详细信息',
+    showReferenceArea: '显示参考区域',
+    showUserSubmittedData: '显示用户添加数据',
+    customDrawingDisabledHint: '自定义绘图功能已停用',
+    lineThickness: '线条粗细',
+    thick: '粗线条',
+    thin: '细线条',
+    experimental: '实验功能',
+    cityWideSearch: '全市搜索',
+    cityWideSearchWarning: '警告！全市搜索性能消耗较大，可能会导致设备极度不稳定，请知悉',
+    cancel: '取消',
+    confirmEnable: '确认开启',
+    stats: '统计',
+    stops: '站点',
+    lines: '线路',
+    searchHint: '请放大以检索',
+    locate: '定位',
+    level: '缩放',
+    title: '巴士线路图',
+    searchPlaceholder: '搜索公交站、线路...',
+    loadingDetails: '正在加载详情...',
+    connectivity: '查看通达度',
+    noDirection: '暂无方向信息',
+    warning: '线路加载较多，请等待...',
+    initializing: '系统初始化中',
+    lineLabel: '线路',
   };
 
-  const t = (key: string) => {
-    const val = translations[language]?.[key] || translations['zh-CN'][key];
-    if (language === 'en') {
-      // For English, ensure lowercase as requested for 'busline' and other labels
-      if (key === 'title') return 'busline';
-      if (key === 'lineLabel') return 'line';
-      if (key === 'loadingDetails') return 'loading details...';
-      if (key === 'noDirection') return 'no direction data';
-      if (key === 'warning') return 'high load, please wait...';
-      if (key === 'initializing') return 'initializing system';
-      if (key === 'connectivity') return 'connectivity';
-    }
-    return val;
-  };
-
-  useEffect(() => {
-    localStorage.setItem('app_lang', language);
-  }, [language]);
+  const t = (key: string) => translations[key] || key;
   
   useEffect(() => {
     localStorage.setItem('app_line_thickness', lineThickness);
@@ -1278,10 +1199,11 @@ export default function App() {
   };
 
   const handleLocate = () => {
-    if (!mapRef.current) return;
+    if (!mapRef.current || !(window as any).AMap) return;
+    const AMap = (window as any).AMap;
     setLoading(true);
     mapRef.current.plugin('AMap.Geolocation', function() {
-      const geolocation = new (window as any).AMap.Geolocation({
+      const geolocation = new AMap.Geolocation({
         enableHighAccuracy: true,
         timeout: 10000,
         buttonPosition: 'RB',
@@ -1291,6 +1213,18 @@ export default function App() {
         if (status === 'complete') {
           mapRef.current.setCenter(result.position);
           mapRef.current.setZoom(16);
+
+          if (locationMarkerRef.current) {
+            locationMarkerRef.current.setPosition(result.position);
+          } else {
+            locationMarkerRef.current = new AMap.Marker({
+              position: result.position,
+              content: `<div style="width: 14px; height: 14px; background: #3b82f6; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 5px rgba(0,0,0,0.5);"></div>`,
+              offset: new AMap.Pixel(-7, -7),
+              zIndex: 1000
+            });
+            locationMarkerRef.current.setMap(mapRef.current);
+          }
         }
       });
     });
@@ -1505,12 +1439,12 @@ export default function App() {
       referenceAreaTextRef.current = null;
     }
 
-    if (!showReferenceAreaRef.current || !map || !AMap) {
-      // Keep the computed referenceBoxRef.current in memory so it doesn't get lost
-      // when toggling showReferenceArea off and on, but sync markers to hide/show restriction
+    if (isClearedRef.current || !showReferenceAreaRef.current || !map || !AMap) {
       syncStopMarkersToMap(map, AMap);
       return null;
     }
+
+    const thisSearchVersion = searchVersionRef.current;
 
     let box = referenceBoxRef.current;
     if (!box) {
@@ -1521,7 +1455,7 @@ export default function App() {
       }
     }
 
-    if (!box) {
+    if (!box || isClearedRef.current) {
       syncStopMarkersToMap(map, AMap);
       return null;
     }
@@ -1531,11 +1465,11 @@ export default function App() {
         new AMap.LngLat(box.minLng, box.minLat),
         new AMap.LngLat(box.maxLng, box.maxLat)
       ),
-      strokeColor: '#000000',
-      strokeWeight: 4,
-      strokeOpacity: 0.95,
-      fillColor: '#000000',
-      fillOpacity: 0.01,
+      strokeColor: '#52796F',
+      strokeWeight: 2,
+      strokeOpacity: 0.85,
+      fillColor: '#52796F',
+      fillOpacity: 0.02,
       zIndex: 10,
       bubble: true
     });
@@ -1545,9 +1479,10 @@ export default function App() {
 
     syncStopMarkersToMap(map, AMap);
 
-    // Setup dark label badge above the reference area
+    // Setup Morandi sage label badge above the reference area
     const centerLng = (box.minLng + box.maxLng) / 2;
     const createTextLabel = (textStr: string) => {
+      if (isClearedRef.current || searchVersionRef.current !== thisSearchVersion) return;
       if (referenceAreaTextRef.current) {
         try {
           map.remove(referenceAreaTextRef.current);
@@ -1562,17 +1497,17 @@ export default function App() {
         anchor: 'bottom-center',
         position: [centerLng, box.maxLat],
         style: {
-          'background-color': '#111827',
-          'border-color': '#111827',
+          'background-color': '#2C443B',
+          'border-color': '#2C443B',
           'color': '#ffffff',
-          'font-size': '12px',
-          'font-weight': 'bold',
-          'padding': '4px 10px',
-          'border-radius': '6px',
-          'box-shadow': '0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1)',
+          'font-size': '11px',
+          'font-weight': '600',
+          'padding': '3px 10px',
+          'border-radius': '9999px',
+          'box-shadow': '0 4px 12px rgba(44, 68, 59, 0.15)',
           'border-width': '0px',
           'white-space': 'nowrap',
-          'letter-spacing': '0.05em'
+          'letter-spacing': '0.04em'
         },
         offset: new AMap.Pixel(0, -8),
         zIndex: 100
@@ -1600,6 +1535,7 @@ export default function App() {
         });
       }
       geocoderRef.current.getAddress([centerLng, (box.minLat + box.maxLat) / 2], (status: string, result: any) => {
+        if (isClearedRef.current || searchVersionRef.current !== thisSearchVersion) return;
         if (status === 'complete' && result.regeocode) {
           const addrComp = result.regeocode.addressComponent;
           const district = addrComp.district || '';
@@ -1936,6 +1872,213 @@ export default function App() {
           });
         });
       }));
+    }
+  };
+
+  const executeStationConnectivity = async (
+    stop: any,
+    checkedLines: Set<string>,
+    transferLimit: number
+  ) => {
+    if (!lineGroupRef.current || !markerGroupRef.current || !(window as any).AMap) return;
+    
+    if (!checkedLines || checkedLines.size === 0) {
+      setConnectivityToast('请选择线路后查看通达度');
+      setTimeout(() => setConnectivityToast(null), 3500);
+      return;
+    }
+
+    const AMap = (window as any).AMap;
+    setIsSearching(true);
+    lineGroupRef.current.clearOverlays();
+    markerGroupRef.current.clearOverlays();
+
+    const linesToQuery = Array.from(checkedLines);
+    if (!linesToQuery || linesToQuery.length === 0) {
+      setIsSearching(false);
+      return;
+    }
+
+    setStats(prev => ({ ...prev, lines: linesToQuery.length }));
+
+    const lineSearch = new AMap.LineSearch({
+      city: currentCity || '全国',
+      pageIndex: 1,
+      pageSize: 1,
+      extensions: 'all'
+    });
+
+    let completed = 0;
+    const total = linesToQuery.length;
+    const transferStopsMap = new Map<string, { name: string; location: [number, number]; lines: Set<string> }>();
+    
+    // Graph maps: line -> stops array, stopName -> set of lines
+    const lineToStopsMap = new Map<string, Array<{ name: string; location: [number, number] }>>();
+    const stopToLinesMap = new Map<string, Set<string>>();
+
+    const registerLineData = (lineName: string, viaStops: any[]) => {
+      const stopsArr = viaStops
+        .filter((s: any) => s && s.location)
+        .map((s: any) => ({ name: s.name, location: [s.location.lng, s.location.lat] as [number, number] }));
+      lineToStopsMap.set(lineName, stopsArr);
+
+      stopsArr.forEach(st => {
+        const cleanSt = st.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').trim();
+        if (!stopToLinesMap.has(cleanSt)) stopToLinesMap.set(cleanSt, new Set());
+        stopToLinesMap.get(cleanSt)!.add(lineName);
+      });
+    };
+
+    const initialRenderedLines = new Set<string>();
+
+    for (let i = 0; i < linesToQuery.length; i += 5) {
+      const batch = linesToQuery.slice(i, i + 5);
+      await Promise.all(batch.map(async (lineStr) => {
+        return new Promise<void>((resolve) => {
+          const { name: shortName } = parseLineInfo(lineStr);
+          const timeout = setTimeout(() => {
+            completed++;
+            if (completed === total) finalizeConnectivity();
+            resolve();
+          }, 8000);
+
+          lineSearch.search(shortName, (status: string, result: any) => {
+            clearTimeout(timeout);
+            completed++;
+            if (result.lineInfo) {
+              result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
+            }
+            if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
+              let bestLine = result.lineInfo[0];
+              const exactMatch = result.lineInfo.find((l: any) => l.name === lineStr);
+              if (exactMatch) bestLine = exactMatch;
+              
+              initialRenderedLines.add(bestLine.name);
+              renderBusLine(bestLine, AMap, mapRef.current, false, false, false);
+
+              if (bestLine.via_stops) {
+                registerLineData(bestLine.name, bestLine.via_stops);
+              }
+            }
+
+            if (completed === total) {
+              finalizeConnectivity();
+            }
+            resolve();
+          });
+        });
+      }));
+    }
+
+    async function finalizeConnectivity() {
+      const allTransferLines = new Set<string>(initialRenderedLines);
+      if (transferLimit > 0) {
+        const getLineStops = async (lineStr: string): Promise<Array<{name: string; location: [number, number]}>> => {
+          return new Promise((resolve) => {
+            const { name: shortName } = parseLineInfo(lineStr);
+            lineSearch.search(shortName, (status: string, result: any) => {
+              if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
+                let bLine = result.lineInfo[0];
+                const ex = result.lineInfo.find((l: any) => l.name === lineStr);
+                if (ex) bLine = ex;
+                if (bLine.via_stops) {
+                  resolve(bLine.via_stops.filter((s: any) => s && s.location).map((s: any) => ({ name: s.name, location: [s.location.lng, s.location.lat] })));
+                  return;
+                }
+              }
+              resolve([]);
+            });
+          });
+        };
+
+        let currentStops = new Map<string, [number, number]>(); // name -> location
+        initialRenderedLines.forEach(lName => {
+          const stops = lineToStopsMap.get(lName) || [];
+          stops.forEach(st => {
+            currentStops.set(st.name, st.location);
+            const key = `${st.location[0]},${st.location[1]}`;
+            if (!transferStopsMap.has(key)) {
+              transferStopsMap.set(key, { name: st.name, location: st.location, lines: new Set([lName]) });
+            } else {
+              transferStopsMap.get(key)!.lines.add(lName);
+            }
+          });
+        });
+
+        const visitedStopNames = new Set<string>();
+
+        for (let step = 0; step < transferLimit; step++) {
+          const nextLevelStops = new Map<string, [number, number]>();
+          const stopNamesArr = Array.from(currentStops.keys());
+
+          for (const sName of stopNamesArr) {
+            if (visitedStopNames.has(sName)) continue;
+            visitedStopNames.add(sName);
+            const loc = currentStops.get(sName)!;
+
+            const details = await fetchStopDetails(sName, loc, AMap, currentCity);
+            if (details && details.lines) {
+              const linesArr = details.lines as string[];
+              linesArr.forEach(l => allTransferLines.add(l));
+
+              for (const lStr of linesArr) {
+                let stopsOnLine = lineToStopsMap.get(lStr);
+                if (!stopsOnLine) {
+                  stopsOnLine = await getLineStops(lStr);
+                  lineToStopsMap.set(lStr, stopsOnLine);
+                }
+                stopsOnLine.forEach(st => {
+                  if (st && st.location) {
+                    const key = `${st.location[0]},${st.location[1]}`;
+                    nextLevelStops.set(st.name, st.location);
+                    if (!transferStopsMap.has(key)) {
+                      transferStopsMap.set(key, {
+                        name: st.name,
+                        location: st.location,
+                        lines: new Set([lStr])
+                      });
+                    } else {
+                      transferStopsMap.get(key)!.lines.add(lStr);
+                    }
+                  }
+                });
+              }
+            }
+          }
+          currentStops = nextLevelStops;
+        }
+
+        // Search and render all accumulated unique transfer lines on the map
+        const transferLinesArray = Array.from(allTransferLines);
+        const renderedSet = new Set<string>();
+        for (let i = 0; i < transferLinesArray.length; i += 5) {
+          const batch = transferLinesArray.slice(i, i + 5);
+          await Promise.all(batch.map(async (lineStr) => {
+            if (renderedSet.has(lineStr)) return;
+            renderedSet.add(lineStr);
+            return new Promise<void>((resolve) => {
+              const { name: shortName } = parseLineInfo(lineStr);
+              const timeout = setTimeout(() => resolve(), 8000);
+              lineSearch.search(shortName, (status: string, result: any) => {
+                clearTimeout(timeout);
+                if (result.lineInfo) {
+                  result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
+                }
+                if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
+                  let bestLine = result.lineInfo[0];
+                  const exactMatch = result.lineInfo.find((l: any) => l.name === lineStr);
+                  if (exactMatch) bestLine = exactMatch;
+                  renderBusLine(bestLine, AMap, mapRef.current, false, false, false);
+                }
+                resolve();
+              });
+            });
+          }));
+        }
+      }
+
+      mapRef.current?.setFitView();
+      setIsSearching(false);
     }
   };
 
@@ -3031,6 +3174,8 @@ export default function App() {
   const handleManualSearch = async (item: any) => {
     const map = mapRef.current;
     if (!map) return;
+    isClearedRef.current = false;
+    searchVersionRef.current++;
     const AMap = (window as any).AMap;
     setShowSuggestions(false);
     setSearchQuery(item.name);
@@ -3300,6 +3445,8 @@ export default function App() {
 
   const performFullSearch = async (query: string) => {
     if (!query) return;
+    isClearedRef.current = false;
+    searchVersionRef.current++;
     setShowSuggestions(false);
     setLoading(true);
 
@@ -3356,20 +3503,6 @@ export default function App() {
       }
     });
   };
-
-  const fetchedLinesCache = useRef<Map<string, BusLine>>(new Map());
-  const markerGroupRef = useRef<any>(null);
-  const lineGroupRef = useRef<any>(null);
-  const selectionMarkerRef = useRef<any>(null);
-  const geocoderRef = useRef<any>(null);
-
-  // Search results preservation refs
-  const roadOverlaysRef = useRef<any[]>([]);
-  const roadStopMarkersRef = useRef<any[]>([]);
-  const activeRawMarkersRef = useRef<any[]>([]);
-  const roadStopsDataRef = useRef<Map<string, any>>(new Map());
-  const activeBusLinePolylineRef = useRef<any | null>(null);
-  const referenceAreaOverlayRef = useRef<any | null>(null);
 
   const [containerPos, setContainerPos] = useState<{ x: number, y: number } | null>(null);
 
@@ -3444,8 +3577,6 @@ export default function App() {
   useEffect(() => {
     let map: any;
 
-    const amapLang = language === 'zh-TW' ? 'zh_tw' : (language === 'en' ? 'en' : 'zh_cn');
-
     AMapLoader.load({
       key: AMAP_KEY,
       version: '2.0',
@@ -3472,7 +3603,7 @@ export default function App() {
         viewMode: '2D',
         mapStyle: 'amap://styles/light', 
         features: ['bg', 'point', 'road', 'building'],
-        lang: amapLang
+        lang: 'zh_cn'
       });
 
       mapRef.current = map;
@@ -3613,7 +3744,7 @@ export default function App() {
         map.destroy();
       }
     };
-  }, [language]);
+  }, []);
 
   // Controlling visibility of station markers
   useEffect(() => {
@@ -3666,6 +3797,9 @@ export default function App() {
   const handleSearch = async () => {
     const map = mapRef.current;
     if (!map) return;
+
+    isClearedRef.current = false;
+    searchVersionRef.current++;
 
     // Reset reference box so the new search initiates a fresh reference bounds calculation
     referenceBoxRef.current = null;
@@ -3792,7 +3926,7 @@ export default function App() {
           });
 
           marker.on('click', () => {
-            const stopPos = [poi.location.lng, poi.location.lat];
+            const stopPos: [number, number] = [poi.location.lng, poi.location.lat];
             if (isPosOutsideReferenceArea(stopPos[0], stopPos[1])) {
               return;
             }
@@ -4015,6 +4149,9 @@ export default function App() {
   };
 
   const handleClear = () => {
+    isClearedRef.current = true;
+    searchVersionRef.current++;
+
     if (mapRef.current && mapClickHandlerRef.current) {
       mapRef.current.off('click', mapClickHandlerRef.current);
     }
@@ -4026,22 +4163,55 @@ export default function App() {
     if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
     if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
     
-    if (referenceAreaOverlayRef.current && mapRef.current) {
+    if (referenceAreaOverlayRef.current) {
       try {
-        mapRef.current.remove(referenceAreaOverlayRef.current);
+        referenceAreaOverlayRef.current.setMap(null);
+        if (mapRef.current) mapRef.current.remove(referenceAreaOverlayRef.current);
       } catch (e) {
         console.warn('Failed to remove reference area on clear', e);
       }
       referenceAreaOverlayRef.current = null;
     }
+    if (referenceAreaTextRef.current) {
+      try {
+        referenceAreaTextRef.current.setMap(null);
+        if (mapRef.current) mapRef.current.remove(referenceAreaTextRef.current);
+      } catch (e) {
+        console.warn('Failed to remove reference area text on clear', e);
+      }
+      referenceAreaTextRef.current = null;
+    }
     referenceBoxRef.current = null;
+
+    if (selectionMarkerRef.current) {
+      try {
+        selectionMarkerRef.current.setMap(null);
+        if (mapRef.current) mapRef.current.remove(selectionMarkerRef.current);
+      } catch (e) {}
+      selectionMarkerRef.current = null;
+    }
+
+    if (mapRef.current) {
+      try {
+        const textOverlays = mapRef.current.getAllOverlays?.('text') || [];
+        textOverlays.forEach((t: any) => {
+          try {
+            t.setMap(null);
+            mapRef.current.remove(t);
+          } catch {}
+        });
+      } catch {}
+    }
     
     // Clear local caches and states fully as requested
     fetchedLinesCache.current.clear();
     allMapStopsRef.current.clear();
+    stopCountCacheRef.current.clear();
     setBoxSelectedStops([]);
     setIsBoxSelectMode(false);
     setSearchQuery('');
+    setSuggestions([]);
+    setShowSuggestions(false);
     setActiveBusLine(null);
     setStats({ stops: 0, lines: 0 });
     setSelectedSegmentLines(null);
@@ -4049,6 +4219,8 @@ export default function App() {
     setSelectionPos(null);
     setSelectedSegmentName(null);
     setSelectedSegmentAddress(null);
+    setShowLargeAreaWarning(false);
+    setIsSearching(false);
     roadOverlaysRef.current = [];
     roadStopMarkersRef.current = [];
     activeRawMarkersRef.current = [];
@@ -4389,15 +4561,15 @@ export default function App() {
       let color = '';
       if (regularCount > 0) {
         if (isCityWide) {
-          color = '#3b82f6';
+          color = '#52796F'; // Morandi Primary Green
         } else {
-          if (regularCount < 4) color = '#22c55e';
-          else if (regularCount >= 4 && regularCount <= 9) color = '#eab308';
-          else color = '#ef4444';
+          if (regularCount < 4) color = '#5E8271'; // Morandi Sage Green
+          else if (regularCount >= 4 && regularCount <= 9) color = '#C29B63'; // Morandi Warm Ochre
+          else color = '#B56666'; // Morandi Dusty Terracotta
         }
       } else if (data.lines.size > 0) {
         // Only user-submitted lines pass through here!
-        color = '#BA55D3'; // Pale purple
+        color = '#9C7A97'; // Morandi Dusty Mauve
       }
 
       if (color) {
@@ -4494,7 +4666,7 @@ export default function App() {
           outlineColor: '#ffffff',
           borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
           bubble: true,
-          zIndex: color === '#ef4444' ? 15 : (color === '#eab308' ? 12 : 10)
+          zIndex: color === '#B56666' ? 15 : (color === '#C29B63' ? 12 : 10)
         });
         allOverlays.push(polyline);
       }
@@ -4880,31 +5052,24 @@ export default function App() {
   }, [activeBusLine, currentCity]);
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#fef7ff] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
-      <header className="fixed top-0 left-0 right-0 z-20 px-4 pt-6 pb-0 pointer-events-none">
+    <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
+      <header className="fixed top-0 left-0 right-0 z-20 px-4 pt-5 pb-0 pointer-events-none">
         {!isDrawingMode && (
-          <div className="flex items-start justify-between gap-4 w-full h-[52px]">
-            {/* Combined Logo/Search Bar - Material 3 Design */}
-            <div className={`backdrop-blur-2xl bg-m3-surface-container-high/95 border border-m3-outline-variant/20 shadow-md flex items-center h-[52px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[340px] rounded-full z-30' : 'relative w-[114px] md:w-[340px] rounded-full'}`}>
+          <div className="flex items-start justify-between gap-4 w-full h-[46px]">
+            {/* Pure Material 3 Search Bar (without logo, slightly narrower) */}
+            <div className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative w-[180px] sm:w-[240px] md:w-[280px] rounded-full'}`}>
               
-              {/* Logo Area */}
-              <div className="flex items-center justify-center pl-4 pr-2 shrink-0 h-full">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
-                  <path d="M4 17H20" stroke="#3B6B91" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-                  <path d="M17 4V20" stroke="#3B6B91" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                  <path d="M8 20V13L13 8H22" stroke="#3B6B91" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-                </svg>
+              {/* Search Lead Icon */}
+              <div className="flex items-center justify-center pl-4 pr-1.5 shrink-0 text-m3-primary">
+                <Search className="w-4.5 h-4.5 text-[#52796F]" />
               </div>
 
-              {/* Separator - visible only when expanded or on desktop */}
-              <div className={`w-[1px] h-6 bg-m3-outline-variant/30 shrink-0 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-100' : 'opacity-0 md:opacity-100 hidden md:block'}`} />
-
               {/* Input Field Area */}
-              <div className={`flex-1 flex items-center overflow-hidden transition-all duration-500 ease-out h-full ${isMobileSearchOpen ? 'opacity-100 pl-3 w-full' : 'opacity-0 pl-0 w-0 md:opacity-100 md:pl-3 md:w-full'}`}>
+              <div className="flex-1 flex items-center overflow-hidden h-full pl-1 pr-2">
                 <input 
                   type="text" 
                   placeholder={(!enableCityWideSearch && zoomLevel < 12) ? t('searchHint') : t('searchPlaceholder')} 
-                  className="bg-transparent border-none outline-none text-sm font-semibold text-slate-800 w-full placeholder:text-slate-400 placeholder:font-medium h-full"
+                  className="bg-transparent border-none outline-none text-xs sm:text-sm font-medium text-slate-800 w-full placeholder:text-[#7A8E83] h-full"
                   value={searchQuery}
                   onChange={(e) => onSearchInputChange(e.target.value)}
                   onFocus={() => searchQuery && suggestions.length > 0 && setShowSuggestions(true)}
@@ -4922,27 +5087,18 @@ export default function App() {
                   autoFocus={isMobileSearchOpen}
                 />
                 {searchQuery && (
-                  <button onMouseDown={() => { setSearchQuery(''); setSuggestions([]); setShowSuggestions(false); }} className="px-2 shrink-0 h-full flex items-center">
-                    <X className="w-4 h-4 text-slate-400 hover:text-slate-600" />
+                  <button 
+                    onMouseDown={(e) => { 
+                      e.preventDefault();
+                      handleClear();
+                    }} 
+                    className="px-1.5 shrink-0 h-full flex items-center text-[#7A8E83] hover:text-slate-800"
+                    title="清空搜索"
+                  >
+                    <X className="w-4 h-4" />
                   </button>
                 )}
               </div>
-
-              {/* Search Toggle Button with ripple scale feedback */}
-              <button 
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  if (!isMobileSearchOpen && window.innerWidth < 768) {
-                    setIsMobileSearchOpen(true);
-                  } else {
-                     performFullSearch(searchQuery);
-                     setIsMobileSearchOpen(false);
-                  }
-                }}
-                className={`w-[40px] h-[40px] shrink-0 mx-1.5 md:mr-1.5 md:ml-0 rounded-full flex items-center justify-center transition-all ${searchQuery || !isMobileSearchOpen ? 'bg-m3-primary text-m3-on-primary shadow-sm hover:bg-m3-primary/90 hover:scale-105 active:scale-95' : 'bg-transparent text-slate-600 hover:bg-m3-primary/10 active:scale-95'}`}
-              >
-                <Search className="w-4 h-4" />
-              </button>
 
               {/* Suggestions Dropdown - Material 3 Floating Card */}
               <AnimatePresence>
@@ -4952,7 +5108,7 @@ export default function App() {
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: -10 }}
                     transition={{ type: 'spring', damping: 20, stiffness: 280 }}
-                    className="absolute top-[calc(100%+8px)] left-0 right-0 bg-m3-surface-container-high/95 backdrop-blur-2xl border border-m3-outline-variant/20 rounded-3xl shadow-xl overflow-hidden py-2 z-50 pointer-events-auto"
+                    className="absolute top-[calc(100%+8px)] left-0 right-0 bg-m3-surface/98 backdrop-blur-2xl border border-m3-outline-variant/40 rounded-3xl shadow-xl overflow-hidden py-2 z-50 pointer-events-auto"
                   >
                     {suggestions.slice(0, 6).map((tip, idx) => (
                       <button
@@ -4961,7 +5117,7 @@ export default function App() {
                           e.preventDefault();
                           handleManualSearch(tip);
                         }}
-                        className="w-full px-5 py-3.5 text-left hover:bg-m3-primary/8 transition-colors flex flex-col gap-0.5 relative border-b border-m3-outline-variant/10 last:border-0"
+                        className="w-full px-5 py-3.5 text-left hover:bg-m3-primary/8 transition-colors flex flex-col gap-0.5 relative border-b border-m3-outline-variant/15 last:border-0"
                       >
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold text-slate-800">{tip.name}</span>
@@ -4981,7 +5137,7 @@ export default function App() {
                             </span>
                           )}
                         </div>
-                        <span className="text-[10px] font-medium text-slate-450">{tip.district || tip.address}</span>
+                        <span className="text-[10px] font-medium text-slate-500">{tip.district || tip.address}</span>
                       </button>
                     ))}
                   </motion.div>
@@ -4989,34 +5145,12 @@ export default function App() {
               </AnimatePresence>
             </div>
 
-            {/* Quick Actions Container - Material Design 3 Rounded-2xl Elevated FABs */}
-            <div className={`flex items-center gap-2.5 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
+            {/* Quick Actions Container - Material Design 3 (Stations and Basemap moved to bottom hub) */}
+            <div className={`flex items-center gap-2 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
               
-              {/* Toggle Stations FAB */}
-              <div className="pointer-events-auto shrink-0 mt-1">
-                <button 
-                  onClick={toggleStations}
-                  className={`backdrop-blur-md border border-m3-outline-variant/20 w-[42px] h-[42px] rounded-2xl shadow-md flex items-center justify-center transition-all duration-200 active:scale-90 group ${showStations ? 'bg-m3-primary text-m3-on-primary hover:bg-m3-primary/95 hover:scale-105' : 'bg-m3-surface-container-high/90 text-slate-700 hover:bg-m3-surface-container-highest hover:scale-105'}`}
-                  title={showStations ? "隐藏站点" : "显示站点"}
-                >
-                  <MapPin className={`w-4.5 h-4.5 transition-transform group-hover:scale-110 ${showStations ? 'text-white' : 'text-slate-700'}`} />
-                </button>
-              </div>
-
-              {/* Toggle Base Map FAB */}
-              <div className="pointer-events-auto shrink-0 mt-1">
-                <button 
-                  onClick={toggleBaseMap}
-                  className={`backdrop-blur-md border border-m3-outline-variant/20 w-[42px] h-[42px] rounded-2xl shadow-md flex items-center justify-center transition-all duration-200 active:scale-90 group ${showBaseMap ? 'bg-m3-primary text-m3-on-primary hover:bg-m3-primary/95 hover:scale-105' : 'bg-m3-surface-container-high/90 text-slate-700 hover:bg-m3-surface-container-highest hover:scale-105'}`}
-                  title={showBaseMap ? "隐藏底图" : "显示底图"}
-                >
-                  <MapIcon className={`w-4.5 h-4.5 transition-transform group-hover:scale-110 ${showBaseMap ? 'text-white' : 'text-slate-700'}`} />
-                </button>
-              </div>
-
               {/* Custom Draw Mode Paintbrush FAB - hidden when showUserSubmittedData is disabled */}
               {showUserSubmittedData && (
-                <div className="pointer-events-auto shrink-0 mt-1">
+                <div className="pointer-events-auto shrink-0">
                   <button 
                     onClick={() => {
                       setIsDrawingMode(true);
@@ -5028,7 +5162,7 @@ export default function App() {
                       setIsBoxSelectMode(false);
                       setBoxSelectedStops([]);
                     }}
-                    className="backdrop-blur-md bg-m3-surface-container-high/90 border border-m3-outline-variant/20 w-[42px] h-[42px] rounded-2xl shadow-md flex items-center justify-center text-slate-700 hover:bg-m3-surface-container-highest hover:scale-105 transition-all duration-200 active:scale-90 group"
+                    className="backdrop-blur-md bg-m3-surface/90 border border-m3-outline-variant/30 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center text-slate-700 hover:bg-m3-surface-container-high hover:scale-105 transition-all duration-200 active:scale-90 group"
                     title="进入线路绘制模式"
                   >
                     <Paintbrush className="w-4.5 h-4.5 text-slate-700 group-hover:text-m3-primary transition-transform group-hover:scale-110" />
@@ -5040,14 +5174,14 @@ export default function App() {
               {isAdminVerified && (
                 <>
                   {/* Audit Review FAB */}
-                  <div className="pointer-events-auto shrink-0 mt-1">
+                  <div className="pointer-events-auto shrink-0">
                     <button 
                       onClick={() => {
                         setShowAuditModal(p => !p);
                         setShowManageModal(false);
                         fetchPendingSubmissions();
                       }}
-                      className={`backdrop-blur-md border border-m3-outline-variant/20 w-[42px] h-[42px] rounded-2xl shadow-md flex items-center justify-center transition-all duration-200 active:scale-90 group ${showAuditModal ? 'bg-amber-500 text-white hover:bg-amber-600 hover:scale-105' : 'bg-m3-surface-container-high/90 text-amber-600 hover:bg-m3-surface-container-highest hover:scale-105'}`}
+                      className={`backdrop-blur-md border border-m3-outline-variant/30 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center transition-all duration-200 active:scale-90 group ${showAuditModal ? 'bg-amber-600 text-white hover:scale-105' : 'bg-m3-surface/90 text-amber-700 hover:bg-m3-surface-container-high hover:scale-105'}`}
                       title="自绘线路待审核中心"
                     >
                       <ClipboardCheck className="w-4.5 h-4.5 transition-transform group-hover:scale-110" />
@@ -5055,14 +5189,14 @@ export default function App() {
                   </div>
 
                   {/* Data Management FAB */}
-                  <div className="pointer-events-auto shrink-0 mt-1">
+                  <div className="pointer-events-auto shrink-0">
                     <button 
                       onClick={() => {
                         setShowManageModal(p => !p);
                         setShowAuditModal(false);
                         fetchApprovedLines();
                       }}
-                      className={`backdrop-blur-md border border-m3-outline-variant/20 w-[42px] h-[42px] rounded-2xl shadow-md flex items-center justify-center transition-all duration-200 active:scale-90 group ${showManageModal ? 'bg-m3-primary text-m3-on-primary hover:bg-m3-primary/95 hover:scale-105' : 'bg-m3-surface-container-high/90 text-slate-700 hover:bg-m3-surface-container-highest hover:scale-105'}`}
+                      className={`backdrop-blur-md border border-m3-outline-variant/30 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center transition-all duration-200 active:scale-90 group ${showManageModal ? 'bg-m3-primary text-m3-on-primary hover:scale-105' : 'bg-m3-surface/90 text-slate-700 hover:bg-m3-surface-container-high hover:scale-105'}`}
                       title="批量管理已发布的用户数据"
                     >
                       <Database className="w-4.5 h-4.5 transition-transform group-hover:scale-110" />
@@ -5072,13 +5206,13 @@ export default function App() {
               )}
 
               {/* Settings FAB */}
-              <div className="pointer-events-auto shrink-0 mt-1">
+              <div className="pointer-events-auto shrink-0">
                 <button 
                   onClick={() => {
                     setSettingsTab('general');
                     setShowSettings(true);
                   }}
-                  className="backdrop-blur-md bg-m3-surface-container-high/90 border border-m3-outline-variant/20 w-[42px] h-[42px] rounded-2xl shadow-md flex items-center justify-center text-slate-700 hover:bg-m3-surface-container-highest hover:text-m3-primary hover:scale-105 transition-all duration-200 active:scale-90 group"
+                  className="backdrop-blur-md bg-m3-surface/90 border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center text-slate-700 hover:bg-m3-surface-container-high hover:text-m3-primary hover:scale-105 transition-all duration-200 active:scale-90 group"
                   title="全局应用设置"
                 >
                   <Settings className="w-4.5 h-4.5 transition-transform group-hover:rotate-90 duration-500" />
@@ -5378,6 +5512,16 @@ export default function App() {
                         })}
                       </div>
                     )}
+                    {boxSelectedLines.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => showStopConnectivity(boxSelectedLines)}
+                        className="w-full mt-3 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Eye className="w-4 h-4" />
+                        查看通达度 ({boxSelectedLines.length}条线路)
+                      </button>
+                    )}
                   </div>
 
                 </div>
@@ -5392,7 +5536,7 @@ export default function App() {
               <svg width="84" height="84" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0 drop-shadow-md">
                 <motion.path 
                   d="M4 17H20" 
-                  stroke="#3B6B91" 
+                  stroke="#52796F" 
                   strokeWidth="2.5" 
                   strokeLinecap="round"
                   fill="none"
@@ -5410,7 +5554,7 @@ export default function App() {
                 />
                 <motion.path 
                   d="M17 4V20" 
-                  stroke="#3B6B91" 
+                  stroke="#52796F" 
                   strokeWidth="2.5" 
                   strokeLinecap="round"
                   fill="none"
@@ -5428,7 +5572,7 @@ export default function App() {
                 />
                 <motion.path 
                   d="M8 20V13L13 8H22" 
-                  stroke="#3B6B91" 
+                  stroke="#52796F" 
                   strokeWidth="2.5" 
                   strokeLinecap="round" 
                   strokeLinejoin="round"
@@ -5453,114 +5597,175 @@ export default function App() {
 
 
         {!isDrawingMode && (
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center gap-2 pointer-events-none">
-            <AnimatePresence>
-              {(!enableCityWideSearch && zoomLevel < 12 && !isSearching && !loading) && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  className="backdrop-blur-xl bg-orange-500/90 text-white text-xs font-black px-4 py-2 rounded-full shadow-lg whitespace-nowrap border border-orange-400 flex items-center gap-1.5 pointer-events-none mb-1 shadow-orange-500/20"
-                >
-                  <ZoomIn className="w-3.5 h-3.5 animate-bounce" />
-                  <span>{t('searchHint')}</span>
-                </motion.div>
-              )}
-            </AnimatePresence>
+          <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 pointer-events-auto flex flex-col items-center select-none">
+            {/* Modular Bottom Hub Bar in Morandi Green theme - Icon Only, Enlarged */}
+            <div className="backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-[0_8px_32px_rgba(28,47,39,0.15)] rounded-full px-3 py-2 sm:px-3.5 sm:py-2.5 flex items-center gap-1.5 sm:gap-2">
+              
+              {/* Module 1: Left of Search - Box Select (Permanent, Icon Only) */}
+              <button
+                type="button"
+                disabled={loading || (!activeBusLine && stats.lines === 0 && stats.stops === 0)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (loading || (!activeBusLine && stats.lines === 0 && stats.stops === 0)) return;
+                  setIsBoxSelectMode(prev => {
+                    const next = !prev;
+                    if (!next) {
+                      setBoxSelectedStops([]);
+                    }
+                    return next;
+                  });
+                }}
+                className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 ${
+                  loading || (!activeBusLine && stats.lines === 0 && stats.stops === 0)
+                    ? 'text-[#8F9E96]/50 bg-transparent cursor-not-allowed opacity-45' 
+                    : isBoxSelectMode 
+                      ? 'bg-m3-primary text-m3-on-primary shadow-sm hover:bg-m3-primary/95 cursor-pointer active:scale-95' 
+                      : 'text-[#334D43] hover:bg-[#E8EFEA] hover:text-[#1C2F27] cursor-pointer active:scale-95'
+                }`}
+                title={isBoxSelectMode ? "关闭框选模式" : "开启框选模式"}
+              >
+                <BoxSelect className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0" />
+              </button>
 
-            <div className="flex items-center gap-4 pointer-events-auto">
+              {/* Module 1: Left of Search - Clear (Permanent, Icon Only) */}
+              <button
+                type="button"
+                disabled={loading || (stats.stops === 0 && stats.lines === 0 && !activeBusLine && !selectedStop && !selectedSegmentLines && boxSelectedStops.length === 0)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (loading || (stats.stops === 0 && stats.lines === 0 && !activeBusLine && !selectedStop && !selectedSegmentLines && boxSelectedStops.length === 0)) return;
+                  handleClear();
+                }}
+                className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 ${
+                  loading || (stats.stops === 0 && stats.lines === 0 && !activeBusLine && !selectedStop && !selectedSegmentLines && boxSelectedStops.length === 0)
+                    ? 'text-[#8F9E96]/50 bg-transparent cursor-not-allowed opacity-45' 
+                    : 'text-[#8D5B5B] hover:bg-[#F9EBEB] hover:text-[#B56666] cursor-pointer active:scale-95'
+                }`}
+                title="清空地图"
+              >
+                <X className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0" />
+              </button>
+
+              {/* Module Divider */}
+              <div className="w-[1px] h-6 bg-m3-outline-variant/40 mx-0.5 sm:mx-1 shrink-0" />
+
+              {/* Module 2: Center - Search with Logo & Loading Animation (Icon Only, Enlarged) */}
               <motion.button 
                 layout
+                type="button"
                 onClick={handleSearch}
                 disabled={isSearching || (!enableCityWideSearch && zoomLevel < 12)}
-                initial={false}
-                animate={{ 
-                  scale: 1,
-                  opacity: loading ? 0 : 1,
-                }}
                 whileHover={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 1.05 } : {}}
-                whileTap={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 0.95 } : {}}
-                className={`backdrop-blur-xl border w-14 h-14 shrink-0 rounded-[1.25rem] shadow-xl flex items-center justify-center transition-all duration-300
-                  ${isSearching ? 'bg-amber-100/90 border-amber-200 text-amber-600 cursor-wait shadow-amber-500/20' : 
-                    enableCityWideSearch ? 'bg-m3-error border-m3-error text-m3-on-error shadow-m3-error/30' :
-                    (zoomLevel < 12 ? 'bg-m3-surface-container-high/50 border-m3-outline-variant/30 text-slate-400 cursor-not-allowed' : 
-                    'bg-m3-primary border-m3-primary text-m3-on-primary shadow-m3-primary/30')}`}
+                whileTap={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 0.94 } : {}}
+                className={`w-12 h-12 sm:w-13 sm:h-13 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 shadow-sm ${
+                  isSearching 
+                    ? 'bg-[#E0EBE4] border border-[#BFD3C6] text-[#334D43] cursor-wait' 
+                    : enableCityWideSearch 
+                      ? 'bg-m3-error border border-m3-error text-m3-on-error shadow-m3-error/25 hover:bg-m3-error/90 cursor-pointer' 
+                      : (zoomLevel < 12 ? 'bg-[#DEE5E1] text-[#8C9E95] border border-transparent cursor-not-allowed' : 
+                        'bg-m3-primary border border-m3-primary text-m3-on-primary shadow-m3-primary/30 hover:bg-[#466960] cursor-pointer')
+                }`}
                 title={isSearching ? t('searching') : (enableCityWideSearch ? t('cityWideSearch') : (zoomLevel < 12 ? t('searchHint') : t('startSearch')))}
               >
-                <AnimatePresence mode="wait">
-                  {isSearching ? (
-                    <motion.div
-                      key="loader"
-                      initial={{ rotate: 0, opacity: 0 }}
-                      animate={{ rotate: 360, opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ rotate: { repeat: Infinity, duration: 1, ease: 'linear' } }}
-                    >
-                      <Loader2 className="w-6 h-6" />
-                    </motion.div>
-                  ) : (!enableCityWideSearch && zoomLevel < 12) ? (
-                    <motion.div
-                      key="zoom"
-                      initial={{ scale: 0.5, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      exit={{ scale: 0.5, opacity: 0 }}
-                    >
-                      <ZoomIn className="w-6 h-6" />
-                    </motion.div>
-                  ) : (
-                    <motion.div
-                      key="search"
-                      initial={{ scale: 0.5, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      exit={{ scale: 0.5, opacity: 0 }}
-                    >
-                      <Search className="w-6 h-6" />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                {isSearching ? (
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
+                    <motion.path 
+                      d="M4 17H20" 
+                      stroke="currentColor" 
+                      strokeWidth="2.5" 
+                      strokeLinecap="round"
+                      fill="none"
+                      animate={{
+                        pathLength: [0, 1, 1, 1, 1],
+                        pathOffset: [0, 0, 0, 1, 1],
+                        opacity: [0, 1, 1, 0, 0]
+                      }}
+                      transition={{
+                        duration: 1.4,
+                        repeat: Infinity,
+                        ease: "easeInOut",
+                        times: [0, 0.2, 0.4, 0.6, 1.0]
+                      }}
+                    />
+                    <motion.path 
+                      d="M17 4V20" 
+                      stroke="currentColor" 
+                      strokeWidth="2.5" 
+                      strokeLinecap="round"
+                      fill="none"
+                      animate={{
+                        pathLength: [0, 0, 1, 1, 1, 1],
+                        pathOffset: [0, 0, 0, 0, 1, 1],
+                        opacity: [0, 0, 1, 1, 0, 0]
+                      }}
+                      transition={{
+                        duration: 1.4,
+                        repeat: Infinity,
+                        ease: "easeInOut",
+                        times: [0, 0.15, 0.35, 0.55, 0.75, 1.0]
+                      }}
+                    />
+                    <motion.path 
+                      d="M8 20V13L13 8H22" 
+                      stroke="currentColor" 
+                      strokeWidth="2.5" 
+                      strokeLinecap="round" 
+                      strokeLinejoin="round"
+                      fill="none"
+                      animate={{
+                        pathLength: [0, 0, 1, 1, 1, 1],
+                        pathOffset: [0, 0, 0, 0, 1, 1],
+                        opacity: [0, 0, 1, 1, 0, 0]
+                      }}
+                      transition={{
+                        duration: 1.4,
+                        repeat: Infinity,
+                        ease: "easeInOut",
+                        times: [0, 0.3, 0.5, 0.7, 0.9, 1.0]
+                      }}
+                    />
+                  </svg>
+                ) : (
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
+                    <path d="M4 17H20" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" fill="none" />
+                    <path d="M17 4V20" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                    <path d="M8 20V13L13 8H22" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                  </svg>
+                )}
               </motion.button>
-              
-              <AnimatePresence>
-                {(activeBusLine || stats.lines > 0) && (
-                  <motion.button 
-                    initial={{ scale: 0, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0, opacity: 0 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsBoxSelectMode(prev => {
-                        const next = !prev;
-                        if (!next) {
-                          setBoxSelectedStops([]);
-                        }
-                        return next;
-                      });
-                    }}
-                    className={`backdrop-blur-xl border h-14 w-14 rounded-[1.25rem] shadow-lg flex items-center justify-center transition-all duration-300 active:scale-95 group
-                      ${isBoxSelectMode 
-                        ? 'bg-m3-secondary border-m3-secondary text-m3-on-secondary shadow-m3-secondary/20 hover:bg-m3-secondary/90' 
-                        : 'bg-m3-surface-container-high/90 border-m3-outline-variant/30 text-slate-700 hover:text-m3-primary hover:bg-m3-surface-container-highest'}`}
-                    title={isBoxSelectMode ? "关闭框选模式" : "开启框选模式"}
-                  >
-                    <BoxSelect className={`w-6 h-6 transition-transform group-hover:scale-110 ${isBoxSelectMode ? 'text-m3-on-secondary' : 'text-slate-700 group-hover:text-m3-primary'}`} />
-                  </motion.button>
-                )}
-              </AnimatePresence>
 
-              <AnimatePresence>
-                {(stats.stops > 0 || stats.lines > 0) && (
-                  <motion.button 
-                    initial={{ scale: 0, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0, opacity: 0 }}
-                    onClick={handleClear}
-                    className="backdrop-blur-xl bg-m3-surface-container-high/90 border border-m3-outline-variant/30 h-14 w-14 rounded-[1.25rem] shadow-lg flex items-center justify-center text-slate-700 hover:text-m3-error hover:bg-m3-error-container/50 transition-all duration-300 active:scale-95 group"
-                    title="清空地图"
-                  >
-                    <X className="w-6 h-6 transition-transform group-hover:scale-110" />
-                  </motion.button>
-                )}
-              </AnimatePresence>
+              {/* Module Divider */}
+              <div className="w-[1px] h-6 bg-m3-outline-variant/40 mx-0.5 sm:mx-1 shrink-0" />
+
+              {/* Module 3: Right of Search - Base Map (Icon Only) */}
+              <button
+                type="button"
+                onClick={toggleBaseMap}
+                className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 cursor-pointer active:scale-95 ${
+                  showBaseMap 
+                    ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs' 
+                    : 'text-[#5C7569] hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
+                }`}
+                title={showBaseMap ? "隐藏底图" : "显示底图"}
+              >
+                <MapIcon className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0" />
+              </button>
+
+              {/* Module 3: Right of Search - Stations (Icon Only) */}
+              <button
+                type="button"
+                onClick={toggleStations}
+                className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 cursor-pointer active:scale-95 ${
+                  showStations 
+                    ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs' 
+                    : 'text-[#5C7569] hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
+                }`}
+                title={showStations ? "隐藏站点" : "显示站点"}
+              >
+                <MapPin className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0" />
+              </button>
+
             </div>
           </div>
         )}
@@ -6075,7 +6280,7 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button 
-                    onClick={fetchPendingSubmissions}
+                    onClick={() => fetchPendingSubmissions()}
                     className="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded-md text-slate-300 text-[10px] font-bold"
                   >
                     刷新
@@ -6600,30 +6805,6 @@ export default function App() {
                             </button>
                           </div>
                         </div>
-
-                        <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
-
-                        {/* M3 List styling for Language Selector */}
-                        <div>
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1.5">{t('language')}</label>
-                          <div className="flex flex-col gap-1.5">
-                            {[
-                              { label: '简体中文', value: 'zh-CN' },
-                              { label: '繁體中文', value: 'zh-TW' },
-                              { label: 'English', value: 'en' },
-                            ].map((lang) => (
-                              <button
-                                type="button"
-                                key={lang.value}
-                                onClick={() => setLanguage(lang.value)}
-                                className={`w-full px-4 py-3 rounded-2xl border text-xs font-bold text-left transition-all flex items-center justify-between ${language === lang.value ? 'bg-m3-primary/8 border-m3-primary/30 text-m3-primary' : 'bg-transparent border-m3-outline-variant/20 text-slate-500 hover:bg-m3-primary/4 hover:border-m3-outline-variant/40'}`}
-                              >
-                                {lang.label}
-                                {language === lang.value && <div className="w-2.5 h-2.5 rounded-full bg-m3-primary shadow-[0_0_8px_rgba(103,80,164,0.6)] animate-in fade-in zoom-in-50 duration-200" />}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
                       </div>
                     ) : settingsTab === 'dataFilter' ? (
                       <div className="space-y-5">
@@ -6688,6 +6869,7 @@ export default function App() {
                     ) : settingsTab === 'experimental' ? (
                       <div className="space-y-6">
                         <div className="space-y-4">
+                          {/* City Wide Search */}
                           <div className="flex items-center justify-between p-1">
                             <div className="flex flex-col">
                               <span className="text-xs font-bold text-slate-755">{t('cityWideSearch')}</span>
@@ -6702,6 +6884,36 @@ export default function App() {
                                 animate={{ x: enableCityWideSearch ? 22 : 0 }}
                                 transition={{ type: 'spring', damping: 20, stiffness: 300 }}
                                 className={`rounded-full shadow-sm transition-colors duration-200 ${enableCityWideSearch ? 'w-4.5 h-4.5 bg-m3-on-error' : 'w-3.5 h-3.5 bg-m3-outline'}`}
+                              />
+                            </button>
+                          </div>
+
+                          {/* Two-Transfer Search */}
+                          <div className="flex items-center justify-between p-1">
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-slate-755">两次换乘搜索</span>
+                              <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">实验性功能：可能极度消耗API</span>
+                            </div>
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                if (!enableTwoTransferSearch) {
+                                  const code = prompt("请输入邀请码以开启此功能:");
+                                  if (code === "busline2sgogo") {
+                                    setEnableTwoTransferSearch(true);
+                                  } else {
+                                    alert("邀请码错误");
+                                  }
+                                } else {
+                                  setEnableTwoTransferSearch(false);
+                                }
+                              }}
+                              className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 shrink-0 border-2 ${enableTwoTransferSearch ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
+                            >
+                              <motion.div 
+                                animate={{ x: enableTwoTransferSearch ? 22 : 0 }}
+                                transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+                                className={`rounded-full shadow-sm transition-colors duration-200 ${enableTwoTransferSearch ? 'w-4.5 h-4.5 bg-m3-on-primary' : 'w-3.5 h-3.5 bg-m3-outline'}`}
                               />
                             </button>
                           </div>
@@ -6936,25 +7148,25 @@ export default function App() {
         {/* Removed duplicate UI elements */}
 
         {showMoreInfo && (
-          <div className="hidden md:block absolute bottom-4 left-4 z-10 pointer-events-none">
+          <div className="hidden md:block absolute bottom-5 left-5 z-20 pointer-events-none">
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="backdrop-blur-md bg-m3-surface-container/90 border border-m3-outline-variant/30 p-3 rounded-3xl shadow-lg flex flex-col gap-2.5 pointer-events-auto min-w-[130px]"
+              className="backdrop-blur-md bg-m3-surface/95 border border-m3-outline-variant/40 p-3 rounded-2xl shadow-md flex flex-col gap-2.5 pointer-events-auto min-w-[130px]"
             >
               {/* Legend Row */}
               <div className="hidden md:flex items-center justify-between px-1 select-none">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-sm" />
-                  <span className="text-[10px] font-black text-slate-500">1-3</span>
+                  <div className="w-2 h-2 rounded-full bg-[#5E8271] shadow-sm" />
+                  <span className="text-[10px] font-bold text-slate-500">1-3</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-yellow-500 shadow-sm" />
-                  <span className="text-[10px] font-black text-slate-500">4-9</span>
+                  <div className="w-2 h-2 rounded-full bg-[#C29B63] shadow-sm" />
+                  <span className="text-[10px] font-bold text-slate-500">4-9</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-rose-500 shadow-sm" />
-                  <span className="text-[10px] font-black text-slate-500">10+</span>
+                  <div className="w-2 h-2 rounded-full bg-[#B56666] shadow-sm" />
+                  <span className="text-[10px] font-bold text-slate-500">10+</span>
                 </div>
               </div>
 
@@ -6979,7 +7191,6 @@ export default function App() {
           </div>
         )}
 
-
         <AnimatePresence>
           {(selectedStop || selectedSegmentLines) && (
             <motion.div
@@ -6988,10 +7199,10 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 20 }}
-              className={`fixed bottom-[100px] left-4 right-4 md:top-[96px] md:bottom-auto md:left-4 md:right-auto ${topCard === 'stop' ? 'z-[55]' : 'z-[45]'} pointer-events-auto`}
+              className={`fixed bottom-[76px] left-4 right-4 md:top-[80px] md:bottom-auto md:left-4 md:right-auto ${topCard === 'stop' ? 'z-[55]' : 'z-[45]'} pointer-events-auto`}
               onPointerDown={() => setTopCard('stop')}
             >
-              <div className="backdrop-blur-md bg-m3-surface-container/95 border border-m3-outline-variant/35 p-3.5 md:p-5 rounded-[2rem] md:rounded-[2.2rem] shadow-2xl w-full md:w-[340px] md:max-h-[calc(100vh-240px)] overflow-hidden flex flex-col relative select-none">
+              <div className="backdrop-blur-xl bg-m3-surface/98 border border-m3-outline-variant/40 p-3.5 md:p-5 rounded-[1.75rem] shadow-xl w-full md:w-[340px] md:max-h-[calc(100vh-200px)] overflow-hidden flex flex-col relative select-none">
                 <button 
                   onClick={() => {
                     setSelectedStop(null);
@@ -7001,18 +7212,18 @@ export default function App() {
                     setSelectedSegmentAddress(null);
                   }}
                   type="button"
-                  className="absolute top-3 right-3 w-7.5 h-7.5 flex items-center justify-center rounded-full bg-m3-surface-container-high text-m3-outline hover:text-m3-primary hover:bg-m3-primary-container transition-all shadow-sm z-10 border border-m3-outline-variant/15 select-none"
+                  className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-full bg-m3-surface-container text-m3-outline hover:text-m3-primary hover:bg-m3-primary-container transition-all shadow-xs z-10 select-none"
                 >
-                  <X className="w-4 h-4 text-m3-outline" />
+                  <X className="w-3.5 h-3.5 text-m3-outline" />
                 </button>
 
-                <div className="mb-2 md:mb-6 pr-8">
+                <div className="mb-2 md:mb-5 pr-8">
                   <div className="flex items-center gap-2 mb-1">
-                    <h3 className="text-base md:text-2xl font-black text-slate-800 tracking-tighter truncate">
+                    <h3 className="text-base md:text-xl font-black text-slate-800 tracking-tight truncate">
                       {selectedStop ? selectedStop.name : (selectedSegmentName === "正在获取路段信息..." ? "当前位置" : (selectedSegmentName || "当前位置"))}
                     </h3>
                     {((selectedStop && selectedStop.lines && selectedStop.lines.length > 0) || (selectedSegmentLines && selectedSegmentLines.length > 0 && selectedStop === null)) && (
-                      <div className="bg-m3-primary-container text-m3-on-primary-container px-2.5 py-0.5 rounded-full text-[9.5px]/none font-extrabold tracking-wider shrink-0 border border-m3-outline-variant/15 select-none">
+                      <div className="bg-m3-primary-container text-m3-on-primary-container px-2.5 py-0.5 rounded-full text-[9.5px]/none font-extrabold tracking-wider shrink-0 border border-m3-outline-variant/20 select-none">
                         {new Set((selectedStop ? selectedStop.lines : selectedSegmentLines || []).map((l: string) => {
                           const info = parseLineInfo(l);
                           return info.name.replace('路', '') + '|' + info.start + '|' + info.end;
@@ -7029,21 +7240,27 @@ export default function App() {
                     {selectedStop && selectedStop.lines && selectedStop.lines.length > 0 && selectedStop.isBusStop !== false && (
                       <button 
                         type="button"
-                        onClick={() => showStopConnectivity(selectedStop.lines)}
-                        className="text-[9.5px] md:text-[11px] font-extrabold text-m3-primary hover:bg-m3-primary-container hover:text-m3-on-primary-container bg-m3-surface-container-high px-3 py-1 rounded-full border border-m3-outline-variant/35 shadow-sm transition-all absolute right-12 top-3.5 md:relative md:top-auto md:right-auto cursor-pointer"
+                        onClick={() => {
+                          setStationConnectivityCard({
+                            stop: selectedStop,
+                            checkedLines: new Set(),
+                            transferLimit: 0
+                          });
+                        }}
+                        className="text-[9.5px] md:text-[11px] font-bold text-m3-primary hover:bg-m3-primary-container hover:text-m3-on-primary-container bg-m3-surface-container-high px-3 py-1 rounded-full border border-m3-outline-variant/30 shadow-xs transition-all absolute right-11 top-3 md:relative md:top-auto md:right-auto cursor-pointer"
                       >
                         {t('connectivity')}
                       </button>
                     )}
                   </div>
                   {selectedStop?.segmentName && (
-                    <div className="mt-2 text-[11px] md:text-[13px] font-extrabold text-slate-705 bg-m3-primary-container/20 border border-m3-outline-variant/40 shadow-sm px-3 md:px-4 py-1.5 md:py-2 rounded-xl flex items-center justify-center truncate select-none">
+                    <div className="mt-2 text-[11px] md:text-[12px] font-bold text-slate-700 bg-m3-primary-container/30 border border-m3-outline-variant/30 px-3 py-1.5 rounded-xl flex items-center justify-center truncate select-none">
                       {selectedStop.segmentName}
                     </div>
                   )}
                 </div>
 
-                <div className="overflow-x-auto md:overflow-y-auto custom-scrollbar flex-1 pb-1 md:pb-0 px-1 -mx-1 md:mx-0 md:pr-2 gap-1.5 md:gap-3 flex md:flex-col items-center md:items-stretch h-[32px] md:h-auto snap-x snap-mandatory">
+                <div className="overflow-x-auto md:overflow-y-auto custom-scrollbar flex-1 pb-1 md:pb-0 px-1 -mx-1 md:mx-0 md:pr-2 gap-1.5 md:gap-2.5 flex md:flex-col items-center md:items-stretch h-[32px] md:h-auto snap-x snap-mandatory">
                   {Array.from(new Map(
                     (selectedStop ? selectedStop.lines : selectedSegmentLines || [])
                       .map((line: string) => {
@@ -7061,19 +7278,19 @@ export default function App() {
                       <div 
                         key={line + idx}
                         onClick={() => handleManualSearch({ name: line, type: 'busline' })}
-                        className="md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3.5 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-4 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/20 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[140px] md:max-w-none md:w-auto md:h-[76px] border border-transparent"
+                        className="md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-3.5 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/30 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[140px] md:max-w-none md:w-auto md:h-[72px] border border-transparent shadow-xs"
                       >
                         <div className="hidden md:block absolute left-0 top-0 bottom-0 w-1 bg-m3-primary/0 md:group-hover:bg-m3-primary transition-all" />
                         
                         <div className="flex flex-col items-center select-none shrink-0 w-[60px] md:w-[68px]">
-                          <div className={`w-full h-8 md:h-[40px] md:bg-m3-surface-container-high md:text-m3-primary text-slate-800 font-extrabold flex items-center justify-center md:border md:border-m3-outline-variant/30 md:shadow-sm md:group-hover:bg-m3-primary md:group-hover:text-m3-on-primary md:rounded-xl transition-all bg-m3-surface-container-high/60 rounded-xl md:p-0 overflow-hidden px-1`}
+                          <div className={`w-full h-8 md:h-[38px] md:bg-m3-surface-container-high md:text-m3-primary text-slate-800 font-extrabold flex items-center justify-center md:border md:border-m3-outline-variant/30 md:shadow-xs md:group-hover:bg-m3-primary md:group-hover:text-m3-on-primary md:rounded-xl transition-all bg-m3-surface-container-high/60 rounded-xl md:p-0 overflow-hidden px-1`}
                           >
-                            <span className={`block w-full text-center truncate ${badgeText.length > 5 ? 'text-[9px] md:text-[10px]' : badgeText.length > 3 ? 'text-[11px] md:text-[12px]' : 'text-[13px] md:text-[15px]'}`}>
+                            <span className={`block w-full text-center truncate ${badgeText.length > 5 ? 'text-[9px] md:text-[10px]' : badgeText.length > 3 ? 'text-[11px] md:text-[12px]' : 'text-[13px] md:text-[14px]'}`}>
                               {badgeText}
                             </span>
                           </div>
                           {isUserSub && (
-                            <span className="text-[8.5px] font-black text-[#BA55D3] md:hidden mt-1.5 leading-none shrink-0 whitespace-nowrap px-2 py-0.5 rounded bg-purple-50 border border-purple-100/50">
+                            <span className="text-[8.5px] font-black text-[#9C7A97] md:hidden mt-1.5 leading-none shrink-0 whitespace-nowrap px-2 py-0.5 rounded bg-[#F3ECF2] border border-[#E2D5E0]">
                               用户添加
                             </span>
                           )}
@@ -7082,7 +7299,7 @@ export default function App() {
                         <div className="hidden md:flex flex-col min-w-0 flex-1 justify-center h-full">
                           {isUserSub && (
                             <div className="mb-1 text-left">
-                              <span className="px-1.5 py-0.5 rounded bg-purple-50 text-[9px] font-black text-[#BA55D3] border border-purple-100 whitespace-nowrap inline-block leading-none">
+                              <span className="px-1.5 py-0.5 rounded bg-[#F3ECF2] text-[9px] font-bold text-[#9C7A97] border border-[#E2D5E0] whitespace-nowrap inline-block leading-none">
                                 用户添加
                               </span>
                             </div>
@@ -7091,16 +7308,16 @@ export default function App() {
                             {start !== '-' ? (
                               <>
                                 <div className="flex items-center gap-2">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                                  <span className="text-[11px] font-black text-slate-700 truncate leading-none">{start}</span>
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[#5E8271] shrink-0" />
+                                  <span className="text-[11px] font-bold text-slate-700 truncate leading-none">{start}</span>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[#B56666] shrink-0" />
                                   <span className="text-[11px] font-medium text-slate-400 truncate leading-none">{end}</span>
                                 </div>
                               </>
                             ) : (
-                              <div className="text-[10px] font-bold text-slate-300 italic px-1">
+                              <div className="text-[10px] font-medium text-slate-400 italic px-1">
                                 {t('noDirection')}
                               </div>
                             )}
@@ -7116,6 +7333,161 @@ export default function App() {
         </AnimatePresence>
 
         <AnimatePresence>
+          {stationConnectivityCard && (
+            <motion.div
+              layout
+              transition={{ type: "spring", stiffness: 260, damping: 26 }}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="fixed bottom-[76px] left-4 right-4 md:top-[80px] md:bottom-auto md:left-4 md:right-auto z-[70] pointer-events-auto md:w-[340px]"
+            >
+              <div className="backdrop-blur-xl bg-m3-surface/98 border border-m3-outline-variant/40 p-4 rounded-[1.75rem] shadow-2xl max-h-[calc(100vh-140px)] overflow-hidden flex flex-col relative select-none">
+                <button 
+                  onClick={() => setStationConnectivityCard(null)}
+                  type="button"
+                  className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-full bg-m3-surface-container text-m3-outline hover:text-m3-primary hover:bg-m3-primary-container transition-all shadow-xs z-10"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+
+                <div className="mb-3 pr-8">
+                  <h3 className="text-base font-black text-slate-800 tracking-tight truncate">
+                    {stationConnectivityCard.stop.name}站的通达度
+                  </h3>
+                </div>
+
+                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3.5 pr-1">
+                  {connectivityToast && (
+                    <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold flex items-center gap-2">
+                      <span>{connectivityToast}</span>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 mb-1.5">
+                      线路筛选
+                    </label>
+                    <div className="space-y-1 max-h-40 overflow-y-auto custom-scrollbar border border-slate-200/60 rounded-xl p-2 bg-slate-50/50">
+                      {(stationConnectivityCard.stop.lines || []).map((lineStr: string, idx: number) => {
+                        const info = parseLineInfo(lineStr);
+                        const isChecked = stationConnectivityCard.checkedLines.has(lineStr);
+                        return (
+                          <div 
+                            key={idx}
+                            onClick={() => {
+                              const next = new Set(stationConnectivityCard.checkedLines);
+                              if (isChecked) next.delete(lineStr);
+                              else next.add(lineStr);
+                              setStationConnectivityCard({ ...stationConnectivityCard, checkedLines: next });
+                            }}
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${isChecked ? 'bg-m3-primary-container/40 border-m3-primary/40 text-slate-900 font-bold' : 'bg-white border-slate-100 hover:bg-slate-100 text-slate-700 font-medium'}`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <input 
+                                type="checkbox" 
+                                checked={isChecked} 
+                                onChange={() => {}} 
+                                className="rounded accent-m3-primary cursor-pointer"
+                              />
+                              <div className="min-w-0">
+                                <span className="text-xs font-black truncate block">{info.name}</span>
+                                <span className="text-[10px] text-slate-400 truncate block">{info.start !== '-' ? `${info.start} ⇌ ${info.end}` : '环线'}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex items-center justify-between mt-1 px-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const all = new Set<string>(stationConnectivityCard.stop.lines || []);
+                          setStationConnectivityCard({ ...stationConnectivityCard, checkedLines: all });
+                        }}
+                        className="text-[10px] text-blue-600 font-bold hover:underline"
+                      >
+                        全选
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStationConnectivityCard({ ...stationConnectivityCard, checkedLines: new Set() });
+                        }}
+                        className="text-[10px] text-slate-400 font-bold hover:underline"
+                      >
+                        清空
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-black text-slate-700 mb-1">
+                      换乘次数 (0 ~ 2次)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-between w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5">
+                        <span className="text-xs font-bold text-slate-800">
+                          {stationConnectivityCard.transferLimit ?? 0} 次换乘
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const cur = stationConnectivityCard.transferLimit ?? 0;
+                              const next = Math.max(0, cur - 1);
+                              setStationConnectivityCard({ ...stationConnectivityCard, transferLimit: next });
+                            }}
+                            className="w-6 h-6 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-700 font-bold hover:bg-slate-100 transition-all text-xs cursor-pointer shadow-xs"
+                          >
+                            -
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const cur = stationConnectivityCard.transferLimit ?? 0;
+                              const max = enableTwoTransferSearch ? 2 : 1;
+                              const next = Math.min(max, cur + 1);
+                              setStationConnectivityCard({ ...stationConnectivityCard, transferLimit: next });
+                            }}
+                            className="w-6 h-6 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-700 font-bold hover:bg-slate-100 transition-all text-xs cursor-pointer shadow-xs"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!stationConnectivityCard.checkedLines || stationConnectivityCard.checkedLines.size === 0) {
+                        setConnectivityToast('请选择线路后查看通达度');
+                        setTimeout(() => setConnectivityToast(null), 3500);
+                        return;
+                      }
+                      setConnectivityToast(null);
+                      executeStationConnectivity(
+                        stationConnectivityCard.stop,
+                        stationConnectivityCard.checkedLines,
+                        stationConnectivityCard.transferLimit
+                      );
+                    }}
+                    disabled={isSearching}
+                    className="w-full py-2.5 px-4 rounded-xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-md hover:opacity-95 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                    查询通达度
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
           {activeBusLine && (
             <motion.div
               layout
@@ -7124,9 +7496,9 @@ export default function App() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
               onPointerDown={() => setTopCard('line')}
-              className={`fixed ${(selectedStop || selectedSegmentLines) ? 'bottom-[220px]' : 'bottom-[100px]'} md:bottom-auto left-4 right-4 md:top-24 md:left-4 ${topCard === 'line' ? 'z-[55]' : 'z-[45]'} md:w-64 pointer-events-auto md:h-[calc(100vh-220px)]`}
+              className={`fixed ${(selectedStop || selectedSegmentLines) ? 'bottom-[200px]' : 'bottom-[76px]'} md:bottom-auto left-4 right-4 md:top-20 md:left-4 ${topCard === 'line' ? 'z-[55]' : 'z-[45]'} md:w-64 pointer-events-auto md:h-[calc(100vh-200px)]`}
             >
-              <div className="backdrop-blur-2xl bg-white/95 border border-white/50 rounded-3xl md:rounded-[2rem] shadow-2xl h-[100px] md:h-full flex flex-col overflow-hidden relative">
+              <div className="backdrop-blur-xl bg-m3-surface/98 border border-m3-outline-variant/40 rounded-[1.75rem] shadow-xl h-[100px] md:h-full flex flex-col overflow-hidden relative">
                 <button 
                   onClick={() => {
                     setActiveBusLine(null);
@@ -7148,38 +7520,38 @@ export default function App() {
                       drawReferenceArea(mapInstance, (window as any).AMap);
                     }
                   }}
-                  className="absolute top-2.5 right-2.5 md:top-3 md:right-3 p-1.5 md:p-2 hover:bg-slate-100 rounded-xl transition-colors bg-white shadow-sm border border-slate-100 z-10"
+                  className="absolute top-2.5 right-2.5 md:top-3 md:right-3 w-7 h-7 flex items-center justify-center hover:bg-m3-surface-container-high rounded-full transition-colors bg-m3-surface-container text-m3-outline hover:text-m3-primary shadow-xs z-10"
                 >
-                  <X className="w-3 h-3 md:w-4 md:h-4 text-slate-400" />
+                  <X className="w-3.5 h-3.5" />
                 </button>
-                <div className="p-2.5 px-4 md:p-4 md:py-4 border-b border-slate-100 shrink-0 flex flex-col items-start gap-1">
+                <div className="p-2.5 px-4 md:p-4 md:py-4 border-b border-m3-outline-variant/20 shrink-0 flex flex-col items-start gap-1">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-black text-slate-800 text-sm md:text-lg whitespace-nowrap">
                       {parseLineInfo(activeBusLine.name).name.replace('路','')}
                     </span>
                     {activeBusLine.isUserSubmitted && (
-                      <span className="px-1.5 py-0.5 rounded bg-purple-50 text-[8px] font-black text-purple-400 border border-purple-100 whitespace-nowrap">
+                      <span className="px-1.5 py-0.5 rounded bg-[#F3ECF2] text-[8px] font-bold text-[#9C7A97] border border-[#E2D5E0] whitespace-nowrap">
                         用户添加
                       </span>
                     )}
                   </div>
                   {activeBusLine.isUserSubmitted && activeBusLine.creatorNickname && (
-                    <span className="text-[10px] text-purple-400 font-bold leading-none">
+                    <span className="text-[10px] text-[#9C7A97] font-bold leading-none">
                       绘制者：{activeBusLine.creatorNickname}
                     </span>
                   )}
-                  <span className="text-[10px] md:text-xs text-slate-400 font-medium truncate">
+                  <span className="text-[10px] md:text-xs text-slate-500 font-medium truncate">
                     {parseLineInfo(activeBusLine.name).start !== '-' ? `${parseLineInfo(activeBusLine.name).start} - ${parseLineInfo(activeBusLine.name).end}` : '环线 / 方向未知'}
                   </span>
                 </div>
                 <div className="flex-1 overflow-x-auto md:overflow-x-hidden md:overflow-y-auto custom-scrollbar p-0 md:p-4 md:pr-2 flex flex-row md:flex-col items-center md:items-stretch snap-x snap-mandatory mt-1 md:mt-0">
                   <div className="relative flex flex-row md:flex-col items-center md:items-stretch md:pl-1 h-full md:h-auto w-max md:w-auto px-4 md:px-0">
-                    <div className="hidden md:block absolute left-[9px] top-4 bottom-4 w-0.5 bg-slate-200" />
-                    <div className="md:hidden absolute top-[14px] left-8 right-8 h-0.5 bg-slate-200" />
+                    <div className="hidden md:block absolute left-[9px] top-4 bottom-4 w-0.5 bg-m3-outline-variant/30" />
+                    <div className="md:hidden absolute top-[14px] left-8 right-8 h-0.5 bg-m3-outline-variant/30" />
                     {activeBusLine.via_stops.map((stop: any, idx: number) => {
                       const isSelected = selectedStop?.name === stop.name;
                       const count = stopCountCacheRef.current.get(`${stop.location.lng},${stop.location.lat}`) || 0;
-                      const iconColor = getStopColor(count, '#3b82f6');
+                      const iconColor = getStopColor(count, '#52796F');
                       return (
                         <div 
                           key={idx} 
@@ -7210,9 +7582,9 @@ export default function App() {
                           }}
                         >
                           <div className={`flex flex-col items-center shrink-0 pt-0.5 my-2 md:my-0 md:mr-3 ${isSelected ? 'scale-125' : 'group-hover:scale-125'} transition-transform`}>
-                            <div className="w-[12px] h-[12px] md:w-[14px] md:h-[14px] rounded-full border-2 md:border-4 border-white shadow-sm z-10" style={{ backgroundColor: iconColor, boxShadow: `0 0 0 1px ${iconColor}4D` }} />
+                            <div className="w-[12px] h-[12px] md:w-[14px] md:h-[14px] rounded-full border-2 md:border-3 border-white shadow-xs z-10" style={{ backgroundColor: iconColor, boxShadow: `0 0 0 1px ${iconColor}4D` }} />
                           </div>
-                          <div className={`text-[10px] md:text-sm font-bold leading-tight md:pt-0.5 transition-colors w-full text-center md:text-left truncate px-1 md:px-0 ${isSelected ? 'text-blue-600' : 'text-slate-700 group-hover:text-blue-600'}`}>
+                          <div className={`text-[10px] md:text-xs font-bold leading-tight md:pt-0.5 transition-colors w-full text-center md:text-left truncate px-1 md:px-0 ${isSelected ? 'text-m3-primary font-black' : 'text-slate-700 group-hover:text-m3-primary'}`}>
                             {stop.name}
                           </div>
                         </div>
@@ -7225,19 +7597,21 @@ export default function App() {
           )}
         </AnimatePresence>
 
-      </main>
-
-      <footer className="fixed bottom-4 right-4 z-20 pointer-events-none flex flex-col items-end gap-2.5">
         {!isDrawingMode && (
           <button 
+            type="button"
             onClick={handleLocate}
-            className="backdrop-blur-md border border-m3-outline-variant/20 bg-m3-surface-container-high/90 text-slate-700 hover:text-m3-primary hover:bg-m3-surface-container-highest w-[42px] h-[42px] rounded-2xl shadow-md flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-90 group pointer-events-auto mb-1"
+            className="fixed bottom-22 sm:bottom-6 right-4 sm:right-6 z-30 backdrop-blur-xl border border-m3-outline-variant/40 bg-m3-surface/95 text-slate-700 hover:text-m3-primary hover:bg-m3-surface-container-high w-11 h-11 sm:w-12 sm:h-12 rounded-full shadow-[0_6px_20px_rgba(28,47,39,0.15)] flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 group pointer-events-auto"
             title="定位当前位置"
           >
-            <Navigation className="w-4.5 h-4.5 transition-transform group-hover:scale-110 text-m3-primary/80 group-hover:text-m3-primary fill-current" />
+            <Navigation className="w-5 h-5 transition-transform group-hover:scale-110 text-m3-primary fill-current" />
           </button>
         )}
-        <div className="mr-2 cursor-pointer pointer-events-auto" onClick={handleFooterClick}>
+
+      </main>
+
+      <footer className="fixed bottom-2 right-4 sm:bottom-3 sm:right-6 z-10 pointer-events-none flex flex-col items-end gap-1.5">
+        <div className="mr-1 cursor-pointer pointer-events-auto" onClick={handleFooterClick}>
           <span className="text-[9px] font-bold text-slate-400 opacity-60 uppercase tracking-widest leading-none select-none">@TsFeng</span>
         </div>
         {showMoreInfo && (
