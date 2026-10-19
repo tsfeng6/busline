@@ -37495,7 +37495,11 @@ import_dotenv.default.config({ override: true });
 var { Pool: Pool3 } = esm_default;
 var pool = new Pool3({
   connectionString: process.env.DATABASE_URL,
-  connectionTimeoutMillis: 3e3
+  connectionTimeoutMillis: 8e3,
+  idleTimeoutMillis: 3e4
+});
+pool.on("error", (err) => {
+  console.warn("PostgreSQL pool idle client warning:", err.message);
 });
 var db = drizzle(pool, { schema: schema_exports });
 async function runMigration() {
@@ -37530,13 +37534,15 @@ async function runMigration() {
 // server.ts
 async function startServer() {
   const app = (0, import_express.default)();
-  let PORT = 3e3;
-  if (process.env.NODE_ENV === "production" && process.env.PORT && !process.env.APP_URL?.includes("run.app") && !process.env.APP_URL?.includes("aistudio")) {
-    PORT = Number(process.env.PORT);
+  let PORT = Number(process.env.PORT) || 3e3;
+  if (process.env.APP_URL && (process.env.APP_URL.includes("run.app") || process.env.APP_URL.includes("aistudio"))) {
+    PORT = 3e3;
   }
-  runMigration().catch((e) => {
-    console.warn("Database migration skipped or connection timed out:", e?.message || e);
-  });
+  try {
+    await runMigration();
+  } catch (e) {
+    console.error("Migration failed:", e);
+  }
   app.use((0, import_cors.default)());
   app.use(import_express.default.json({ limit: "10mb" }));
   const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "buslineadmin";
@@ -37578,7 +37584,7 @@ async function startServer() {
         res.json({ key: "wechat_qr", value: "", updatedAt: Date.now() });
       }
     } catch (err) {
-      console.warn("Get setting error (fallback to default):", err?.message || err);
+      console.warn("Get setting DB query warning (using fallback):", err.message);
       res.json({ key: "wechat_qr", value: "", updatedAt: Date.now() });
     }
   });
@@ -37685,8 +37691,8 @@ async function startServer() {
       });
       res.json(statuses);
     } catch (err) {
-      console.error("Status error:", err);
-      res.status(500).json({ error: err.message });
+      console.warn("Status DB query warning (using empty fallback):", err.message);
+      res.json({});
     }
   });
   app.get("/api/submissions/approved", async (req, res) => {
@@ -37700,7 +37706,7 @@ async function startServer() {
       }));
       res.json(mappedLines);
     } catch (err) {
-      console.warn("Approved list error (fallback to empty list):", err?.message || err);
+      console.warn("Approved list DB query warning (using empty fallback):", err.message);
       res.json([]);
     }
   });
