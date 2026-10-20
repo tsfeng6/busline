@@ -77,8 +77,24 @@ const deleteApprovedLineInFirebase = async (id: string, adminPassword?: string) 
   return response.json();
 };
 
-const AMAP_KEY = import.meta.env.VITE_AMAP_KEY || '20f5c6b65349e5d4cb5f58c7e0c4a4ba'; 
-const SECURITY_CODE = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
+const getInitialAmapConfig = () => {
+  const defaultKey = import.meta.env.VITE_AMAP_KEY || '20f5c6b65349e5d4cb5f58c7e0c4a4ba'; 
+  const defaultSecurityCode = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
+  if (typeof window !== 'undefined') {
+    const useCustom = localStorage.getItem('app_use_custom_api_key') === 'true';
+    const customKey = localStorage.getItem('app_custom_api_key')?.trim();
+    const customSec = localStorage.getItem('app_custom_api_security_code')?.trim();
+    return {
+      key: useCustom && customKey ? customKey : defaultKey,
+      securityCode: useCustom && customSec ? customSec : defaultSecurityCode,
+    };
+  }
+  return { key: defaultKey, securityCode: defaultSecurityCode };
+};
+
+const initialAmapConfig = getInitialAmapConfig();
+const AMAP_KEY = initialAmapConfig.key;
+const SECURITY_CODE = initialAmapConfig.securityCode;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 
 if (typeof window !== 'undefined') {
@@ -587,6 +603,33 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('app_experimental_two_transfer', String(enableTwoTransferSearch));
   }, [enableTwoTransferSearch]);
+
+  const [useCustomApiKey, setUseCustomApiKey] = useState(() => {
+    return localStorage.getItem('app_use_custom_api_key') === 'true';
+  });
+  const [customApiKey, setCustomApiKey] = useState(() => {
+    return localStorage.getItem('app_custom_api_key') || '';
+  });
+  const [customApiSecurityCode, setCustomApiSecurityCode] = useState(() => {
+    return localStorage.getItem('app_custom_api_security_code') || '';
+  });
+  useEffect(() => {
+    localStorage.setItem('app_use_custom_api_key', String(useCustomApiKey));
+  }, [useCustomApiKey]);
+  useEffect(() => {
+    localStorage.setItem('app_custom_api_key', customApiKey);
+  }, [customApiKey]);
+  useEffect(() => {
+    localStorage.setItem('app_custom_api_security_code', customApiSecurityCode);
+    if (typeof window !== 'undefined') {
+      const code = useCustomApiKey && customApiSecurityCode.trim() 
+        ? customApiSecurityCode.trim() 
+        : (import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075');
+      (window as any)._AMapSecurityConfig = {
+        securityJsCode: code,
+      };
+    }
+  }, [customApiSecurityCode, useCustomApiKey]);
 
   const boxSelectedLines = useMemo(() => {
     const linesSet = new Set<string>();
@@ -6703,8 +6746,12 @@ export default function App() {
                     {settingsTab === 'general' ? (
                       <div className="space-y-5">
                         <div className="space-y-3.5">
+                          {/* Toggleable Settings */}
                           <div className="flex items-center justify-between p-1">
-                            <span className="text-xs font-bold text-slate-700">{t('showStations')}</span>
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-slate-700">{t('showStations')}</span>
+                                <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">在地图上标注出公交站点</span>
+                            </div>
                             <button 
                               type="button"
                               onClick={toggleStations}
@@ -6719,7 +6766,10 @@ export default function App() {
                           </div>
 
                           <div className="flex items-center justify-between p-1">
-                            <span className="text-xs font-bold text-slate-700">{t('showBaseMap')}</span>
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-slate-700">{t('showBaseMap')}</span>
+                                <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">显示地图，显示道路、地名等信息</span>
+                            </div>
                             <button 
                               type="button"
                               onClick={toggleBaseMap}
@@ -6734,7 +6784,10 @@ export default function App() {
                           </div>
 
                           <div className="flex items-center justify-between p-1">
-                            <span className="text-xs font-bold text-slate-700">{t('showMoreInfo')}</span>
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-slate-700">{t('showMoreInfo')}</span>
+                                <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">显示放大系数、图例等信息</span>
+                            </div>
                             <button 
                               type="button"
                               onClick={toggleMoreInfo}
@@ -6749,7 +6802,10 @@ export default function App() {
                           </div>
 
                           <div className="flex items-center justify-between p-1">
-                            <span className="text-xs font-bold text-slate-700">{t('showReferenceArea')}</span>
+                            <div className="flex flex-col">
+                                <span className="text-xs font-bold text-slate-700">{t('showReferenceArea')}</span>
+                                <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">显示有效检索范围</span>
+                            </div>
                             <button 
                               type="button"
                               onClick={() => setShowReferenceArea(prev => !prev)}
@@ -6762,6 +6818,8 @@ export default function App() {
                               />
                             </button>
                           </div>
+
+                        </div>
 
                           <div className="flex flex-col p-1 gap-1">
                             <div className="flex items-center justify-between">
@@ -6780,10 +6838,9 @@ export default function App() {
                             <span className="text-[10px] font-medium text-slate-400 select-none">
                               {t('customDrawingDisabledHint')}
                             </span>
-                          </div>
                         </div>
 
-                        <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
+                      <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
 
                         {/* M3 Segmented Control for thickness */}
                         <div>
@@ -6805,7 +6862,68 @@ export default function App() {
                             </button>
                           </div>
                         </div>
+
+                      <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
+
+                      {/* Custom API Key & Security Code Toggle & Input (Always at the very bottom of General) */}
+                      <div className="flex flex-col gap-3 p-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col">
+                            <span className="text-xs font-bold text-slate-700">使用自定义高德API</span>
+                            <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">使用您提供的专属API，而不是默认的公共API</span>
+                          </div>
+                          <button 
+                            type="button"
+                            onClick={() => setUseCustomApiKey(prev => !prev)}
+                            className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 border-2 ${useCustomApiKey ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
+                          >
+                            <motion.div 
+                              animate={{ x: useCustomApiKey ? 22 : 0 }}
+                              transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+                              className={`rounded-full shadow-sm transition-colors duration-200 ${useCustomApiKey ? 'w-4.5 h-4.5 bg-m3-on-primary' : 'w-3.5 h-3.5 bg-m3-outline'}`}
+                            />
+                          </button>
+                        </div>
+                        {useCustomApiKey && (
+                          <div className="flex flex-col gap-2.5 pt-1">
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                                高德 Web端 API Key (VITE_AMAP_KEY)
+                              </label>
+                              <input
+                                type="text"
+                                value={customApiKey}
+                                onChange={(e) => setCustomApiKey(e.target.value)}
+                                placeholder="请输入高德API Key"
+                                className="px-3 py-2 bg-m3-surface-container border border-m3-outline-variant text-slate-800 rounded-xl outline-none text-xs font-bold focus:border-m3-primary transition-all w-full"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                                高德安全密钥 Security Code (VITE_AMAP_SECURITY_CODE)
+                              </label>
+                              <input
+                                type="text"
+                                value={customApiSecurityCode}
+                                onChange={(e) => setCustomApiSecurityCode(e.target.value)}
+                                placeholder="请输入高德API Security Code"
+                                className="px-3 py-2 bg-m3-surface-container border border-m3-outline-variant text-slate-800 rounded-xl outline-none text-xs font-bold focus:border-m3-primary transition-all w-full"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
+                              <span>配置专属 Key 与安全密钥后生效。</span>
+                              <button
+                                type="button"
+                                onClick={() => window.location.reload()}
+                                className="px-2.5 py-1 bg-m3-primary/10 hover:bg-m3-primary/20 text-m3-primary font-bold rounded-lg transition-all"
+                              >
+                                刷新页面生效
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
+                    </div>
                     ) : settingsTab === 'dataFilter' ? (
                       <div className="space-y-5">
                         <div>
