@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { BusStop, BusLine, LineSegment } from './types';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 
@@ -84,6 +84,16 @@ const getInitialAmapConfig = () => {
     const useCustom = localStorage.getItem('app_use_custom_api_key') === 'true';
     const customKey = localStorage.getItem('app_custom_api_key')?.trim();
     const customSec = localStorage.getItem('app_custom_api_security_code')?.trim();
+
+    if (useCustom && (!customKey || customKey.length < 5)) {
+      localStorage.setItem('app_use_custom_api_key', 'false');
+      localStorage.setItem('app_api_fallback_message', '您填写的是无效的高德API，因此您的巴士线路图已重新恢复公共API');
+      return {
+        key: defaultKey,
+        securityCode: defaultSecurityCode,
+      };
+    }
+
     return {
       key: useCustom && customKey ? customKey : defaultKey,
       securityCode: useCustom && customSec ? customSec : defaultSecurityCode,
@@ -578,32 +588,7 @@ export default function App() {
     }
   };
 
-  // Admin and stats
-  const [showAdminLogin, setShowAdminLogin] = useState(false);
-  const [adminPassword, setAdminPassword] = useState('');
-  const [adminMode, setAdminMode] = useState(false); // keep for compatibility or reference if needed
-  const [isAdminVerified, setIsAdminVerified] = useState(false);
-  const [showAuditModal, setShowAuditModal] = useState(false);
-  const [showManageModal, setShowManageModal] = useState(false);
-  const [editingLineId, setEditingLineId] = useState<string | null>(null);
-  const [deletingLineId, setDeletingLineId] = useState<string | null>(null);
-  const [editingLineName, setEditingLineName] = useState('');
-  const [pendingSubmissions, setPendingSubmissions] = useState<any[]>([]);
-  const [connectivityToast, setConnectivityToast] = useState<string | null>(null);
-
-  const [footerClickCount, setFooterClickCount] = useState(0);
-  const [lastFooterClickTime, setLastFooterClickTime] = useState(0);
-
-  const drawingGroupRef = useRef<any>(null);
-  const locationMarkerRef = useRef<any>(null);
-  const isRoutingRef = useRef(false);
-  const [enableTwoTransferSearch, setEnableTwoTransferSearch] = useState(() => {
-    return localStorage.getItem('app_experimental_two_transfer') === 'true';
-  });
-  useEffect(() => {
-    localStorage.setItem('app_experimental_two_transfer', String(enableTwoTransferSearch));
-  }, [enableTwoTransferSearch]);
-
+  // Custom AMap API configuration state
   const [useCustomApiKey, setUseCustomApiKey] = useState(() => {
     return localStorage.getItem('app_use_custom_api_key') === 'true';
   });
@@ -630,6 +615,159 @@ export default function App() {
       };
     }
   }, [customApiSecurityCode, useCustomApiKey]);
+
+  // Admin and stats
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [adminMode, setAdminMode] = useState(false); // keep for compatibility or reference if needed
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
+  const [showAuditModal, setShowAuditModal] = useState(false);
+  const [showManageModal, setShowManageModal] = useState(false);
+  const [editingLineId, setEditingLineId] = useState<string | null>(null);
+  const [deletingLineId, setDeletingLineId] = useState<string | null>(null);
+  const [editingLineName, setEditingLineName] = useState('');
+  const [pendingSubmissions, setPendingSubmissions] = useState<any[]>([]);
+  const [connectivityToast, setConnectivityToast] = useState<string | null>(null);
+  const [apiErrorNotification, setApiErrorNotification] = useState<string | null>(null);
+
+  // Check on mount if an API fallback notification was queued
+  useEffect(() => {
+    const fallbackMsg = localStorage.getItem('app_api_fallback_message');
+    if (fallbackMsg) {
+      localStorage.removeItem('app_api_fallback_message');
+      setApiErrorNotification(fallbackMsg);
+    }
+  }, []);
+
+  // Automatic recovery handler when custom API is broken or invalid
+  const triggerCustomApiFallback = useCallback(() => {
+    const isCustom = localStorage.getItem('app_use_custom_api_key') === 'true';
+    if (!isCustom) return;
+
+    // 1. Immediately turn off custom API in storage and state
+    localStorage.setItem('app_use_custom_api_key', 'false');
+    // 2. Set exact required prompt
+    localStorage.setItem('app_api_fallback_message', '您填写的是无效的高德API，因此您的巴士线路图已重新恢复公共API');
+
+    const defaultSecurityCode = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
+    if (typeof window !== 'undefined') {
+      (window as any)._AMapSecurityConfig = {
+        securityJsCode: defaultSecurityCode,
+      };
+    }
+
+    setUseCustomApiKey(false);
+    setApiErrorNotification('您填写的是无效的高德API，因此您的巴士线路图已重新恢复公共API');
+    setLoading(false);
+
+    // Reload with clean script environment to restore default public API immediately
+    setTimeout(() => {
+      window.location.reload();
+    }, 120);
+  }, []);
+
+  const checkAmapQuotaError = useCallback((status: string, result: any) => {
+    if (status === 'error' || (result && result.info && result.info !== 'OK' && result.info !== 'NO_DATA')) {
+      const info = String(result?.info || '').toUpperCase();
+      const infocode = String(result?.infocode || '');
+      
+      if (
+        info.includes('INVALID_USER_KEY') ||
+        info.includes('PLAT_NOMATCH') ||
+        info.includes('INVALID_USER_SCODE') ||
+        info.includes('KEY_NOT_EXIST') ||
+        infocode === '10001' ||
+        infocode === '10002'
+      ) {
+        if (localStorage.getItem('app_use_custom_api_key') === 'true') {
+          triggerCustomApiFallback();
+          return true;
+        }
+        setApiErrorNotification(
+          '高德 API Key 无效或平台类型不匹配。请确认在设置中配置的是高德「Web端 (JS API)」类型的 Key 与安全密钥。'
+        );
+        return true;
+      }
+      if (
+        info.includes('OVER_LIMIT') ||
+        info.includes('DAILY') ||
+        infocode === '10003' ||
+        infocode === '10044'
+      ) {
+        setApiErrorNotification(
+          '高德 API 配额不足（日调用量已达上限）。建议前往设置开启“使用自定义高德API”并填入专属 Key 与安全密钥。'
+        );
+        return true;
+      }
+      if (info.includes('FREQUENT') || info.includes('QPS') || infocode === '10004') {
+        setApiErrorNotification('高德 API 请求过于频繁（并发 QPS 超限），请稍候重试。');
+        return true;
+      }
+    }
+    return false;
+  }, [triggerCustomApiFallback]);
+
+  useEffect(() => {
+    if (apiErrorNotification) {
+      const timer = setTimeout(() => setApiErrorNotification(null), 9000);
+      return () => clearTimeout(timer);
+    }
+  }, [apiErrorNotification]);
+
+  useEffect(() => {
+    const handleWindowError = (e: ErrorEvent) => {
+      const msg = String(e.message || '').toUpperCase();
+      if (
+        msg.includes('INVALID_USER_KEY') || 
+        msg.includes('USERKEY_PLAT_NOMATCH') || 
+        msg.includes('INVALID_USER_SCODE') ||
+        msg.includes('KEY_NOT_EXIST')
+      ) {
+        if (localStorage.getItem('app_use_custom_api_key') === 'true') {
+          triggerCustomApiFallback();
+          return;
+        }
+        setApiErrorNotification('高德 API Key 无效或平台类型不匹配，请前往设置检查。');
+      } else if (msg.includes('DAILY_QUERY_OVER_LIMIT') || msg.includes('OVER_LIMIT')) {
+        setApiErrorNotification('高德 API 配额不足（日调用量已达上限），请在设置中配置自定义 API。');
+      }
+    };
+
+    const handleUnhandledRejection = (e: PromiseRejectionEvent) => {
+      const reason = String(e.reason?.message || e.reason || '').toUpperCase();
+      if (
+        reason.includes('INVALID_USER_KEY') || 
+        reason.includes('USERKEY_PLAT_NOMATCH') || 
+        reason.includes('INVALID_USER_SCODE') ||
+        reason.includes('KEY_NOT_EXIST') ||
+        (reason.includes('AMAP') && (reason.includes('FAIL') || reason.includes('ERROR')))
+      ) {
+        if (localStorage.getItem('app_use_custom_api_key') === 'true') {
+          triggerCustomApiFallback();
+        }
+      }
+    };
+
+    window.addEventListener('error', handleWindowError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => {
+      window.removeEventListener('error', handleWindowError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, [triggerCustomApiFallback]);
+
+  const [footerClickCount, setFooterClickCount] = useState(0);
+  const [lastFooterClickTime, setLastFooterClickTime] = useState(0);
+
+  const drawingGroupRef = useRef<any>(null);
+  const locationMarkerRef = useRef<any>(null);
+  const isRoutingRef = useRef(false);
+  const [enableTwoTransferSearch, setEnableTwoTransferSearch] = useState(() => {
+    return localStorage.getItem('app_experimental_two_transfer') === 'true';
+  });
+  useEffect(() => {
+    localStorage.setItem('app_experimental_two_transfer', String(enableTwoTransferSearch));
+  }, [enableTwoTransferSearch]);
 
   const boxSelectedLines = useMemo(() => {
     const linesSet = new Set<string>();
@@ -1884,8 +2022,9 @@ export default function App() {
 
           lineSearch.search(shortName, (status: string, result: any) => {
             clearTimeout(timeout);
+            checkAmapQuotaError(status, result);
             completed++;
-            if (result.lineInfo) {
+            if (result && result.lineInfo) {
               result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
             }
             if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
@@ -2104,7 +2243,8 @@ export default function App() {
               const timeout = setTimeout(() => resolve(), 8000);
               lineSearch.search(shortName, (status: string, result: any) => {
                 clearTimeout(timeout);
-                if (result.lineInfo) {
+                checkAmapQuotaError(status, result);
+                if (result && result.lineInfo) {
                   result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
                 }
                 if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
@@ -3267,7 +3407,8 @@ export default function App() {
       lineSearch.search(shortName, (status: string, result: any) => {
         clearTimeout(timeout);
         setLoading(false);
-        if (result.lineInfo) {
+        if (checkAmapQuotaError(status, result)) return;
+        if (result && result.lineInfo) {
           result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
         }
         if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
@@ -3513,7 +3654,8 @@ export default function App() {
         const timeout = setTimeout(() => resolve('fail'), 10000);
         lineSearch.search(query, (s: string, result: any) => {
           clearTimeout(timeout);
-          if (result.lineInfo) {
+          checkAmapQuotaError(s, result);
+          if (result && result.lineInfo) {
             result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
           }
           if (s === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
@@ -3619,12 +3761,25 @@ export default function App() {
 
   useEffect(() => {
     let map: any;
+    const isCustomActive = localStorage.getItem('app_use_custom_api_key') === 'true';
+
+    // Watchdog timer: If custom API was enabled, but map fails to initialize or hangs within 4.5s
+    let watchdogTimer: any = null;
+    if (isCustomActive) {
+      watchdogTimer = setTimeout(() => {
+        if (!mapRef.current && localStorage.getItem('app_use_custom_api_key') === 'true') {
+          console.warn('Custom AMap API timed out during launch. Falling back to public API...');
+          triggerCustomApiFallback();
+        }
+      }, 4500);
+    }
 
     AMapLoader.load({
       key: AMAP_KEY,
       version: '2.0',
       plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking'],
     }).then((AMap) => {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       const savedCenter = localStorage.getItem('map_center');
       let initialCenter = [116.331398, 39.717646];
       if (savedCenter) {
@@ -3777,17 +3932,23 @@ export default function App() {
       mapClickHandlerRef.current = defaultClickHandler;
       map.on('click', defaultClickHandler);
     }).catch(e => {
-      console.error(e);
-      setLoading(false);
+      if (watchdogTimer) clearTimeout(watchdogTimer);
+      console.error('AMapLoader load error:', e);
+      if (localStorage.getItem('app_use_custom_api_key') === 'true') {
+        triggerCustomApiFallback();
+      } else {
+        setLoading(false);
+      }
     });
 
     return () => {
+      if (watchdogTimer) clearTimeout(watchdogTimer);
       if (map) {
         if (mapClickHandlerRef.current) map.off('click', mapClickHandlerRef.current);
         map.destroy();
       }
     };
-  }, []);
+  }, [triggerCustomApiFallback]);
 
   // Controlling visibility of station markers
   useEffect(() => {
@@ -5096,6 +5257,43 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
+      {/* Global API Quota / Error Banner */}
+      <AnimatePresence>
+        {apiErrorNotification && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="fixed top-5 left-1/2 -translate-x-1/2 z-[150] max-w-md w-[92vw] bg-amber-600 text-white p-3 sm:p-3.5 rounded-2xl shadow-2xl backdrop-blur-md flex items-center justify-between gap-3 border border-amber-400/50 pointer-events-auto"
+          >
+            <div className="flex items-center gap-2.5 flex-1 min-w-0">
+              <AlertTriangle className="w-5 h-5 shrink-0 text-amber-200" />
+              <span className="text-xs font-bold leading-tight">{apiErrorNotification}</span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSettings(true);
+                  setSettingsTab('general');
+                  setApiErrorNotification(null);
+                }}
+                className="px-2.5 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-xs font-black transition-all cursor-pointer"
+              >
+                前往设置
+              </button>
+              <button
+                type="button"
+                onClick={() => setApiErrorNotification(null)}
+                className="p-1 hover:bg-white/20 rounded-lg transition-all cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <header className="fixed top-0 left-0 right-0 z-20 px-4 pt-5 pb-0 pointer-events-none">
         {!isDrawingMode && (
           <div className="flex items-start justify-between gap-4 w-full h-[46px]">
@@ -5633,6 +5831,23 @@ export default function App() {
                   }}
                 />
               </svg>
+              {useCustomApiKey && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 1 }}
+                  className="mt-4 flex flex-col items-center text-center px-4 select-none"
+                >
+                  <span className="text-xs text-slate-500 font-medium">正在使用自定义高德API加载地图...</span>
+                  <button
+                    type="button"
+                    onClick={triggerCustomApiFallback}
+                    className="mt-2 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-m3-primary text-xs font-bold rounded-lg transition-all cursor-pointer shadow-sm border border-slate-200"
+                  >
+                    若卡顿点击立即恢复公共API
+                  </button>
+                </motion.div>
+              )}
             </div>
           </div>
         )}
@@ -6914,8 +7129,16 @@ export default function App() {
                               <span>配置专属 Key 与安全密钥后生效。</span>
                               <button
                                 type="button"
-                                onClick={() => window.location.reload()}
-                                className="px-2.5 py-1 bg-m3-primary/10 hover:bg-m3-primary/20 text-m3-primary font-bold rounded-lg transition-all"
+                                onClick={() => {
+                                  if (useCustomApiKey && !customApiKey.trim()) {
+                                    setUseCustomApiKey(false);
+                                    localStorage.setItem('app_use_custom_api_key', 'false');
+                                    setApiErrorNotification('请先输入有效的高德API Key与安全密钥');
+                                    return;
+                                  }
+                                  window.location.reload();
+                                }}
+                                className="px-2.5 py-1 bg-m3-primary/10 hover:bg-m3-primary/20 text-m3-primary font-bold rounded-lg transition-all cursor-pointer"
                               >
                                 刷新页面生效
                               </button>
