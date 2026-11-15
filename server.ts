@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import axios from 'axios';
 import { db, runMigration } from './src/db/index';
 import { submissions, appSettings } from './src/db/schema';
 import { eq, inArray, desc } from 'drizzle-orm';
@@ -342,6 +343,39 @@ async function startServer() {
     } catch (err: any) {
       console.error("Delete error:", err);
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // API: AI Summary via DeepSeek
+  app.post('/api/ai/summary', async (req, res) => {
+    try {
+      const { prompt } = req.body;
+      const apiKey = process.env.DEEPSEEK_API_KEY;
+      
+      if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
+      if (!apiKey) return res.status(500).json({ error: 'DeepSeek API Key is not configured on the server' });
+
+      const response = await axios.post('https://api.deepseek.com/chat/completions', {
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: '你是一个专业的公交线网规划专家。请根据提供的站点和线路数据，用一段话（不超过150字）综合总结该站点的通达情况，包括核心覆盖区域、线网密度及换乘潜力，语言要精炼且专业。' },
+          { role: 'user', content: prompt }
+        ],
+        stream: false
+      }, {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      res.json({ summary: response.data.choices[0].message.content });
+    } catch (err: any) {
+      console.error('DeepSeek API Error:', err.response?.data || err.message);
+      res.status(err.response?.status || 500).json({ 
+        error: 'AI 总结失败', 
+        details: err.response?.data?.error?.message || err.message 
+      });
     }
   });
 

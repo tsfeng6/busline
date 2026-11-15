@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { BusStop, BusLine, LineSegment } from './types';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 
@@ -257,21 +257,797 @@ export default function App() {
   const [stationConnectivityCard, setStationConnectivityCard] = useState<{
     stop: any;
     checkedLines: Set<string>;
-    transferLimit: number;
+    transferEnabled: boolean;
+    atStation: number;
+    aiSummary?: string;
+    deepseekKey?: string;
   } | null>(null);
+
+  // Minigame States & Logic
+  const [showMinigameModal, setShowMinigameModal] = useState(false);
+  const [gameMode, setGameMode] = useState<'line' | 'station' | 'city' | null>(null);
+  const [gameDifficulty, setGameDifficulty] = useState<'easy' | 'medium' | 'hard'>('easy');
+  const [gameCity, setGameCity] = useState('北京市');
+  const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover'>('menu');
+  const [gameLoading, setGameLoading] = useState(false);
+  const [gameLoadingText, setGameLoadingText] = useState('正在随机检索题目并绘制线网地图，请稍候...');
+  const [gameScore, setGameScore] = useState(0);
+  const [gameQuestionNum, setGameQuestionNum] = useState(1);
+  const [gameQuestionData, setGameQuestionData] = useState<{
+    correctAnswer: string;
+    options?: string[];
+    isFillIn: boolean;
+    promptText: string;
+  } | null>(null);
+  const [gameUserInput, setGameUserInput] = useState('');
+  const [gameFeedback, setGameFeedback] = useState<{ correct: boolean; msg: string } | null>(null);
+  const prevMapModeBeforeGameRef = useRef<'normal' | 'satellite' | 'blank' | null>(null);
+  const gameSessionIdRef = useRef(0);
+  const isMinigameActiveRef = useRef(false);
+  const [confirmQuitGame, setConfirmQuitGame] = useState(false);
+  const [bestRecords, setBestRecords] = useState(() => {
+    try {
+      const saved = localStorage.getItem('busline_minigame_records');
+      return saved ? JSON.parse(saved) : {
+        line: { easy: 0, medium: 0, hard: 0 },
+        station: { easy: 0, medium: 0, hard: 0 },
+        city: { hard: 0 }
+      };
+    } catch (e) {
+      return {
+        line: { easy: 0, medium: 0, hard: 0 },
+        station: { easy: 0, medium: 0, hard: 0 },
+        city: { hard: 0 }
+      };
+    }
+  });
+
+  const citiesPool = [
+    '北京市', '上海市', '广州市', '深圳市', '成都市', '武汉市', '西安市', '南京市', '杭州市',
+    '重庆市', '天津市', '青岛市', '大连市', '厦门市', '长沙市', '郑州市', '苏州市', '无锡市',
+    '宁波市', '合肥市', '福州市', '济南市', '沈阳市', '哈尔滨市', '长春市', '昆明市', '贵阳市', '南宁市', '石家庄市', '太原市'
+  ];
+
+  const linesPoolMap: Record<string, string[]> = {
+    '北京市': ['1路', '2路', '9路', '特2路', '运通101路', '专1路', '300路内环', '368外环', '44路内环', '52路', '387路', '671路', 'X107路', '840路', '兴33路'],
+    '上海市': ['1路', '2路', '15路', '20路', '37路', '71路', '机场专线', '隧道一线', '42路', '49路'],
+    '广州市': ['1路', '3路', '14路', '24路', '30路', '62路', '107路', 'B2路', '2路', '5路'],
+    '深圳市': ['1路', '11路', '12路', '14路', '19路', 'M191路', 'M200路', '2路', '5路'],
+    '成都市': ['1路', '2路', '4路', '5路', '6路', '11路', '27路', '34路', '8路'],
+    '武汉市': ['1路', '2路', '10路', '14路', '18路', '24路', '501路', '521路'],
+    '西安市': ['1路', '2路', '4路', '5路', '6路', '11路', '26路', '30路'],
+    '南京市': ['1路', '2路', '3路', '8路', '9路', '16路', '24路', '31路'],
+    '杭州市': ['1路', '2路', '4路', '7路', '8路', '13路', '15路', '21路'],
+    'default': ['1路', '2路', '3路', '4路', '5路', '10路', '15路', '20路', '30路', '50路', '101路', '202路', '303路']
+  };
+
+  const stationsPoolMap: Record<string, string[]> = {
+    '北京市': ['北京建筑大学大兴校区', '西单', '国贸', '中关村', '五道口', '北京站', '西直门', '东直门', '望京', '亦庄', '黄村', '天安门西', '王府井', '前门'],
+    '上海市': ['人民广场', '外滩', '陆家嘴', '徐家汇', '南京东路', '静安寺', '中山公园', '世纪大道'],
+    '广州市': ['体育西路', '广州塔', '珠江新城', '北京路', '江南西', '上下九', '长寿路'],
+    'default': ['人民广场', '中山公园', '火车站', '市政府', '大剧院', '科技园', '大学城', '商业街', '体育中心', '图书馆', '中央公园', '客运站']
+  };
+
+  const getRating = (mode: string, score: number) => {
+    if (mode === 'line' || mode === 'station') {
+      if (score >= 40) return { title: '巴士之神', color: 'text-amber-500 bg-amber-50 border-amber-200' };
+      if (score >= 30) return { title: '王者', color: 'text-purple-600 bg-purple-50 border-purple-200' };
+      if (score >= 20) return { title: '钻石', color: 'text-blue-600 bg-blue-50 border-blue-200' };
+      if (score >= 10) return { title: '黄金', color: 'text-yellow-600 bg-yellow-50 border-yellow-200' };
+      if (score >= 5) return { title: '白银', color: 'text-slate-600 bg-slate-100 border-slate-200' };
+      return { title: '青铜', color: 'text-amber-700 bg-amber-100/50 border-amber-200/50' };
+    } else {
+      if (score >= 8) return { title: '巴士之神', color: 'text-amber-500 bg-amber-50 border-amber-200' };
+      if (score >= 6) return { title: '王者', color: 'text-purple-600 bg-purple-50 border-purple-200' };
+      if (score >= 4) return { title: '黄金', color: 'text-yellow-600 bg-yellow-50 border-yellow-200' };
+      if (score >= 2) return { title: '白银', color: 'text-slate-600 bg-slate-100 border-slate-200' };
+      return { title: '青铜', color: 'text-amber-700 bg-amber-100/50 border-amber-200/50' };
+    }
+  };
+
+  const restoreMapAfterMinigame = () => {
+    if (prevMapModeBeforeGameRef.current) {
+      setMapMode(prevMapModeBeforeGameRef.current);
+      prevMapModeBeforeGameRef.current = null;
+    }
+    if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
+    if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
+  };
+
+  const exitMinigameToMap = () => {
+    gameSessionIdRef.current++;
+    setConfirmQuitGame(false);
+    setShowMinigameModal(false);
+    setGameState('menu');
+    setGameLoading(false);
+    setGameQuestionData(null);
+    setGameFeedback(null);
+    setGameUserInput('');
+    restoreMapAfterMinigame();
+  };
+
+  const returnToMinigameMenu = () => {
+    gameSessionIdRef.current++;
+    setConfirmQuitGame(false);
+    setGameState('menu');
+    setGameLoading(false);
+    setGameQuestionData(null);
+    setGameFeedback(null);
+    setGameUserInput('');
+    restoreMapAfterMinigame();
+  };
+
+  useEffect(() => {
+    isMinigameActiveRef.current = showMinigameModal && gameState === 'playing';
+  }, [showMinigameModal, gameState]);
+
+  const startMinigame = (mode: 'line' | 'station' | 'city', diff: 'easy' | 'medium' | 'hard', city: string) => {
+    if (!prevMapModeBeforeGameRef.current) {
+      prevMapModeBeforeGameRef.current = mapMode;
+    }
+    setActiveBusLine(null);
+    setSelectedStop(null);
+    setSelectedSegmentLines(null);
+    setStationConnectivityCard(null);
+    setSelectionPos(null);
+    activeBusLinePolylineRef.current = null;
+    roadOverlaysRef.current = [];
+    if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
+    if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
+
+    setGameMode(mode);
+    setGameDifficulty(diff);
+    setGameCity(city);
+    setGameState('playing');
+    setGameScore(0);
+    setGameQuestionNum(1);
+    setGameFeedback(null);
+    setGameUserInput('');
+    setGameQuestionData(null);
+
+    if (mode === 'city' || diff === 'hard' || diff === 'medium') {
+      setMapMode('blank');
+    } else {
+      setMapMode('normal');
+    }
+
+    generateQuestion(mode, diff, city, 1);
+  };
+
+  const generateQuestion = async (mode: 'line' | 'station' | 'city', diff: 'easy' | 'medium' | 'hard', city: string, qNum: number, prevAnswer?: string) => {
+    const AMap = (window as any).AMap;
+    if (!AMap || !mapInstance) return;
+
+    const sessionId = ++gameSessionIdRef.current;
+    setConfirmQuitGame(false);
+    setGameLoadingText(
+      mode === 'city'
+        ? '正在自动执行全市公交线网搜索，请稍候...'
+        : '正在随机检索题目并绘制线网地图，请稍候...'
+    );
+    setGameLoading(true);
+    setActiveBusLine(null);
+    setSelectedStop(null);
+    setSelectedSegmentLines(null);
+    setStationConnectivityCard(null);
+    if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
+    if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
+
+    const shuffleArr = <T,>(arr: T[]): T[] => {
+      const copy = [...arr];
+      for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+      }
+      return copy;
+    };
+
+    const cleanGameStopName = (n: string) => n.replace(/\(.*?\)|（.*?）/g, '').replace(/公交站$/, '').trim();
+    const cleanGameLineName = (n: string) => {
+      const base = parseLineInfo(n).name || n;
+      return base.replace(/\(.*?\)|（.*?）/g, '').trim();
+    };
+
+    const extractLineNames = (addr: string): string[] => {
+      return (addr || '')
+        .split(';')
+        .map(s => cleanGameLineName(s.trim()))
+        .filter(n => n && n.length >= 2 && !n.includes('地铁') && !isLineNameBlockedRef(n));
+    };
+
+    const searchStopsInCity = (targetCityName: string, pageIndex: number): Promise<any[]> => {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve([]), 5000);
+        try {
+          const ps = new AMap.PlaceSearch({
+            type: '公交车站',
+            city: targetCityName,
+            citylimit: true,
+            pageSize: 30,
+            pageIndex,
+            extensions: 'all'
+          });
+          ps.search('', (status: string, result: any) => {
+            clearTimeout(timer);
+            if (status === 'complete' && result?.poiList?.pois?.length > 0) {
+              resolve(result.poiList.pois);
+            } else {
+              resolve([]);
+            }
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          resolve([]);
+        }
+      });
+    };
+
+    const searchNearbyStops = (targetCityName: string, lngLat: [number, number], radius: number): Promise<any[]> => {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve([]), 5000);
+        try {
+          const ps = new AMap.PlaceSearch({
+            type: '公交车站',
+            city: targetCityName,
+            citylimit: true,
+            pageSize: 25,
+            extensions: 'all'
+          });
+          ps.searchNearBy('', lngLat, radius, (status: string, result: any) => {
+            clearTimeout(timer);
+            if (status === 'complete' && result?.poiList?.pois?.length > 0) {
+              resolve(result.poiList.pois);
+            } else {
+              resolve([]);
+            }
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          resolve([]);
+        }
+      });
+    };
+
+    const searchLineInfoPromise = (targetCityName: string, keyword: string): Promise<any[]> => {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve([]), 5000);
+        try {
+          const ls = new AMap.LineSearch({
+            city: targetCityName,
+            pageSize: 5,
+            extensions: 'all'
+          });
+          ls.search(keyword, (status: string, result: any) => {
+            clearTimeout(timer);
+            if (status === 'complete' && result?.lineInfo?.length > 0) {
+              resolve(result.lineInfo.filter((l: any) => l?.path?.length > 1 && !isLineNameBlockedRef(l.name)));
+            } else {
+              resolve([]);
+            }
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          resolve([]);
+        }
+      });
+    };
+
+    const searchStationInfoPromise = (targetCityName: string, stationName: string): Promise<any | null> => {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(null), 5000);
+        try {
+          const ss = new AMap.StationSearch({
+            city: targetCityName,
+            pageSize: 5
+          });
+          ss.search(stationName, (status: string, result: any) => {
+            clearTimeout(timer);
+            if (status === 'complete' && result?.stationInfo?.length > 0) {
+              resolve(result.stationInfo[0]);
+            } else {
+              resolve(null);
+            }
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          resolve(null);
+        }
+      });
+    };
+
+    try {
+      const candidateCities = prevAnswer ? citiesPool.filter(c => c !== prevAnswer) : citiesPool;
+      const targetCity = (diff === 'hard' || mode === 'city')
+        ? candidateCities[Math.floor(Math.random() * candidateCities.length)]
+        : city;
+
+      if (mode === 'line') {
+        const randPage = Math.floor(Math.random() * 6) + 1;
+        let pois = await searchStopsInCity(targetCity, randPage);
+        if (pois.length === 0 && randPage !== 1) {
+          pois = await searchStopsInCity(targetCity, 1);
+        }
+
+        const candidatePoolSet = new Set<string>();
+        pois.forEach(p => extractLineNames(p.address).forEach(n => candidatePoolSet.add(n)));
+        const fallbackPool = linesPoolMap[targetCity] || linesPoolMap['default'];
+        let candidateLines = shuffleArr(Array.from(candidatePoolSet));
+        if (candidateLines.length === 0) {
+          candidateLines = shuffleArr(fallbackPool);
+        }
+
+        let chosenLine: any = null;
+        for (const cand of candidateLines.slice(0, 8)) {
+          if (gameSessionIdRef.current !== sessionId) return;
+          const infos = await searchLineInfoPromise(targetCity, cand);
+          if (infos.length > 0) {
+            chosenLine = infos[0];
+            break;
+          }
+        }
+        if (!chosenLine) {
+          for (const fb of shuffleArr(fallbackPool).slice(0, 5)) {
+            const infos = await searchLineInfoPromise(targetCity, fb);
+            if (infos.length > 0) {
+              chosenLine = infos[0];
+              break;
+            }
+          }
+        }
+
+        if (gameSessionIdRef.current !== sessionId) return;
+
+        const actualLineName = chosenLine
+          ? cleanGameLineName(chosenLine.name)
+          : (candidateLines[0] || fallbackPool[0]);
+
+        if (chosenLine) {
+          renderBusLine(chosenLine, AMap, mapInstance, false, false, false);
+          const overlays = lineGroupRef.current?.getOverlays?.() || [];
+          if (overlays.length > 0) {
+            mapInstance.setFitView(overlays, false, [48, 150, 36, 36]);
+          }
+        }
+
+        const isFillIn = qNum > 10;
+        let options: string[] = [];
+        if (!isFillIn) {
+          const baseKey = (name: string) => name.replace(/[内外]环|路|线/g, '').trim();
+          const actualBase = baseKey(actualLineName);
+          const nearbySet = new Set<string>();
+
+          if (chosenLine?.via_stops?.length > 0) {
+            const midStop = chosenLine.via_stops[Math.floor(chosenLine.via_stops.length / 2)];
+            if (midStop?.location) {
+              const nearPois = await searchNearbyStops(targetCity, [midStop.location.lng, midStop.location.lat], 1500);
+              nearPois.forEach(p => extractLineNames(p.address).forEach(n => nearbySet.add(n)));
+            }
+          }
+          pois.forEach(p => extractLineNames(p.address).forEach(n => nearbySet.add(n)));
+          fallbackPool.forEach(n => nearbySet.add(n));
+
+          const distractors = shuffleArr(
+            Array.from(nearbySet).filter(n => n !== actualLineName && baseKey(n) !== actualBase)
+          ).slice(0, 3);
+
+          options = shuffleArr([actualLineName, ...distractors]);
+        }
+
+        if (gameSessionIdRef.current !== sessionId) return;
+        setGameQuestionData({
+          correctAnswer: actualLineName,
+          options,
+          isFillIn,
+          promptText: diff === 'hard'
+            ? '请根据地图上的公交线路走向，猜一猜这是哪条线路？'
+            : `请根据地图上的公交线路走向（城市：${targetCity}），猜一猜这是哪条线路？`
+        });
+      } else if (mode === 'station') {
+        const randPage = Math.floor(Math.random() * 6) + 1;
+        let pois = await searchStopsInCity(targetCity, randPage);
+        if (pois.length === 0 && randPage !== 1) {
+          pois = await searchStopsInCity(targetCity, 1);
+        }
+
+        const validPois = pois.filter(p => p?.location && extractLineNames(p.address).length > 0);
+        const richPois = validPois.filter(p => extractLineNames(p.address).length >= 2);
+        const candidatePois = richPois.length > 0 ? richPois : validPois;
+
+        let chosenPoi: any = candidatePois.length > 0
+          ? candidatePois[Math.floor(Math.random() * candidatePois.length)]
+          : null;
+
+        let actualStopName = '';
+        let stopLngLat: [number, number] | null = null;
+        let lineNamesSet = new Set<string>();
+
+        if (chosenPoi) {
+          actualStopName = cleanGameStopName(chosenPoi.name);
+          stopLngLat = [chosenPoi.location.lng, chosenPoi.location.lat];
+          extractLineNames(chosenPoi.address).forEach(n => lineNamesSet.add(n));
+        } else {
+          const fbPool = stationsPoolMap[targetCity] || stationsPoolMap['default'];
+          actualStopName = fbPool[Math.floor(Math.random() * fbPool.length)];
+          const stInfo = await searchStationInfoPromise(targetCity, actualStopName);
+          if (stInfo?.location) {
+            actualStopName = cleanGameStopName(stInfo.name || actualStopName);
+            stopLngLat = [stInfo.location.lng, stInfo.location.lat];
+            (stInfo.buslines || []).forEach((bl: any) => {
+              const nm = cleanGameLineName(bl.name || '');
+              if (nm && !isLineNameBlockedRef(nm)) lineNamesSet.add(nm);
+            });
+          }
+        }
+
+        if (stopLngLat) {
+          try {
+            const details = await Promise.race([
+              fetchStopDetails(actualStopName, stopLngLat, AMap, targetCity),
+              new Promise<null>(r => setTimeout(() => r(null), 4000))
+            ]);
+            if (details?.lines) {
+              details.lines.forEach((l: string) => {
+                const nm = cleanGameLineName(l);
+                if (nm && !isLineNameBlockedRef(nm)) lineNamesSet.add(nm);
+              });
+            }
+          } catch (e) {}
+        }
+
+        const uniqueLineNames = Array.from(lineNamesSet).slice(0, 18);
+        const renderedNames = new Set<string>();
+        for (let i = 0; i < uniqueLineNames.length; i += 6) {
+          if (gameSessionIdRef.current !== sessionId) return;
+          const batch = uniqueLineNames.slice(i, i + 6);
+          await Promise.all(batch.map(async (lName) => {
+            const infos = await searchLineInfoPromise(targetCity, lName);
+            infos.forEach(info => {
+              if (!renderedNames.has(info.name)) {
+                renderedNames.add(info.name);
+                renderBusLine(info, AMap, mapInstance, false, false, false);
+              }
+            });
+          }));
+        }
+
+        if (gameSessionIdRef.current !== sessionId) return;
+
+        if (stopLngLat && markerGroupRef.current) {
+          const targetMarker = new AMap.CircleMarker({
+            center: stopLngLat,
+            radius: 10,
+            fillColor: '#ef4444',
+            strokeColor: '#ffffff',
+            strokeWeight: 3,
+            zIndex: 95
+          });
+          markerGroupRef.current.addOverlay(targetMarker);
+        }
+
+        const overlays = lineGroupRef.current?.getOverlays?.() || [];
+        if (overlays.length > 0) {
+          mapInstance.setFitView(overlays, false, [48, 150, 36, 36]);
+        } else if (stopLngLat) {
+          mapInstance.setCenter(stopLngLat);
+          mapInstance.setZoom(14);
+        }
+
+        const isFillIn = qNum > 10;
+        let options: string[] = [];
+        if (!isFillIn) {
+          const nearbyStopNames = new Set<string>();
+          if (stopLngLat) {
+            const nearPois = await searchNearbyStops(targetCity, stopLngLat, 2500);
+            nearPois.forEach(p => {
+              const nm = cleanGameStopName(p.name);
+              if (nm && nm !== actualStopName) nearbyStopNames.add(nm);
+            });
+          }
+          pois.forEach(p => {
+            const nm = cleanGameStopName(p.name);
+            if (nm && nm !== actualStopName) nearbyStopNames.add(nm);
+          });
+          (stationsPoolMap[targetCity] || stationsPoolMap['default']).forEach(nm => {
+            if (nm !== actualStopName) nearbyStopNames.add(nm);
+          });
+
+          const distractors = shuffleArr(Array.from(nearbyStopNames)).slice(0, 3);
+          options = shuffleArr([actualStopName, ...distractors]);
+        }
+
+        if (gameSessionIdRef.current !== sessionId) return;
+        setGameQuestionData({
+          correctAnswer: actualStopName,
+          options,
+          isFillIn,
+          promptText: diff === 'hard'
+            ? '请根据地图上红色站点及经过它的全部公交线网，猜一猜这是哪个公交站？'
+            : `请根据地图上红色站点及经过它的全部公交线网（城市：${targetCity}），猜一猜这是哪个公交站？`
+        });
+      } else {
+        // City mode: 自动执行全市搜索（不依赖外部“全市搜索”开关）
+        const searchCityWidePage = (page: number): Promise<{ pois: any[]; count: number }> => {
+          return new Promise((resolve) => {
+            const timer = setTimeout(() => resolve({ pois: [], count: 0 }), 6000);
+            try {
+              const ps = new AMap.PlaceSearch({
+                type: '公交车站',
+                city: targetCity,
+                citylimit: true,
+                pageSize: 50,
+                pageIndex: page,
+                extensions: 'all'
+              });
+              ps.search('', (status: string, result: any) => {
+                clearTimeout(timer);
+                if (status === 'complete' && result?.poiList?.pois?.length > 0) {
+                  resolve({
+                    pois: result.poiList.pois,
+                    count: result.poiList.count || result.poiList.pois.length
+                  });
+                } else {
+                  resolve({ pois: [], count: 0 });
+                }
+              });
+            } catch (e) {
+              clearTimeout(timer);
+              resolve({ pois: [], count: 0 });
+            }
+          });
+        };
+
+        const firstPage = await searchCityWidePage(1);
+        if (gameSessionIdRef.current !== sessionId) return;
+
+        const allPois: any[] = [...firstPage.pois];
+        const totalCount = Math.min(firstPage.count || 0, 900);
+        const totalPages = Math.min(18, Math.ceil(totalCount / 50));
+
+        if (totalPages > 1) {
+          const remainingPages: number[] = [];
+          for (let p = 2; p <= totalPages; p++) remainingPages.push(p);
+          for (let i = 0; i < remainingPages.length; i += 6) {
+            if (gameSessionIdRef.current !== sessionId) return;
+            const batchPages = remainingPages.slice(i, i + 6);
+            const batchResults = await Promise.all(batchPages.map(p => searchCityWidePage(p)));
+            batchResults.forEach(r => {
+              if (r.pois.length > 0) allPois.push(...r.pois);
+            });
+          }
+        }
+
+        const cityLinesSet = new Set<string>();
+        allPois.forEach(p => extractLineNames(p.address).forEach(n => cityLinesSet.add(n)));
+
+        const fallbackCityLines = linesPoolMap[targetCity] || linesPoolMap['default'];
+        let cityLineCandidates = Array.from(cityLinesSet);
+        if (cityLineCandidates.length < 10) {
+          cityLineCandidates = Array.from(new Set([...cityLineCandidates, ...fallbackCityLines]));
+        }
+
+        // 均匀抽样或全量抓取（最多 220 条全市线路，覆盖全城路网骨架）
+        const sampleLines = cityLineCandidates.length > 220
+          ? shuffleArr(cityLineCandidates).slice(0, 220)
+          : cityLineCandidates;
+
+        const renderedCityLineNames = new Set<string>();
+        const collectedPaths: Array<[number, number][]> = [];
+
+        const searchCityLineFast = (keyword: string): Promise<any[]> => {
+          return new Promise((resolve) => {
+            const timer = setTimeout(() => resolve([]), 3500);
+            try {
+              const ls = new AMap.LineSearch({
+                city: targetCity,
+                pageSize: 10,
+                extensions: 'all'
+              });
+              ls.search(keyword, (status: string, result: any) => {
+                clearTimeout(timer);
+                if (status === 'complete' && result?.lineInfo?.length > 0) {
+                  resolve(result.lineInfo.filter((l: any) => l?.path?.length > 1 && !isLineNameBlockedRef(l.name)));
+                } else {
+                  resolve([]);
+                }
+              });
+            } catch (e) {
+              clearTimeout(timer);
+              resolve([]);
+            }
+          });
+        };
+
+        for (let i = 0; i < sampleLines.length; i += 16) {
+          if (gameSessionIdRef.current !== sessionId) return;
+          const batch = sampleLines.slice(i, i + 16);
+          await Promise.all(batch.map(async (lName) => {
+            const infos = await searchCityLineFast(lName);
+            if (infos.length > 0) {
+              const info = infos[0];
+              if (!renderedCityLineNames.has(info.name)) {
+                renderedCityLineNames.add(info.name);
+                const coords = (info.path || []).map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat] as [number, number]);
+                if (coords.length > 1) {
+                  collectedPaths.push(coords);
+                }
+              }
+            }
+          }));
+        }
+
+        if (gameSessionIdRef.current !== sessionId) return;
+
+        if (collectedPaths.length > 0 && lineGroupRef.current) {
+          const cityNetworkOverlay = new AMap.Polyline({
+            path: collectedPaths,
+            strokeColor: '#52796F',
+            strokeWeight: lineThickness === 'thin' ? 2 : 3.2,
+            strokeOpacity: 0.82,
+            lineJoin: 'round',
+            lineCap: 'round',
+            isOutline: true,
+            outlineColor: '#ffffff',
+            borderWeight: 0.5,
+            zIndex: 45
+          });
+          lineGroupRef.current.addOverlay(cityNetworkOverlay);
+          mapInstance.setFitView([cityNetworkOverlay], false, [48, 150, 36, 36]);
+        } else {
+          try {
+            mapInstance.setCity(targetCity);
+          } catch (e) {}
+        }
+
+        const isFillIn = qNum > 5;
+        let options: string[] = [];
+        if (!isFillIn) {
+          const otherCities = shuffleArr(citiesPool.filter(c => c !== targetCity)).slice(0, 3);
+          options = shuffleArr([targetCity, ...otherCities]);
+        }
+
+        setGameQuestionData({
+          correctAnswer: targetCity,
+          options,
+          isFillIn,
+          promptText: '已执行全市搜索，请根据公交线网布局猜一猜这是哪个城市？'
+        });
+      }
+    } finally {
+      if (gameSessionIdRef.current === sessionId) {
+        setGameLoading(false);
+      }
+    }
+  };
+
+  const handleMinigameSubmit = (answer: string) => {
+    if (!gameQuestionData || gameState !== 'playing' || gameLoading) return;
+
+    const rawUser = answer.trim();
+    const rawCorrect = gameQuestionData.correctAnswer.trim();
+    let isCorrect = rawUser === rawCorrect;
+
+    if (!isCorrect && gameQuestionData.isFillIn) {
+      const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '').replace(/\(.*?\)|（.*?）/g, '');
+      const u = norm(rawUser);
+      const c = norm(rawCorrect);
+      if (gameMode === 'line') {
+        isCorrect = u === c || u.replace(/[路线]$/, '') === c.replace(/[路线]$/, '');
+      } else if (gameMode === 'station') {
+        isCorrect = u === c || u.replace(/(公交)?站$/, '') === c.replace(/(公交)?站$/, '');
+      } else if (gameMode === 'city') {
+        isCorrect = u === c || u.replace(/市$/, '') === c.replace(/市$/, '');
+      }
+    }
+
+    if (isCorrect) {
+      const newScore = gameScore + 1;
+      setGameScore(newScore);
+
+      if (gameMode) {
+        const modeKey = gameMode;
+        const diffKey = gameDifficulty;
+        setBestRecords((prev: any) => {
+          const currentBest = modeKey === 'city' ? prev.city.hard : prev[modeKey][diffKey];
+          if (newScore > currentBest) {
+            const updated = { ...prev };
+            if (modeKey === 'city') {
+              updated.city.hard = newScore;
+            } else {
+              updated[modeKey][diffKey] = newScore;
+            }
+            localStorage.setItem('busline_minigame_records', JSON.stringify(updated));
+            return updated;
+          }
+          return prev;
+        });
+      }
+
+      setGameFeedback({ correct: true, msg: '回答正确！即将进入下一题...' });
+      setTimeout(() => {
+        setGameFeedback(null);
+        setGameUserInput('');
+        const nextNum = gameQuestionNum + 1;
+        if (gameMode === 'city' && nextNum > 10) {
+          setGameState('gameover');
+          return;
+        }
+        setGameQuestionNum(nextNum);
+        generateQuestion(gameMode!, gameDifficulty, gameCity, nextNum, rawCorrect);
+      }, 900);
+    } else {
+      setGameFeedback({ correct: false, msg: `回答错误！正确答案是：${gameQuestionData.correctAnswer}` });
+      setTimeout(() => {
+        setGameState('gameover');
+      }, 1500);
+    }
+  };
+
   const [isSearching, setIsSearching] = useState(false);
   const [showLargeAreaWarning, setShowLargeAreaWarning] = useState(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
   const [cacheUpdateTick, setCacheUpdateTick] = useState(0);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
-  const [showStations, setShowStations] = useState(() => {
-    const saved = localStorage.getItem('app_show_stations');
-    return saved === null ? true : saved === 'true';
+  type MapMode = 'normal' | 'satellite' | 'blank';
+  type StationDisplayMode = 'all' | 'terminal' | 'none';
+
+  const [mapMode, setMapMode] = useState<MapMode>(() => {
+    const saved = localStorage.getItem('app_map_mode');
+    if (saved === 'normal' || saved === 'satellite' || saved === 'blank') return saved;
+    if (localStorage.getItem('app_use_satellite_map') === 'true') return 'satellite';
+    if (localStorage.getItem('app_show_basemap') === 'false') return 'blank';
+    return 'normal';
   });
-  const [showBaseMap, setShowBaseMap] = useState(() => {
-    const saved = localStorage.getItem('app_show_basemap');
-    return saved === null ? true : saved === 'true';
+
+  const [stationMode, setStationMode] = useState<StationDisplayMode>(() => {
+    const saved = localStorage.getItem('app_station_mode');
+    if (saved === 'all' || saved === 'terminal' || saved === 'none') return saved;
+    if (localStorage.getItem('app_show_stations') === 'false') return 'none';
+    return 'all';
   });
+
+  const showBaseMap = mapMode !== 'blank';
+  const setShowBaseMap = (val: boolean | ((p: boolean) => boolean)) => {
+    setMapMode(prev => {
+      const nextBool = typeof val === 'function' ? val(prev !== 'blank') : val;
+      return nextBool ? (prev === 'satellite' ? 'satellite' : 'normal') : 'blank';
+    });
+  };
+
+  const useSatelliteMap = mapMode === 'satellite';
+  const setUseSatelliteMap = (val: boolean | ((p: boolean) => boolean)) => {
+    setMapMode(prev => {
+      const nextBool = typeof val === 'function' ? val(prev === 'satellite') : val;
+      return nextBool ? 'satellite' : 'normal';
+    });
+  };
+
+  const showStations = stationMode !== 'none';
+  const setShowStations = (val: boolean | ((p: boolean) => boolean)) => {
+    setStationMode(prev => {
+      const nextBool = typeof val === 'function' ? val(prev !== 'none') : val;
+      return nextBool ? 'all' : 'none';
+    });
+  };
+
+  const satelliteLayerRef = useRef<any>(null);
+  const roadNetLayerRef = useRef<any>(null);
+
+  useEffect(() => {
+    localStorage.setItem('app_map_mode', mapMode);
+    localStorage.setItem('app_show_basemap', String(mapMode !== 'blank'));
+    localStorage.setItem('app_use_satellite_map', String(mapMode === 'satellite'));
+  }, [mapMode]);
+
+  useEffect(() => {
+    localStorage.setItem('app_station_mode', stationMode);
+    localStorage.setItem('app_show_stations', String(stationMode !== 'none'));
+    const isTerm = stationMode === 'terminal';
+    setFilterTerminalOnly(isTerm);
+    filterTerminalOnlyRef.current = isTerm;
+    if (mapRef.current && (window as any).AMap) {
+      syncStopMarkersToMap(mapRef.current, (window as any).AMap);
+    }
+  }, [stationMode]);
   const [showMoreInfo, setShowMoreInfo] = useState(() => {
     const saved = localStorage.getItem('app_show_more_info');
     return saved === null ? false : saved === 'true';
@@ -392,6 +1168,13 @@ export default function App() {
   useEffect(() => {
     filterIntervalBusRef.current = filterIntervalBus;
   }, [filterIntervalBus]);
+
+  // Terminal station only filter
+  const [filterTerminalOnly, setFilterTerminalOnly] = useState(false);
+  const filterTerminalOnlyRef = useRef(filterTerminalOnly);
+  useEffect(() => {
+    filterTerminalOnlyRef.current = filterTerminalOnly;
+  }, [filterTerminalOnly]);
 
   const [enableCityWideSearch, setEnableCityWideSearch] = useState(() => {
     return localStorage.getItem('app_experimental_citywide') === 'true';
@@ -762,12 +1545,7 @@ export default function App() {
   const drawingGroupRef = useRef<any>(null);
   const locationMarkerRef = useRef<any>(null);
   const isRoutingRef = useRef(false);
-  const [enableTwoTransferSearch, setEnableTwoTransferSearch] = useState(() => {
-    return localStorage.getItem('app_experimental_two_transfer') === 'true';
-  });
-  useEffect(() => {
-    localStorage.setItem('app_experimental_two_transfer', String(enableTwoTransferSearch));
-  }, [enableTwoTransferSearch]);
+
 
   const boxSelectedLines = useMemo(() => {
     const linesSet = new Set<string>();
@@ -1304,6 +2082,7 @@ export default function App() {
     searching: '检索中...',
     showStations: '显示站点',
     showBaseMap: '显示底图',
+    satelliteMap: '卫星底图',
     showMoreInfo: '详细信息',
     showReferenceArea: '显示参考区域',
     showUserSubmittedData: '显示用户添加数据',
@@ -1533,6 +2312,111 @@ export default function App() {
     };
   };
 
+  const stopNameNormalizeCache = useMemo(() => new Map<string, string>(), []);
+  const normalizeStopName = useCallback((name: string): string => {
+    if (!name) return '';
+    const cached = stopNameNormalizeCache.get(name);
+    if (cached !== undefined) return cached;
+    const res = name
+      .replace(/\(.*?\)|（.*?）/g, '') // remove parenthesized annotations
+      .replace(/\[.*?\]|【.*?】/g, '')
+      .replace(/(公交站|汽车站|车站)$/g, '') // only strip generic station suffix at end
+      .trim();
+    stopNameNormalizeCache.set(name, res);
+    return res;
+  }, [stopNameNormalizeCache]);
+
+  const cachedLinesVersionRef = useRef(0);
+  const lastTerminalLinesVersionRef = useRef(-1);
+  const terminalNamesCacheRef = useRef<Set<string>>(new Set());
+
+  const updateTerminalNamesCache = useCallback(() => {
+    const cache = fetchedLinesCache.current;
+    const terminalSet = new Set<string>();
+    if (cache && cache.size > 0) {
+      for (const [, line] of cache.entries()) {
+        if (!line) continue;
+        if (line.end_stop) {
+          const c = normalizeStopName(line.end_stop);
+          if (c) terminalSet.add(c);
+        }
+        if (line.start_stop) {
+          const c = normalizeStopName(line.start_stop);
+          if (c) terminalSet.add(c);
+        }
+        if (line.via_stops && line.via_stops.length > 0) {
+          const first = line.via_stops[0];
+          const last = line.via_stops[line.via_stops.length - 1];
+          if (first?.name) {
+            const c = normalizeStopName(first.name);
+            if (c) terminalSet.add(c);
+          }
+          if (last?.name) {
+            const c = normalizeStopName(last.name);
+            if (c) terminalSet.add(c);
+          }
+        }
+      }
+    }
+    terminalNamesCacheRef.current = terminalSet;
+  }, [normalizeStopName]);
+
+  const isTerminalStation = useCallback((stop: any): boolean => {
+    if (!stop || !stop.name) return false;
+    const sClean = normalizeStopName(stop.name);
+    if (!sClean) return false;
+
+    // Direct terminal title in stop name
+    if (sClean.endsWith('终点站') || sClean.endsWith('总站')) {
+      return true;
+    }
+
+    if (lastTerminalLinesVersionRef.current !== cachedLinesVersionRef.current || terminalNamesCacheRef.current.size === 0) {
+      updateTerminalNamesCache();
+      lastTerminalLinesVersionRef.current = cachedLinesVersionRef.current;
+    }
+
+    // 1. Check direct cache set
+    if (terminalNamesCacheRef.current.has(sClean)) {
+      return true;
+    }
+
+    // 2. Check if stop lines match any line's start or end stop
+    const cache = fetchedLinesCache.current;
+    const stopLines: string[] = Array.isArray(stop.lines) ? stop.lines : [];
+    if (cache && cache.size > 0 && stopLines.length > 0) {
+      const getBaseLineName = (l: string) => {
+        if (!l) return '';
+        return l.split('(')[0].split('#')[0].replace(/路$/, '').trim().toUpperCase();
+      };
+      const stopBaseNames = new Set(stopLines.map(getBaseLineName).filter(Boolean));
+
+      for (const [, line] of cache.entries()) {
+        if (!line) continue;
+        const lineBase = getBaseLineName(line.name || '');
+        if (stopBaseNames.size > 0 && !stopBaseNames.has(lineBase)) {
+          continue;
+        }
+
+        const endClean = normalizeStopName(line.end_stop || '');
+        const startClean = normalizeStopName(line.start_stop || '');
+        if ((endClean && sClean === endClean) || (startClean && sClean === startClean)) {
+          return true;
+        }
+
+        if (line.via_stops && line.via_stops.length > 0) {
+          const first = line.via_stops[0];
+          const last = line.via_stops[line.via_stops.length - 1];
+          if ((last && normalizeStopName(last.name) === sClean) || (first && normalizeStopName(first.name) === sClean)) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }, [normalizeStopName, updateTerminalNamesCache]);
+
   function syncStopMarkersToMap(map: any, AMap: any) {
     if (!markerGroupRef.current) return;
     
@@ -1560,10 +2444,54 @@ export default function App() {
         return true;
       });
     }
+
+    // Filter terminal stations only
+    const isTerminalMode = filterTerminalOnlyRef.current;
+    if (isTerminalMode) {
+      visibleMarkers = visibleMarkers.filter((marker: any) => {
+        const ext = marker.getExtData ? marker.getExtData() : null;
+        if (ext && ext.key) {
+          const stopData = allMapStopsRef.current?.get(ext.key) || roadStopsDataRef.current?.get(ext.key);
+          if (stopData) {
+            return isTerminalStation(stopData);
+          }
+        }
+        return false;
+      });
+
+      // Style every terminal station marker with an obvious gray circle
+      visibleMarkers.forEach((marker: any) => {
+        try {
+          marker.setOptions({
+            fillColor: '#52525B', // Deep neutral charcoal/zinc gray
+            strokeColor: '#FFFFFF', // High-contrast crisp white border
+            strokeWeight: 3,
+            radius: 9, // Obvious larger circle
+            fillOpacity: 0.95,
+            zIndex: 85
+          });
+        } catch (e) {}
+      });
+    } else {
+      // Normal mode: restore original marker colors and radius
+      visibleMarkers.forEach((marker: any) => {
+        try {
+          const ext = marker.getExtData ? marker.getExtData() : null;
+          marker.setOptions({
+            fillColor: ext?.originalColor || '#3b82f6',
+            strokeColor: '#FFFFFF',
+            strokeWeight: 1.5,
+            radius: ext?.originalRadius || 6,
+            fillOpacity: 0.9,
+            zIndex: 60
+          });
+        } catch (e) {}
+      });
+    }
     
     const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
     if (showReferenceAreaRef.current && box) {
-      visibleMarkers = rawMarkers.filter((marker: any) => {
+      visibleMarkers = visibleMarkers.filter((marker: any) => {
         let latlng: [number, number] | null = null;
         const ext = marker.getExtData ? marker.getExtData() : null;
         if (ext && ext.key) {
@@ -1600,6 +2528,31 @@ export default function App() {
     
     setStats((prev: any) => ({ ...prev, stops: visibleMarkers.length }));
   }
+
+  const toggleTerminalFilter = useCallback(() => {
+    setFilterTerminalOnly(prev => {
+      const next = !prev;
+      filterTerminalOnlyRef.current = next;
+      if (next && !showStations) {
+        setShowStations(true);
+        localStorage.setItem('app_show_stations', 'true');
+      }
+      if (mapInstance && (window as any).AMap) {
+        syncStopMarkersToMap(mapInstance, (window as any).AMap);
+      }
+      return next;
+    });
+  }, [mapInstance, showStations]);
+
+  const terminalStopsCount = useMemo(() => {
+    const stopsMap = roadStopsDataRef.current.size > 0 ? roadStopsDataRef.current : allMapStopsRef.current;
+    if (!stopsMap || stopsMap.size === 0) return 0;
+    let count = 0;
+    stopsMap.forEach((s) => {
+      if (isTerminalStation(s)) count++;
+    });
+    return count;
+  }, [cacheUpdateTick, stats.lines, stats.stops, isTerminalStation]);
 
   const drawReferenceArea = (map: any, AMap: any) => {
     if (referenceAreaOverlayRef.current) {
@@ -1753,12 +2706,16 @@ export default function App() {
           lineGroupRef.current.removeOverlay(activeBusLinePolylineRef.current);
           activeBusLinePolylineRef.current = null;
         }
-        // Faint out all existing road search polylines
-        roadOverlaysRef.current.forEach((polyline: any) => {
-          polyline.setOptions({
-            strokeOpacity: 0.09,
-            outlineColor: 'transparent',
-            borderWeight: 0
+        // Faint out all existing road search polylines asynchronously without blocking UI thread
+        requestAnimationFrame(() => {
+          roadOverlaysRef.current.forEach((polyline: any) => {
+            try {
+              polyline.setOptions({
+                strokeOpacity: 0.09,
+                outlineColor: 'transparent',
+                borderWeight: 0
+              });
+            } catch (e) {}
           });
         });
       }
@@ -2059,211 +3016,142 @@ export default function App() {
 
   const executeStationConnectivity = async (
     stop: any,
-    checkedLines: Set<string>,
-    transferLimit: number
+    _checkedLines: Set<string>,
+    transferEnabled: boolean,
+    atStation: number
   ) => {
     if (!lineGroupRef.current || !markerGroupRef.current || !(window as any).AMap) return;
     
-    if (!checkedLines || checkedLines.size === 0) {
-      setConnectivityToast('请选择线路后查看通达度');
+    const linesToQuery = stop.lines || [];
+    if (linesToQuery.length === 0) {
+      setConnectivityToast('该站点暂无线路信息');
       setTimeout(() => setConnectivityToast(null), 3500);
       return;
     }
 
-    const AMap = (window as any).AMap;
     setIsSearching(true);
+    setConnectivityToast('正在初始化检索...');
+    
     lineGroupRef.current.clearOverlays();
     markerGroupRef.current.clearOverlays();
 
-    const linesToQuery = Array.from(checkedLines);
-    if (!linesToQuery || linesToQuery.length === 0) {
-      setIsSearching(false);
-      return;
-    }
-
-    setStats(prev => ({ ...prev, lines: linesToQuery.length }));
-
+    const AMap = (window as any).AMap;
     const lineSearch = new AMap.LineSearch({
-      city: currentCity || '全国',
       pageIndex: 1,
-      pageSize: 1,
+      city: currentCity || '全国',
+      pageSize: 10, // Get more results to ensure we catch both directions
       extensions: 'all'
     });
 
-    let completed = 0;
-    const total = linesToQuery.length;
-    const transferStopsMap = new Map<string, { name: string; location: [number, number]; lines: Set<string> }>();
-    
-    // Graph maps: line -> stops array, stopName -> set of lines
-    const lineToStopsMap = new Map<string, Array<{ name: string; location: [number, number] }>>();
-    const stopToLinesMap = new Map<string, Set<string>>();
+    const renderedLines = new Set<string>();
+    const transferStations = new Map<string, [number, number]>(); // name -> location
+    const directLinesInfo: any[] = [];
+    const transferLinesInfo: any[] = [];
 
-    const registerLineData = (lineName: string, viaStops: any[]) => {
-      const stopsArr = viaStops
-        .filter((s: any) => s && s.location)
-        .map((s: any) => ({ name: s.name, location: [s.location.lng, s.location.lat] as [number, number] }));
-      lineToStopsMap.set(lineName, stopsArr);
+    const cleanStopName = (n: string) => n.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').replace(/\s+$/, '').trim();
+    const targetSourceClean = cleanStopName(stop.name);
 
-      stopsArr.forEach(st => {
-        const cleanSt = st.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').trim();
-        if (!stopToLinesMap.has(cleanSt)) stopToLinesMap.set(cleanSt, new Set());
-        stopToLinesMap.get(cleanSt)!.add(lineName);
-      });
+    // Helper to search and render
+    const searchAndProcessLine = async (lineName: string, isTransfer: boolean = false): Promise<void> => {
+       return new Promise((resolve) => {
+           const { name: shortName } = parseLineInfo(lineName);
+           lineSearch.search(shortName, async (status: string, result: any) => {
+               if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
+                   for (const info of result.lineInfo) {
+                       if (isLineNameBlockedRef(info.name)) continue;
+                       
+                       const stops = info.via_stops || [];
+                       const stopNames = stops.map((s: any) => s.name);
+                       const cleanStopNames = stopNames.map(cleanStopName);
+                       
+                       if (!isTransfer) {
+                           // Try exact match then partial match
+                           let idx = cleanStopNames.indexOf(targetSourceClean);
+                           if (idx === -1) {
+                               idx = cleanStopNames.findIndex(n => n.includes(targetSourceClean) || targetSourceClean.includes(n));
+                           }
+
+                           if (idx !== -1) {
+                               if (!renderedLines.has(info.name)) {
+                                   renderedLines.add(info.name);
+                                   renderBusLine(info, AMap, mapRef.current, false, false, false);
+                                   directLinesInfo.push({ name: info.name, stops: stopNames });
+                               }
+                               
+                               if (transferEnabled) {
+                                   const targetIdx = idx + atStation;
+                                   if (targetIdx < stops.length) {
+                                       const tStop = stops[targetIdx];
+                                       transferStations.set(tStop.name, [tStop.location.lng, tStop.location.lat]);
+                                   }
+                               }
+                           }
+                       } else {
+                           if (!renderedLines.has(info.name)) {
+                               renderedLines.add(info.name);
+                               renderBusLine(info, AMap, mapRef.current, false, false, false);
+                               const lastThree = stopNames.slice(-3).reverse();
+                               transferLinesInfo.push({ name: info.name, lastThree });
+                           }
+                       }
+                   }
+               }
+               resolve();
+           });
+       });
     };
 
-    const initialRenderedLines = new Set<string>();
-
-    for (let i = 0; i < linesToQuery.length; i += 5) {
-      const batch = linesToQuery.slice(i, i + 5);
-      await Promise.all(batch.map(async (lineStr) => {
-        return new Promise<void>((resolve) => {
-          const { name: shortName } = parseLineInfo(lineStr);
-          const timeout = setTimeout(() => {
-            completed++;
-            if (completed === total) finalizeConnectivity();
-            resolve();
-          }, 8000);
-
-          lineSearch.search(shortName, (status: string, result: any) => {
-            clearTimeout(timeout);
-            completed++;
-            if (result.lineInfo) {
-              result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
-            }
-            if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
-              let bestLine = result.lineInfo[0];
-              const exactMatch = result.lineInfo.find((l: any) => l.name === lineStr);
-              if (exactMatch) bestLine = exactMatch;
-              
-              initialRenderedLines.add(bestLine.name);
-              renderBusLine(bestLine, AMap, mapRef.current, false, false, false);
-
-              if (bestLine.via_stops) {
-                registerLineData(bestLine.name, bestLine.via_stops);
-              }
-            }
-
-            if (completed === total) {
-              finalizeConnectivity();
-            }
-            resolve();
-          });
-        });
-      }));
+    // 1. Process source lines
+    setConnectivityToast(`正在检索本站线路 (${linesToQuery.length}条)...`);
+    for (const lName of linesToQuery) {
+        await searchAndProcessLine(lName, false);
     }
 
-    async function finalizeConnectivity() {
-      const allTransferLines = new Set<string>(initialRenderedLines);
-      if (transferLimit > 0) {
-        const getLineStops = async (lineStr: string): Promise<Array<{name: string; location: [number, number]}>> => {
-          return new Promise((resolve) => {
-            const { name: shortName } = parseLineInfo(lineStr);
-            lineSearch.search(shortName, (status: string, result: any) => {
-              if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
-                let bLine = result.lineInfo[0];
-                const ex = result.lineInfo.find((l: any) => l.name === lineStr);
-                if (ex) bLine = ex;
-                if (bLine.via_stops) {
-                  resolve(bLine.via_stops.filter((s: any) => s && s.location).map((s: any) => ({ name: s.name, location: [s.location.lng, s.location.lat] })));
-                  return;
-                }
-              }
-              resolve([]);
-            });
-          });
-        };
-
-        let currentStops = new Map<string, [number, number]>(); // name -> location
-        initialRenderedLines.forEach(lName => {
-          const stops = lineToStopsMap.get(lName) || [];
-          stops.forEach(st => {
-            currentStops.set(st.name, st.location);
-            const key = `${st.location[0]},${st.location[1]}`;
-            if (!transferStopsMap.has(key)) {
-              transferStopsMap.set(key, { name: st.name, location: st.location, lines: new Set([lName]) });
-            } else {
-              transferStopsMap.get(key)!.lines.add(lName);
-            }
-          });
-        });
-
-        const visitedStopNames = new Set<string>();
-
-        for (let step = 0; step < transferLimit; step++) {
-          const nextLevelStops = new Map<string, [number, number]>();
-          const stopNamesArr = Array.from(currentStops.keys());
-
-          for (const sName of stopNamesArr) {
-            if (visitedStopNames.has(sName)) continue;
-            visitedStopNames.add(sName);
-            const loc = currentStops.get(sName)!;
-
-            const details = await fetchStopDetails(sName, loc, AMap, currentCity);
+    // 2. Process transfer stations
+    if (transferEnabled && transferStations.size > 0) {
+        setConnectivityToast(`发现 ${transferStations.size} 个换乘站点，正在检索增益线路...`);
+        
+        const stationEntries = Array.from(transferStations.entries());
+        for (const [sName, sLoc] of stationEntries) {
+            const details = await fetchStopDetails(sName, sLoc, AMap, currentCity);
             if (details && details.lines) {
-              const linesArr = details.lines as string[];
-              linesArr.forEach(l => allTransferLines.add(l));
-
-              for (const lStr of linesArr) {
-                let stopsOnLine = lineToStopsMap.get(lStr);
-                if (!stopsOnLine) {
-                  stopsOnLine = await getLineStops(lStr);
-                  lineToStopsMap.set(lStr, stopsOnLine);
+                for (const lName of details.lines) {
+                    await searchAndProcessLine(lName, true);
                 }
-                stopsOnLine.forEach(st => {
-                  if (st && st.location) {
-                    const key = `${st.location[0]},${st.location[1]}`;
-                    nextLevelStops.set(st.name, st.location);
-                    if (!transferStopsMap.has(key)) {
-                      transferStopsMap.set(key, {
-                        name: st.name,
-                        location: st.location,
-                        lines: new Set([lStr])
-                      });
-                    } else {
-                      transferStopsMap.get(key)!.lines.add(lStr);
-                    }
-                  }
-                });
-              }
             }
-          }
-          currentStops = nextLevelStops;
         }
-
-        // Search and render all accumulated unique transfer lines on the map
-        const transferLinesArray = Array.from(allTransferLines);
-        const renderedSet = new Set<string>();
-        for (let i = 0; i < transferLinesArray.length; i += 5) {
-          const batch = transferLinesArray.slice(i, i + 5);
-          await Promise.all(batch.map(async (lineStr) => {
-            if (renderedSet.has(lineStr)) return;
-            renderedSet.add(lineStr);
-            return new Promise<void>((resolve) => {
-              const { name: shortName } = parseLineInfo(lineStr);
-              const timeout = setTimeout(() => resolve(), 8000);
-              lineSearch.search(shortName, (status: string, result: any) => {
-                clearTimeout(timeout);
-                checkAmapQuotaError(status, result);
-                if (result && result.lineInfo) {
-                  result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
-                }
-                if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
-                  let bestLine = result.lineInfo[0];
-                  const exactMatch = result.lineInfo.find((l: any) => l.name === lineStr);
-                  if (exactMatch) bestLine = exactMatch;
-                  renderBusLine(bestLine, AMap, mapRef.current, false, false, false);
-                }
-                resolve();
-              });
-            });
-          }));
-        }
-      }
-
-      mapRef.current?.setFitView();
-      setIsSearching(false);
     }
+
+    // AI Summary
+    setConnectivityToast('正在生成 AI 总结...');
+    const prompt = `站点名称：${stop.name}
+本站公交线路及路径：
+${directLinesInfo.map(l => `- ${l.name}: ${l.stops.join(' -> ')}`).join('\n')}
+${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向：\n${transferLinesInfo.map(l => `- ${l.name} (最远三站: ${l.lastThree.join(', ')})`).join('\n')}` : ''}
+
+请简要总结该站点的通达情况。`;
+
+    try {
+        const res = await fetch('/api/ai/summary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt })
+        });
+        const data = await res.json();
+        if (data.summary) {
+            setStationConnectivityCard(prev => prev ? { ...prev, aiSummary: data.summary } : null);
+        } else if (data.error) {
+            setConnectivityToast(`AI 错误: ${data.details || data.error}`);
+        }
+    } catch (e) {
+        setConnectivityToast('AI 总结请求失败');
+    }
+
+    setIsSearching(false);
+    setConnectivityToast(null);
+    mapRef.current?.setFitView();
   };
+
 
   const fetchStopDetails = async (name: string, location: [number, number], AMap: any, city: string): Promise<any> => {
     const getDistSq = (p1: [number, number], p2: [number, number]) => {
@@ -2468,16 +3356,36 @@ export default function App() {
     }
   };
 
+  const cycleMapMode = () => {
+    setMapMode(prev => {
+      let next: MapMode;
+      if (prev === 'normal') next = 'satellite';
+      else if (prev === 'satellite') next = 'blank';
+      else next = 'normal';
+      return next;
+    });
+  };
+
+  const cycleStationMode = () => {
+    setStationMode(prev => {
+      let next: StationDisplayMode;
+      if (prev === 'all') next = 'terminal';
+      else if (prev === 'terminal') next = 'none';
+      else next = 'all';
+      return next;
+    });
+  };
+
   const toggleStations = () => {
-    const next = !showStations;
-    setShowStations(next);
-    localStorage.setItem('app_show_stations', next.toString());
+    cycleStationMode();
   };
 
   const toggleBaseMap = () => {
-    const next = !showBaseMap;
-    setShowBaseMap(next);
-    localStorage.setItem('app_show_basemap', next.toString());
+    cycleMapMode();
+  };
+
+  const toggleSatelliteMap = () => {
+    cycleMapMode();
   };
 
   const toggleFilterAirportBus = () => {
@@ -3845,6 +4753,7 @@ export default function App() {
       });
 
       const defaultClickHandler = (e: any) => {
+        if (isMinigameActiveRef.current) return;
         if (isDrawingModeRef.current) {
           handleDrawingMapClick(e);
           return;
@@ -3944,6 +4853,14 @@ export default function App() {
     return () => {
       if (watchdogTimer) clearTimeout(watchdogTimer);
       if (map) {
+        if (satelliteLayerRef.current) {
+          try { satelliteLayerRef.current.setMap(null); } catch (e) {}
+          satelliteLayerRef.current = null;
+        }
+        if (roadNetLayerRef.current) {
+          try { roadNetLayerRef.current.setMap(null); } catch (e) {}
+          roadNetLayerRef.current = null;
+        }
         if (mapClickHandlerRef.current) map.off('click', mapClickHandlerRef.current);
         map.destroy();
       }
@@ -3978,25 +4895,62 @@ export default function App() {
     }
   }, [mapInstance]);
 
-  // Handle Base Map Visibility using AMap features
+  // Handle Base Map Visibility and Satellite Layer
   useEffect(() => {
     if (!mapInstance) return;
     try {
+      const AMap = (window as any).AMap;
       const layers = mapInstance.getLayers();
-      if (showBaseMap) {
-        if (layers[0]) layers[0].setOpacity(1);
-        mapInstance.setFeatures(['bg', 'point', 'road', 'building']);
-        mapInstance.setMapStyle('amap://styles/light');
-      } else {
-        // Completely hidden features and tile layer for "blank" effect
+
+      if (AMap && AMap.TileLayer) {
+        if (!satelliteLayerRef.current && AMap.TileLayer.Satellite) {
+          satelliteLayerRef.current = new AMap.TileLayer.Satellite({ zIndex: 1 });
+        }
+        if (!roadNetLayerRef.current && AMap.TileLayer.RoadNet) {
+          roadNetLayerRef.current = new AMap.TileLayer.RoadNet({ zIndex: 2 });
+        }
+      }
+
+      const satLayer = satelliteLayerRef.current;
+      const roadNetLayer = roadNetLayerRef.current;
+
+      if (!showBaseMap) {
+        // Completely hidden: hide satellite, hide vector tiles
+        if (satLayer) {
+          try { satLayer.setMap(null); } catch (e) {}
+        }
+        if (roadNetLayer) {
+          try { roadNetLayer.setMap(null); } catch (e) {}
+        }
         if (layers[0]) layers[0].setOpacity(0);
         mapInstance.setFeatures([]);
         mapInstance.setMapStyle('amap://styles/whitesmoke');
+      } else if (useSatelliteMap) {
+        // Satellite mode: show satellite and roadnet layers
+        if (layers[0]) layers[0].setOpacity(0);
+        mapInstance.setFeatures([]);
+        if (satLayer) {
+          try { satLayer.setMap(mapInstance); } catch (e) {}
+        }
+        if (roadNetLayer) {
+          try { roadNetLayer.setMap(mapInstance); } catch (e) {}
+        }
+      } else {
+        // Standard vector base map
+        if (satLayer) {
+          try { satLayer.setMap(null); } catch (e) {}
+        }
+        if (roadNetLayer) {
+          try { roadNetLayer.setMap(null); } catch (e) {}
+        }
+        if (layers[0]) layers[0].setOpacity(1);
+        mapInstance.setFeatures(['bg', 'point', 'road', 'building']);
+        mapInstance.setMapStyle('amap://styles/light');
       }
     } catch (e) {
       // Ignore errors if map is being destroyed
     }
-  }, [showBaseMap, mapInstance]);
+  }, [showBaseMap, useSatelliteMap, mapInstance]);
 
   const handleSearch = async () => {
     const map = mapRef.current;
@@ -4007,6 +4961,8 @@ export default function App() {
 
     // Reset reference box so the new search initiates a fresh reference bounds calculation
     referenceBoxRef.current = null;
+    setFilterTerminalOnly(false);
+    filterTerminalOnlyRef.current = false;
 
     const currentZoom = map.getZoom();
     if (!enableCityWideSearch && currentZoom < 12) {
@@ -4117,16 +5073,17 @@ export default function App() {
           });
           stopCountCacheRef.current.set(key, linesAr.length);
           
+          const origColor = getStopColor(linesAr.length, '#3b82f6');
           const marker = new AMap.CircleMarker({
             center: [poi.location.lng, poi.location.lat],
             radius: 8,
-            fillColor: getStopColor(linesAr.length, '#3b82f6'),
+            fillColor: origColor,
             strokeColor: '#fff',
             strokeWeight: 2,
             bubble: false,
             zIndex: 30,
             cursor: 'pointer',
-            extData: { key }
+            extData: { key, originalColor: origColor, originalRadius: 8 }
           });
 
           marker.on('click', () => {
@@ -4248,16 +5205,17 @@ export default function App() {
               city: currentCity
             });
             stopCountCacheRef.current.set(key, linesArray.length);
+            const origColor = getStopColor(linesArray.length, '#3b82f6');
             const marker = new AMap.CircleMarker({
               center: [poi.location.lng, poi.location.lat],
               radius: 8,
-              fillColor: getStopColor(linesArray.length, '#3b82f6'),
+              fillColor: origColor,
               strokeColor: '#fff',
               strokeWeight: 2,
               bubble: false,
               zIndex: 30,
               cursor: 'pointer',
-              extData: { key }
+              extData: { key, originalColor: origColor, originalRadius: 8 }
             });
             
             marker.on('click', () => {
@@ -4347,6 +5305,8 @@ export default function App() {
           });
         })));
       }
+      cachedLinesVersionRef.current++;
+      updateTerminalNamesCache();
     }
 
     aggregateAndVisualize(lineNames, map, AMap);
@@ -4418,6 +5378,8 @@ export default function App() {
     setShowSuggestions(false);
     setActiveBusLine(null);
     setStats({ stops: 0, lines: 0 });
+    setFilterTerminalOnly(false);
+    filterTerminalOnlyRef.current = false;
     setSelectedSegmentLines(null);
     setSelectedStop(null);
     setSelectionPos(null);
@@ -4887,6 +5849,7 @@ export default function App() {
     }
 
     const onMapClick = (e: any) => {
+      if (isMinigameActiveRef.current) return;
       if (isDrawingModeRef.current) {
         handleDrawingMapClick(e);
         return;
@@ -5227,12 +6190,9 @@ export default function App() {
            }
         });
 
-        // Trigger map marker colors update
-        if (currentUpdateTick > 0 && (i % 3 === 0 || i === activeBusLine.via_stops.length - 1)) {
-           setCacheUpdateTick(v => v + 1);
+        // Directly update map marker colors for performance without triggering heavy React re-renders
+        if (currentUpdateTick > 0 && (i % 4 === 0 || i === activeBusLine.via_stops.length - 1)) {
            currentUpdateTick = 0;
-           
-           // Manually update marker group colors for performance instead of full redraw
            if (markerGroupRef.current) {
              const overlays = markerGroupRef.current.getOverlays();
              overlays.forEach((o: any) => {
@@ -5240,8 +6200,8 @@ export default function App() {
                if (ext && ext.key && ext.type === 'busLineStop') {
                  const newCount = stopCountCacheRef.current.get(ext.key) || 0;
                  const newColor = getStopColor(newCount, '#3b82f6');
-                 // Only setOptions if color changed
-                 if (o._opts && o._opts.fillColor !== newColor) {
+                 ext.originalColor = newColor;
+                 if (o._opts && o._opts.fillColor !== newColor && !filterTerminalOnlyRef.current) {
                     o.setOptions({ fillColor: newColor });
                  }
                }
@@ -5249,6 +6209,7 @@ export default function App() {
            }
         }
       }
+      setCacheUpdateTick(v => v + 1);
     };
     
     runBatch();
@@ -5445,6 +6406,21 @@ export default function App() {
                   </div>
                 </>
               )}
+
+              {/* Minigame FAB */}
+              <div className="pointer-events-auto shrink-0">
+                <button 
+                  onClick={() => {
+                    setGameMode(null);
+                    setGameState('menu');
+                    setShowMinigameModal(true);
+                  }}
+                  className="backdrop-blur-md bg-m3-surface/90 border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center text-slate-700 hover:bg-m3-surface-container-high hover:text-m3-primary hover:scale-105 transition-all duration-200 active:scale-90 group"
+                  title="小游戏：公交猜一猜"
+                >
+                  <Gamepad2 className="w-4.5 h-4.5 transition-transform group-hover:rotate-12 duration-300" />
+                </button>
+              </div>
 
               {/* Settings FAB */}
               <div className="pointer-events-auto shrink-0">
@@ -5996,32 +6972,70 @@ export default function App() {
               {/* Module Divider */}
               <div className="w-[1px] h-6 bg-m3-outline-variant/40 mx-0.5 sm:mx-1 shrink-0" />
 
-              {/* Module 3: Right of Search - Base Map (Icon Only) */}
+              {/* Module 3: Combined Map Mode Cycle Button (Normal -> Satellite -> Blank -> Normal) */}
               <button
                 type="button"
-                onClick={toggleBaseMap}
+                onClick={cycleMapMode}
                 className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 cursor-pointer active:scale-95 ${
-                  showBaseMap 
-                    ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs' 
-                    : 'text-[#5C7569] hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
+                  mapMode === 'satellite'
+                    ? 'bg-m3-primary text-m3-on-primary border border-m3-primary shadow-xs'
+                    : mapMode === 'normal'
+                      ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs'
+                      : 'text-[#8F9E96]/70 hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
                 }`}
-                title={showBaseMap ? "隐藏底图" : "显示底图"}
+                title={
+                  mapMode === 'normal'
+                    ? "底图：正常底图（点击进入卫星底图）"
+                    : mapMode === 'satellite'
+                      ? "底图：卫星底图（点击进入空白底图）"
+                      : "底图：空白底图（点击恢复正常底图）"
+                }
               >
-                <MapIcon className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0" />
+                {mapMode === 'satellite' ? (
+                  <Satellite className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0" />
+                ) : mapMode === 'normal' ? (
+                  <MapIcon className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0" />
+                ) : (
+                  <div className="relative flex items-center justify-center">
+                    <MapIcon className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0 opacity-40" />
+                    <div className="absolute w-5 h-0.5 bg-current -rotate-45 rounded-full" />
+                  </div>
+                )}
               </button>
 
-              {/* Module 3: Right of Search - Stations (Icon Only) */}
+              {/* Module 3: Combined Station Display Mode Cycle Button (All -> Terminal -> None -> All) */}
               <button
                 type="button"
-                onClick={toggleStations}
+                onClick={cycleStationMode}
                 className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 cursor-pointer active:scale-95 ${
-                  showStations 
-                    ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs' 
-                    : 'text-[#5C7569] hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
+                  stationMode === 'terminal'
+                    ? 'bg-slate-700 text-white border border-slate-600 shadow-xs'
+                    : stationMode === 'all'
+                      ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs'
+                      : 'text-[#8F9E96]/70 hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
                 }`}
-                title={showStations ? "隐藏站点" : "显示站点"}
+                title={
+                  stationMode === 'all'
+                    ? "站点：显示全部（点击仅显示终点站）"
+                    : stationMode === 'terminal'
+                      ? `站点：仅终点站 (${terminalStopsCount}个灰色圆圈)（点击隐藏全部站点）`
+                      : "站点：隐藏站点（点击恢复显示全部站点）"
+                }
               >
-                <MapPin className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0" />
+                {stationMode === 'terminal' ? (
+                  <div className="relative flex items-center justify-center">
+                    <div className="w-5 h-5 rounded-full bg-white text-slate-800 flex items-center justify-center border-2 border-slate-300 shadow-xs font-black text-[10px]">
+                      终
+                    </div>
+                  </div>
+                ) : stationMode === 'all' ? (
+                  <MapPin className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0" />
+                ) : (
+                  <div className="relative flex items-center justify-center">
+                    <MapPin className="w-5.5 h-5.5 sm:w-6 sm:h-6 shrink-0 opacity-40" />
+                    <div className="absolute w-5 h-0.5 bg-current -rotate-45 rounded-full" />
+                  </div>
+                )}
               </button>
 
             </div>
@@ -6455,7 +7469,7 @@ export default function App() {
                             <span className="text-[10px] text-slate-400">By {hist.creatorNickname}</span>
                           </div>
                           <span className="text-[10px] text-slate-300 font-medium truncate">
-                            途经: {hist.via_stops.map((vs: any) => vs.name).join(' → ')}
+                            途经: {(hist.via_stops || []).map((vs: any) => vs.name).join(' → ')}
                           </span>
                           {status === 'rejected' && (hist.rejectReason || submissionStatuses[hist.id + '_reason']) && (
                             <span className="text-[10px] text-m3-error font-bold bg-m3-error-container/20 px-2 py-1 rounded border border-m3-error/25 block mt-0.5 max-w-full break-words">
@@ -6586,7 +7600,7 @@ export default function App() {
                         <div className="text-slate-300 text-[10px] line-clamp-2 leading-relaxed">
                           <span className="font-bold text-slate-400">途经站点: </span>
                           {sub.via_stops && sub.via_stops.length > 0 ? (
-                            sub.via_stops.map((vs: any) => vs.name).join(' → ')
+                            (sub.via_stops || []).map((vs: any) => vs.name).join(' → ')
                           ) : (
                             <span className="italic text-slate-500">仅有轨迹</span>
                           )}
@@ -6899,6 +7913,329 @@ export default function App() {
           </div>
         )}
 
+        {/* Minigame Modal / HUD */}
+        <AnimatePresence>
+          {showMinigameModal && (
+            <>
+              {(gameState === 'menu' || gameState === 'gameover' || gameLoading) && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => {
+                    if (!gameLoading) {
+                      exitMinigameToMap();
+                    }
+                  }}
+                  className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-md pointer-events-auto flex flex-col items-center justify-center text-white gap-3"
+                >
+                  {gameLoading && (
+                    <>
+                      <Loader2 className="w-10 h-10 animate-spin text-m3-primary" />
+                      <p className="text-sm font-black tracking-wide">{gameLoadingText}</p>
+                    </>
+                  )}
+                </motion.div>
+              )}
+
+              <motion.div
+                initial={{ opacity: 0, scale: 0.92, y: 16 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.92, y: 16 }}
+                transition={{ type: 'spring', damping: 24, stiffness: 220 }}
+                className={
+                  gameState === 'playing' && !gameLoading
+                    ? "fixed bottom-3 left-1/2 -translate-x-1/2 z-[121] w-[820px] max-w-[96vw] bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 rounded-[22px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
+                    : gameState === 'playing' && gameLoading
+                    ? "hidden"
+                    : "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[121] w-[520px] max-w-[94vw] max-h-[85vh] bg-m3-surface-container-high border border-m3-outline-variant/30 rounded-[32px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
+                }
+              >
+                {gameState === 'menu' && (
+                  <div className="p-7 overflow-y-auto flex flex-col gap-6 relative">
+                    <button
+                      type="button"
+                      onClick={exitMinigameToMap}
+                      className="absolute top-5 right-5 w-8 h-8 flex items-center justify-center rounded-full bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-500 hover:text-slate-800 transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+
+                    <div>
+                      <div className="flex items-center gap-2.5 mb-1">
+                        <div className="w-9 h-9 rounded-2xl bg-m3-primary text-m3-on-primary flex items-center justify-center shadow-md">
+                          <Gamepad2 className="w-5 h-5" />
+                        </div>
+                        <h2 className="text-xl font-black text-slate-900 tracking-tight">公交猜一猜小游戏</h2>
+                      </div>
+                      <p className="text-xs text-slate-500 font-medium">挑战你的路网知识，解锁“巴士之神”至高荣誉！</p>
+                    </div>
+
+                    {/* Mode selection */}
+                    <div className="space-y-3">
+                      <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择游戏模式</label>
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {[
+                          { id: 'line', title: '看图猜线路', desc: '随机抽取线路观察走向，挑战猜出正确的公交线路名称' },
+                          { id: 'station', title: '看通达度猜站名', desc: '观察站点周边多路公交交织网络，猜出对应的公交站点名称' },
+                          { id: 'city', title: '看线网猜城市', desc: '观察全国各城市线网布局，猜一猜这是哪个城市（共10题）' }
+                        ].map(m => (
+                          <div 
+                            key={m.id}
+                            onClick={() => setGameMode(m.id as any)}
+                            className={`p-4 rounded-2xl border cursor-pointer transition-all flex items-start gap-3.5 ${gameMode === m.id ? 'bg-m3-primary-container/40 border-m3-primary shadow-sm ring-1 ring-m3-primary/30' : 'bg-m3-surface border-m3-outline-variant/30 hover:bg-m3-surface-container-low'}`}
+                          >
+                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${gameMode === m.id ? 'bg-m3-primary text-m3-on-primary' : 'bg-m3-surface-container text-slate-600'}`}>
+                              <Trophy className="w-4 h-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <h3 className="text-sm font-black text-slate-900">{m.title}</h3>
+                              <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{m.desc}</p>
+                              
+                              {/* Best record */}
+                              <div className="mt-2 flex items-center gap-2 text-[10px] font-bold text-slate-600">
+                                <span>最佳纪录:</span>
+                                <span className="px-2 py-0.5 rounded-full bg-m3-surface-container text-m3-primary font-black">
+                                  {m.id === 'city' ? `${bestRecords.city.hard}分` : `易:${bestRecords[m.id].easy} | 中:${bestRecords[m.id].medium} | 难:${bestRecords[m.id].hard}`}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Difficulty & City Settings (Not for city mode) */}
+                    {gameMode && gameMode !== 'city' && (
+                      <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20">
+                        <div className="space-y-2">
+                          <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择难度</label>
+                          <div className="grid grid-cols-3 gap-2">
+                            {[
+                              { id: 'easy', label: '易 (指定城市+底图)' },
+                              { id: 'medium', label: '中 (指定城市+无底图)' },
+                              { id: 'hard', label: '难 (全国随机+无底图)' }
+                            ].map(d => (
+                              <button
+                                key={d.id}
+                                type="button"
+                                onClick={() => setGameDifficulty(d.id as any)}
+                                className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-all ${gameDifficulty === d.id ? 'bg-m3-primary text-m3-on-primary border-m3-primary shadow-sm' : 'bg-m3-surface border-m3-outline-variant/30 text-slate-700 hover:bg-m3-surface-container'}`}
+                              >
+                                {d.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {gameDifficulty !== 'hard' && (
+                          <div className="space-y-2">
+                            <label className="text-xs font-black text-slate-700 tracking-wide uppercase">指定城市</label>
+                            <select
+                              value={gameCity}
+                              onChange={(e) => setGameCity(e.target.value)}
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
+                            >
+                              {citiesPool.map(c => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Start Button */}
+                    <button
+                      type="button"
+                      disabled={!gameMode}
+                      onClick={() => startMinigame(gameMode!, gameDifficulty, gameCity)}
+                      className="w-full py-3.5 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-sm shadow-lg hover:opacity-95 transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      开始挑战
+                    </button>
+                  </div>
+                )}
+
+                {gameState === 'playing' && gameQuestionData && (
+                  <div className="px-4 py-3 flex flex-col gap-2 relative bg-m3-surface">
+                    <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <span className="px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[11px] font-black shrink-0">
+                          {gameMode === 'line' ? '看图猜线路' : gameMode === 'station' ? '看通达度猜站名' : '看线网猜城市'}
+                        </span>
+                        <span className="text-[11px] font-bold text-slate-500 shrink-0">
+                          {gameMode === 'city' ? `第 ${gameQuestionNum}/10 题` : `第 ${gameQuestionNum} 题`}
+                        </span>
+                        <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50/90 border border-amber-200/70 text-amber-900 text-[11px] font-bold min-w-0 truncate">
+                          <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span className="truncate">{gameQuestionData.promptText}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2.5 shrink-0 ml-auto">
+                        <span className="text-xs font-extrabold text-slate-700">得分: <strong className="text-m3-primary">{gameScore}</strong></span>
+                        {confirmQuitGame ? (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={returnToMinigameMenu}
+                              className="text-[11px] font-black text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded-lg transition-colors"
+                            >
+                              确认退出
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirmQuitGame(false)}
+                              className="text-[11px] font-bold text-slate-500 hover:text-slate-800 px-1.5 py-0.5"
+                            >
+                              取消
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setConfirmQuitGame(true)}
+                            className="text-xs font-bold text-red-500 hover:underline"
+                          >
+                            退出
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex sm:hidden items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-50/90 border border-amber-200/70 text-amber-900 text-[11px] font-bold">
+                      <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span className="truncate">{gameQuestionData.promptText}</span>
+                    </div>
+
+                    {gameFeedback && (
+                      <div className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold text-center ${gameFeedback.correct ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+                        {gameFeedback.msg}
+                      </div>
+                    )}
+
+                    {!gameQuestionData.isFillIn && gameQuestionData.options && gameQuestionData.options.length > 0 ? (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {(gameQuestionData.options || []).map((opt, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            title={opt}
+                            disabled={gameFeedback !== null}
+                            onClick={() => handleMinigameSubmit(opt)}
+                            className="px-3 py-2 rounded-xl border border-m3-outline-variant/30 bg-m3-surface-container-low hover:bg-m3-primary-container/30 hover:border-m3-primary text-slate-800 font-bold text-xs transition-all shadow-xs text-left truncate flex items-center gap-2"
+                          >
+                            <span className="w-5 h-5 rounded-full bg-m3-surface-container flex items-center justify-center text-[10px] font-black text-slate-600 shrink-0">
+                              {['A', 'B', 'C', 'D'][idx]}
+                            </span>
+                            <span className="truncate">{opt}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className="hidden sm:inline text-[11px] font-bold text-slate-500 shrink-0">填空作答:</span>
+                        <input
+                          type="text"
+                          disabled={gameFeedback !== null}
+                          placeholder={gameMode === 'city' ? '输入城市名称（如：北京市）' : gameMode === 'station' ? '输入站点名称（如：西单）' : '输入线路名称（如：1路）'}
+                          value={gameUserInput}
+                          onChange={(e) => setGameUserInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && gameUserInput.trim()) {
+                              handleMinigameSubmit(gameUserInput);
+                            }
+                          }}
+                          className="flex-1 px-3.5 py-2 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
+                        />
+                        <button
+                          type="button"
+                          disabled={gameFeedback !== null || !gameUserInput.trim()}
+                          onClick={() => handleMinigameSubmit(gameUserInput)}
+                          className="px-5 py-2 rounded-xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-sm hover:opacity-95 transition-all disabled:opacity-50 shrink-0"
+                        >
+                          提交
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {gameState === 'playing' && !gameLoading && !gameQuestionData && (
+                  <div className="p-6 flex flex-col items-center text-center gap-4 bg-m3-surface">
+                    <p className="text-xs font-bold text-slate-600">题目生成遇到网络波动，请重试或返回菜单。</p>
+                    <div className="flex gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => generateQuestion(gameMode!, gameDifficulty, gameCity, gameQuestionNum)}
+                        className="px-4 py-2 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-black shadow-sm"
+                      >
+                        重新出题
+                      </button>
+                      <button
+                        type="button"
+                        onClick={returnToMinigameMenu}
+                        className="px-4 py-2 rounded-xl bg-m3-surface-container text-slate-700 text-xs font-black"
+                      >
+                        返回菜单
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {gameState === 'gameover' && (
+                  <div className="p-8 flex flex-col items-center text-center gap-5 relative">
+                    <button
+                      type="button"
+                      onClick={exitMinigameToMap}
+                      className="absolute top-5 right-5 w-8 h-8 flex items-center justify-center rounded-full bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-500 hover:text-slate-800 transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                    <div className="w-16 h-16 rounded-3xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-lg">
+                      <Trophy className="w-8 h-8" />
+                    </div>
+
+                    <div>
+                      <h2 className="text-xl font-black text-slate-900">挑战结束！</h2>
+                      <p className="text-xs text-slate-500 font-medium mt-1">本次挑战最终得分</p>
+                      <div className="text-4xl font-black text-m3-primary mt-2">{gameScore} <span className="text-sm font-bold text-slate-400">分</span></div>
+                    </div>
+
+                    {(() => {
+                      const rating = getRating(gameMode!, gameScore);
+                      return (
+                        <div className={`px-5 py-2 rounded-2xl border text-xs font-black shadow-sm flex items-center gap-2 ${rating.color}`}>
+                          <Award className="w-4 h-4" />
+                          获得段位评级：{rating.title}
+                        </div>
+                      );
+                    })()}
+
+                    <div className="flex gap-3 w-full pt-2">
+                      <button
+                        type="button"
+                        onClick={() => startMinigame(gameMode!, gameDifficulty, gameCity)}
+                        className="flex-1 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-md hover:opacity-95 transition-all"
+                      >
+                        再玩一次
+                      </button>
+                      <button
+                        type="button"
+                        onClick={returnToMinigameMenu}
+                        className="flex-1 py-3 rounded-2xl bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-700 font-black text-xs transition-all"
+                      >
+                        返回菜单
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+
         {/* Settings Modal - Material 3 Design */}
         <AnimatePresence>
           {showSettings && (
@@ -6961,41 +8298,100 @@ export default function App() {
                     {settingsTab === 'general' ? (
                       <div className="space-y-5">
                         <div className="space-y-3.5">
-                          {/* Toggleable Settings */}
-                          <div className="flex items-center justify-between p-1">
-                            <div className="flex flex-col">
-                                <span className="text-xs font-bold text-slate-700">{t('showStations')}</span>
-                                <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">在地图上标注出公交站点</span>
+                          {/* 站点显示模式 3-State Control */}
+                          <div className="flex flex-col gap-2 p-1 border-b border-m3-outline-variant/20 pb-3">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-bold text-slate-700">站点显示模式</span>
+                              <span className="text-[10px] text-slate-400 font-medium">
+                                {stationMode === 'all' ? '全部站点' : stationMode === 'terminal' ? '仅终点站' : '隐藏站点'}
+                              </span>
                             </div>
-                            <button 
-                              type="button"
-                              onClick={toggleStations}
-                              className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 border-2 ${showStations ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
-                            >
-                              <motion.div 
-                                animate={{ x: showStations ? 22 : 0 }}
-                                transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-                                className={`rounded-full shadow-sm transition-colors duration-200 ${showStations ? 'w-4.5 h-4.5 bg-m3-on-primary' : 'w-3.5 h-3.5 bg-m3-outline'}`}
-                              />
-                            </button>
+                            <div className="grid grid-cols-3 gap-1.5 bg-m3-surface-container-highest p-1 rounded-xl">
+                              <button
+                                type="button"
+                                onClick={() => setStationMode('all')}
+                                className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                                  stationMode === 'all'
+                                    ? 'bg-m3-primary text-m3-on-primary shadow-xs'
+                                    : 'text-slate-600 hover:text-slate-800'
+                                }`}
+                              >
+                                全部站点
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setStationMode('terminal')}
+                                className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                                  stationMode === 'terminal'
+                                    ? 'bg-slate-700 text-white shadow-xs'
+                                    : 'text-slate-600 hover:text-slate-800'
+                                }`}
+                              >
+                                仅终点站
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setStationMode('none')}
+                                className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                                  stationMode === 'none'
+                                    ? 'bg-m3-outline text-white shadow-xs'
+                                    : 'text-slate-600 hover:text-slate-800'
+                                }`}
+                              >
+                                不显示
+                              </button>
+                            </div>
+                            <span className="text-[10px] text-slate-400 leading-tight">
+                              仅终点站模式下，每个终点站均以明显的灰色圆圈突出显示。
+                            </span>
                           </div>
 
-                          <div className="flex items-center justify-between p-1">
-                            <div className="flex flex-col">
-                                <span className="text-xs font-bold text-slate-700">{t('showBaseMap')}</span>
-                                <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">显示地图，显示道路、地名等信息</span>
+                          {/* 底图样式 3-State Control */}
+                          <div className="flex flex-col gap-2 p-1 border-b border-m3-outline-variant/20 pb-3">
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-bold text-slate-700">底图样式</span>
+                              <span className="text-[10px] text-slate-400 font-medium">
+                                {mapMode === 'normal' ? '正常底图' : mapMode === 'satellite' ? '卫星底图' : '空白底图'}
+                              </span>
                             </div>
-                            <button 
-                              type="button"
-                              onClick={toggleBaseMap}
-                              className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 border-2 ${showBaseMap ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
-                            >
-                              <motion.div 
-                                animate={{ x: showBaseMap ? 22 : 0 }}
-                                transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-                                className={`rounded-full shadow-sm transition-colors duration-200 ${showBaseMap ? 'w-4.5 h-4.5 bg-m3-on-primary' : 'w-3.5 h-3.5 bg-m3-outline'}`}
-                              />
-                            </button>
+                            <div className="grid grid-cols-3 gap-1.5 bg-m3-surface-container-highest p-1 rounded-xl">
+                              <button
+                                type="button"
+                                onClick={() => setMapMode('normal')}
+                                className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                                  mapMode === 'normal'
+                                    ? 'bg-m3-primary text-m3-on-primary shadow-xs'
+                                    : 'text-slate-600 hover:text-slate-800'
+                                }`}
+                              >
+                                正常底图
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setMapMode('satellite')}
+                                className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                                  mapMode === 'satellite'
+                                    ? 'bg-m3-primary text-m3-on-primary shadow-xs'
+                                    : 'text-slate-600 hover:text-slate-800'
+                                }`}
+                              >
+                                卫星底图
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setMapMode('blank')}
+                                className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                                  mapMode === 'blank'
+                                    ? 'bg-m3-outline text-white shadow-xs'
+                                    : 'text-slate-600 hover:text-slate-800'
+                                }`}
+                              >
+                                空白底图
+                              </button>
+                            </div>
+                            <span className="text-[10px] text-slate-400 leading-tight">
+                              支持标准矢量底图、高清晰度遥感卫星影像或极简白板。
+                            </span>
                           </div>
 
                           <div className="flex items-center justify-between p-1">
@@ -7228,36 +8624,6 @@ export default function App() {
                               />
                             </button>
                           </div>
-
-                          {/* Two-Transfer Search */}
-                          <div className="flex items-center justify-between p-1">
-                            <div className="flex flex-col">
-                              <span className="text-xs font-bold text-slate-755">两次换乘搜索</span>
-                              <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">实验性功能：可能极度消耗API</span>
-                            </div>
-                            <button 
-                              type="button"
-                              onClick={() => {
-                                if (!enableTwoTransferSearch) {
-                                  const code = prompt("请输入邀请码以开启此功能:");
-                                  if (code === "busline2sgogo") {
-                                    setEnableTwoTransferSearch(true);
-                                  } else {
-                                    alert("邀请码错误");
-                                  }
-                                } else {
-                                  setEnableTwoTransferSearch(false);
-                                }
-                              }}
-                              className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 shrink-0 border-2 ${enableTwoTransferSearch ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
-                            >
-                              <motion.div 
-                                animate={{ x: enableTwoTransferSearch ? 22 : 0 }}
-                                transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-                                className={`rounded-full shadow-sm transition-colors duration-200 ${enableTwoTransferSearch ? 'w-4.5 h-4.5 bg-m3-on-primary' : 'w-3.5 h-3.5 bg-m3-outline'}`}
-                              />
-                            </button>
-                          </div>
                         </div>
                       </div>
                     ) : (
@@ -7271,7 +8637,7 @@ export default function App() {
                         </div>
                         <h3 className="text-lg font-black text-slate-800 tracking-tight">{t('title')}</h3>
                         <div className="px-3 py-1 bg-m3-primary-container rounded-full border border-m3-outline/5 select-none font-sans">
-                           <span className="text-[9px] font-black text-m3-on-primary-container tracking-widest uppercase">busline 5</span>
+                           <span className="text-[9px] font-black text-m3-on-primary-container tracking-widest uppercase">busline 5.1</span>
                         </div>
                         <div className="flex flex-col items-center mt-2 gap-3">
                            <span 
@@ -7519,7 +8885,7 @@ export default function App() {
                 <div className="flex gap-4">
                   <div className="flex flex-col">
                     <span className="text-sm font-black text-slate-800 leading-none">{stats.stops}</span>
-                    <span className="text-[8px] font-bold text-slate-500 uppercase tracking-tighter mt-1">{t('stops')}</span>
+                    <span className="text-[8px] font-bold text-slate-500 uppercase tracking-tighter mt-1">{filterTerminalOnly ? '终点站' : t('stops')}</span>
                   </div>
                   <div className="flex flex-col">
                     <span className="text-sm font-black text-slate-800 leading-none">{stats.lines}</span>
@@ -7533,7 +8899,7 @@ export default function App() {
         )}
 
         <AnimatePresence>
-          {(selectedStop || selectedSegmentLines) && (
+          {(selectedStop || selectedSegmentLines) && !(showMinigameModal && gameState === 'playing') && (
             <motion.div
               layout
               transition={{ type: "spring", stiffness: 260, damping: 26 }}
@@ -7546,11 +8912,18 @@ export default function App() {
               <div className="backdrop-blur-xl bg-m3-surface/98 border border-m3-outline-variant/40 p-3.5 md:p-5 rounded-[1.75rem] shadow-xl w-full md:w-[340px] md:max-h-[calc(100vh-200px)] overflow-hidden flex flex-col relative select-none">
                 <button 
                   onClick={() => {
+                    const hadSegmentLines = selectedSegmentLines !== null;
                     setSelectedStop(null);
                     setSelectedSegmentLines(null);
                     setSelectionPos(null);
                     setSelectedSegmentName(null);
                     setSelectedSegmentAddress(null);
+                    if (hadSegmentLines && roadStopsDataRef.current.size > 0) {
+                      allMapStopsRef.current = new Map(roadStopsDataRef.current);
+                      if (mapInstance && (window as any).AMap) {
+                        syncStopMarkersToMap(mapInstance, (window as any).AMap);
+                      }
+                    }
                   }}
                   type="button"
                   className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-full bg-m3-surface-container text-m3-outline hover:text-m3-primary hover:bg-m3-primary-container transition-all shadow-xs z-10 select-none"
@@ -7571,6 +8944,12 @@ export default function App() {
                         })).size} {t('lines')}
                       </div>
                     )}
+                    {selectedStop && isTerminalStation(selectedStop) && (
+                      <div className="bg-amber-500/15 text-amber-800 border border-amber-500/30 px-2 py-0.5 rounded-full text-[9.5px]/none font-black tracking-wider shrink-0 select-none flex items-center gap-1">
+                        <Flag className="w-2.5 h-2.5 fill-current" />
+                        <span>终点站</span>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center justify-between">
                     {(selectedStop?.address || selectedSegmentAddress) && (
@@ -7585,7 +8964,8 @@ export default function App() {
                           setStationConnectivityCard({
                             stop: selectedStop,
                             checkedLines: new Set(),
-                            transferLimit: 0
+                            transferEnabled: false,
+                            atStation: 0
                           });
                         }}
                         className="text-[9.5px] md:text-[11px] font-bold text-m3-primary hover:bg-m3-primary-container hover:text-m3-on-primary-container bg-m3-surface-container-high px-3 py-1 rounded-full border border-m3-outline-variant/30 shadow-xs transition-all absolute right-11 top-3 md:relative md:top-auto md:right-auto cursor-pointer"
@@ -7674,7 +9054,7 @@ export default function App() {
         </AnimatePresence>
 
         <AnimatePresence>
-          {stationConnectivityCard && (
+          {stationConnectivityCard && !(showMinigameModal && gameState === 'playing') && (
             <motion.div
               layout
               transition={{ type: "spring", stiffness: 260, damping: 26 }}
@@ -7694,132 +9074,88 @@ export default function App() {
 
                 <div className="mb-3 pr-8">
                   <h3 className="text-base font-black text-slate-800 tracking-tight truncate">
-                    {stationConnectivityCard.stop.name}站的通达度
+                    {stationConnectivityCard.stop.name}的通达度
                   </h3>
                 </div>
-
-                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3.5 pr-1">
-                  {connectivityToast && (
-                    <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold flex items-center gap-2">
-                      <span>{connectivityToast}</span>
+                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-1">
+                  {/* AI Summary Section */}
+                  <div className="p-3.5 rounded-2xl bg-m3-primary-container/20 border border-m3-primary/10">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="w-1.5 h-4 bg-m3-primary rounded-full" />
+                      <span className="text-[11px] font-black text-m3-primary uppercase tracking-wider">通达度总结 Busline AI</span>
                     </div>
-                  )}
-
-                  <div>
-                    <label className="block text-xs font-black text-slate-700 mb-1.5">
-                      线路筛选
-                    </label>
-                    <div className="space-y-1 max-h-40 overflow-y-auto custom-scrollbar border border-slate-200/60 rounded-xl p-2 bg-slate-50/50">
-                      {(stationConnectivityCard.stop.lines || []).map((lineStr: string, idx: number) => {
-                        const info = parseLineInfo(lineStr);
-                        const isChecked = stationConnectivityCard.checkedLines.has(lineStr);
-                        return (
-                          <div 
-                            key={idx}
-                            onClick={() => {
-                              const next = new Set(stationConnectivityCard.checkedLines);
-                              if (isChecked) next.delete(lineStr);
-                              else next.add(lineStr);
-                              setStationConnectivityCard({ ...stationConnectivityCard, checkedLines: next });
-                            }}
-                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition-all border ${isChecked ? 'bg-m3-primary-container/40 border-m3-primary/40 text-slate-900 font-bold' : 'bg-white border-slate-100 hover:bg-slate-100 text-slate-700 font-medium'}`}
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <input 
-                                type="checkbox" 
-                                checked={isChecked} 
-                                onChange={() => {}} 
-                                className="rounded accent-m3-primary cursor-pointer"
-                              />
-                              <div className="min-w-0">
-                                <span className="text-xs font-black truncate block">{info.name}</span>
-                                <span className="text-[10px] text-slate-400 truncate block">{info.start !== '-' ? `${info.start} ⇌ ${info.end}` : '环线'}</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="flex items-center justify-between mt-1 px-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const all = new Set<string>(stationConnectivityCard.stop.lines || []);
-                          setStationConnectivityCard({ ...stationConnectivityCard, checkedLines: all });
-                        }}
-                        className="text-[10px] text-blue-600 font-bold hover:underline"
-                      >
-                        全选
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStationConnectivityCard({ ...stationConnectivityCard, checkedLines: new Set() });
-                        }}
-                        className="text-[10px] text-slate-400 font-bold hover:underline"
-                      >
-                        清空
-                      </button>
+                    <div className="text-xs text-slate-600 leading-relaxed min-h-[60px] whitespace-pre-wrap">
+                      {stationConnectivityCard.aiSummary || (isSearching ? '正在思考中...' : '点击查询后生成 AI 总结...')}
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-black text-slate-700 mb-1">
-                      换乘次数 (0 ~ 2次)
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center justify-between w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5">
-                        <span className="text-xs font-bold text-slate-800">
-                          {stationConnectivityCard.transferLimit ?? 0} 次换乘
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const cur = stationConnectivityCard.transferLimit ?? 0;
-                              const next = Math.max(0, cur - 1);
-                              setStationConnectivityCard({ ...stationConnectivityCard, transferLimit: next });
-                            }}
-                            className="w-6 h-6 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-700 font-bold hover:bg-slate-100 transition-all text-xs cursor-pointer shadow-xs"
-                          >
-                            -
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const cur = stationConnectivityCard.transferLimit ?? 0;
-                              const max = enableTwoTransferSearch ? 2 : 1;
-                              const next = Math.min(max, cur + 1);
-                              setStationConnectivityCard({ ...stationConnectivityCard, transferLimit: next });
-                            }}
-                            className="w-6 h-6 flex items-center justify-center rounded-lg bg-white border border-slate-200 text-slate-700 font-bold hover:bg-slate-100 transition-all text-xs cursor-pointer shadow-xs"
-                          >
-                            +
-                          </button>
-                        </div>
+                  {/* Settings Section */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div 
+                      onClick={() => {
+                        const nextEnabled = !stationConnectivityCard.transferEnabled;
+                        setStationConnectivityCard({ 
+                          ...stationConnectivityCard, 
+                          transferEnabled: nextEnabled,
+                          atStation: nextEnabled ? 1 : 0
+                        });
+                      }}
+                      className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${stationConnectivityCard.transferEnabled ? 'bg-m3-primary/5 border-m3-primary/30' : 'bg-slate-50 border-slate-200'}`}
+                    >
+                      <span className="text-xs font-bold text-slate-700">启用换乘</span>
+                      <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${stationConnectivityCard.transferEnabled ? 'bg-m3-primary border-m3-primary' : 'bg-white border-slate-300'}`}>
+                        {stationConnectivityCard.transferEnabled && <Check className="w-3 h-3 text-white" />}
                       </div>
                     </div>
+
+                    <div className={`flex items-center gap-2 p-1.5 border rounded-2xl transition-all ${stationConnectivityCard.transferEnabled ? 'bg-slate-50 border-slate-200' : 'bg-slate-100/50 border-slate-100 opacity-60'}`}>
+                      <button 
+                        onClick={() => {
+                          if (!stationConnectivityCard.transferEnabled) return;
+                          setStationConnectivityCard({ ...stationConnectivityCard, atStation: Math.max(1, stationConnectivityCard.atStation - 1) });
+                        }}
+                        disabled={!stationConnectivityCard.transferEnabled}
+                        className="w-8 h-8 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <Minus className="w-3 h-3" />
+                      </button>
+                      <div className="flex-1 text-center">
+                        <span className="text-[10px] text-slate-400 block leading-none mb-0.5">第几站</span>
+                        <span className="text-xs font-black text-slate-800 leading-none">{stationConnectivityCard.atStation}</span>
+                      </div>
+                      <button 
+                        onClick={() => {
+                          if (!stationConnectivityCard.transferEnabled) return;
+                          setStationConnectivityCard({ ...stationConnectivityCard, atStation: Math.min(200, stationConnectivityCard.atStation + 1) });
+                        }}
+                        disabled={!stationConnectivityCard.transferEnabled}
+                        className="w-8 h-8 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
                   </div>
+
+                  {connectivityToast && (
+                    <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold">
+                      {connectivityToast}
+                    </div>
+                  )}
 
                   <button
                     type="button"
                     onClick={() => {
-                      if (!stationConnectivityCard.checkedLines || stationConnectivityCard.checkedLines.size === 0) {
-                        setConnectivityToast('请选择线路后查看通达度');
-                        setTimeout(() => setConnectivityToast(null), 3500);
-                        return;
-                      }
-                      setConnectivityToast(null);
                       executeStationConnectivity(
                         stationConnectivityCard.stop,
-                        stationConnectivityCard.checkedLines,
-                        stationConnectivityCard.transferLimit
+                        new Set(), // Pass empty set as it's ignored
+                        stationConnectivityCard.transferEnabled,
+                        stationConnectivityCard.atStation
                       );
                     }}
                     disabled={isSearching}
-                    className="w-full py-2.5 px-4 rounded-xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-md hover:opacity-95 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                    className="w-full py-3.5 px-6 rounded-2xl bg-slate-800 text-white font-black text-xs shadow-xl hover:bg-slate-900 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
                   >
-                    {isSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                    {isSearching ? <Loader2 className="w-4 h-4 animate-spin text-m3-primary" /> : <Search className="w-4 h-4 text-white" />}
                     查询通达度
                   </button>
                 </div>
@@ -7829,7 +9165,7 @@ export default function App() {
         </AnimatePresence>
 
         <AnimatePresence>
-          {activeBusLine && (
+          {activeBusLine && !(showMinigameModal && gameState === 'playing') && (
             <motion.div
               layout
               transition={{ type: "spring", stiffness: 260, damping: 26 }}
@@ -7844,22 +9180,28 @@ export default function App() {
                   onClick={() => {
                     setActiveBusLine(null);
                     if (lineGroupRef.current && activeBusLinePolylineRef.current) {
-                      lineGroupRef.current.removeOverlay(activeBusLinePolylineRef.current);
+                      try {
+                        lineGroupRef.current.removeOverlay(activeBusLinePolylineRef.current);
+                      } catch (e) {}
                       activeBusLinePolylineRef.current = null;
                     }
-                    roadOverlaysRef.current.forEach((polyline: any) => {
-                      polyline.setOptions({
-                        strokeOpacity: 0.9,
-                        outlineColor: '#ffffff',
-                        borderWeight: lineThickness === 'thin' ? 0.5 : 1.5
-                      });
-                    });
                     activeRawMarkersRef.current = roadStopMarkersRef.current;
                     allMapStopsRef.current = new Map(roadStopsDataRef.current);
                     if (mapInstance && (window as any).AMap) {
-                      syncStopMarkersToMap(mapInstance, (window as any).AMap);
                       drawReferenceArea(mapInstance, (window as any).AMap);
                     }
+                    requestAnimationFrame(() => {
+                      const bw = lineThickness === 'thin' ? 0.5 : 1.5;
+                      roadOverlaysRef.current.forEach((polyline: any) => {
+                        try {
+                          polyline.setOptions({
+                            strokeOpacity: 0.9,
+                            outlineColor: '#ffffff',
+                            borderWeight: bw
+                          });
+                        } catch (e) {}
+                      });
+                    });
                   }}
                   className="absolute top-2.5 right-2.5 md:top-3 md:right-3 w-7 h-7 flex items-center justify-center hover:bg-m3-surface-container-high rounded-full transition-colors bg-m3-surface-container text-m3-outline hover:text-m3-primary shadow-xs z-10"
                 >
@@ -7889,7 +9231,7 @@ export default function App() {
                   <div className="relative flex flex-row md:flex-col items-center md:items-stretch md:pl-1 h-full md:h-auto w-max md:w-auto px-4 md:px-0">
                     <div className="hidden md:block absolute left-[9px] top-4 bottom-4 w-0.5 bg-m3-outline-variant/30" />
                     <div className="md:hidden absolute top-[14px] left-8 right-8 h-0.5 bg-m3-outline-variant/30" />
-                    {activeBusLine.via_stops.map((stop: any, idx: number) => {
+                    {(activeBusLine.via_stops || []).map((stop: any, idx: number) => {
                       const isSelected = selectedStop?.name === stop.name;
                       const count = stopCountCacheRef.current.get(`${stop.location.lng},${stop.location.lat}`) || 0;
                       const iconColor = getStopColor(count, '#52796F');
