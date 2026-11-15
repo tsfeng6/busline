@@ -265,9 +265,11 @@ export default function App() {
 
   // Minigame States & Logic
   const [showMinigameModal, setShowMinigameModal] = useState(false);
-  const [gameMode, setGameMode] = useState<'line' | 'station' | 'city' | null>(null);
+  const [gameMode, setGameMode] = useState<'line' | 'station' | 'city' | 'county' | null>(null);
   const [gameDifficulty, setGameDifficulty] = useState<'easy' | 'medium' | 'hard'>('easy');
   const [gameCity, setGameCity] = useState('北京市');
+  const [gameProvince, setGameProvince] = useState('广东省');
+  const [gameCountyProvince, setGameCountyProvince] = useState('浙江省');
   const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover'>('menu');
   const [gameLoading, setGameLoading] = useState(false);
   const [gameLoadingText, setGameLoadingText] = useState('正在随机检索题目并绘制线网地图，请稍候...');
@@ -284,23 +286,73 @@ export default function App() {
   const prevMapModeBeforeGameRef = useRef<'normal' | 'satellite' | 'blank' | null>(null);
   const gameSessionIdRef = useRef(0);
   const isMinigameActiveRef = useRef(false);
+  const provinceDivisionsCacheRef = useRef<Map<string, { cities: string[]; counties: Array<{ name: string; city: string; center?: [number, number] }> }>>(new Map());
   const [confirmQuitGame, setConfirmQuitGame] = useState(false);
   const [bestRecords, setBestRecords] = useState(() => {
+    const defaultRecords = {
+      line: { easy: 0, medium: 0, hard: 0 },
+      station: { easy: 0, medium: 0, hard: 0 },
+      city: { hard: 0 },
+      county: { hard: 0 }
+    };
     try {
       const saved = localStorage.getItem('busline_minigame_records');
-      return saved ? JSON.parse(saved) : {
-        line: { easy: 0, medium: 0, hard: 0 },
-        station: { easy: 0, medium: 0, hard: 0 },
-        city: { hard: 0 }
+      if (!saved) return defaultRecords;
+      const parsed = JSON.parse(saved);
+      const migratedCounty = Math.max(parsed.county?.hard || 0, parsed.city?.county || 0);
+      return {
+        line: { ...defaultRecords.line, ...(parsed.line || {}) },
+        station: { ...defaultRecords.station, ...(parsed.station || {}) },
+        city: { hard: parsed.city?.hard || 0 },
+        county: { hard: migratedCounty }
       };
     } catch (e) {
-      return {
-        line: { easy: 0, medium: 0, hard: 0 },
-        station: { easy: 0, medium: 0, hard: 0 },
-        city: { hard: 0 }
-      };
+      return defaultRecords;
     }
   });
+
+  const provincesPool = [
+    '北京市', '天津市', '河北省', '山西省', '内蒙古自治区',
+    '辽宁省', '吉林省', '黑龙江省', '上海市', '江苏省',
+    '浙江省', '安徽省', '福建省', '江西省', '山东省',
+    '河南省', '湖北省', '湖南省', '广东省', '广西壮族自治区',
+    '海南省', '重庆市', '四川省', '贵州省', '云南省',
+    '西藏自治区', '陕西省', '甘肃省', '青海省', '宁夏回族自治区', '新疆维吾尔自治区'
+  ];
+
+  const provinceCitiesFallbackMap: Record<string, string[]> = {
+    '北京市': ['北京市'],
+    '天津市': ['天津市'],
+    '上海市': ['上海市'],
+    '重庆市': ['重庆市'],
+    '河北省': ['石家庄市', '唐山市', '秦皇岛市', '邯郸市', '邢台市', '保定市', '张家口市', '承德市', '沧州市', '廊坊市', '衡水市'],
+    '山西省': ['太原市', '大同市', '阳泉市', '长治市', '晋城市', '朔州市', '晋中市', '运城市', '忻州市', '临汾市', '吕梁市'],
+    '内蒙古自治区': ['呼和浩特市', '包头市', '乌海市', '赤峰市', '通辽市', '鄂尔多斯市', '呼伦贝尔市', '巴彦淖尔市', '乌兰察布市'],
+    '辽宁省': ['沈阳市', '大连市', '鞍山市', '抚顺市', '本溪市', '丹东市', '锦州市', '营口市', '阜新市', '辽阳市', '盘锦市', '铁岭市', '朝阳市', '葫芦岛市'],
+    '吉林省': ['长春市', '吉林市', '四平市', '辽源市', '通化市', '白山市', '松原市', '白城市'],
+    '黑龙江省': ['哈尔滨市', '齐齐哈尔市', '鸡西市', '鹤岗市', '双鸭山市', '大庆市', '伊春市', '佳木斯市', '牡丹江市', '黑河市', '绥化市'],
+    '江苏省': ['南京市', '无锡市', '徐州市', '常州市', '苏州市', '南通市', '连云港市', '淮安市', '盐城市', '扬州市', '镇江市', '泰州市', '宿迁市'],
+    '浙江省': ['杭州市', '宁波市', '温州市', '嘉兴市', '湖州市', '绍兴市', '金华市', '衢州市', '舟山市', '台州市', '丽水市'],
+    '安徽省': ['合肥市', '芜湖市', '蚌埠市', '淮南市', '马鞍山市', '淮北市', '铜陵市', '安庆市', '黄山市', '滁州市', '阜阳市', '宿州市', '六安市', '亳州市', '池州市', '宣城市'],
+    '福建省': ['福州市', '厦门市', '莆田市', '三明市', '泉州市', '漳州市', '南平市', '龙岩市', '宁德市'],
+    '江西省': ['南昌市', '景德镇市', '萍乡市', '九江市', '新余市', '鹰潭市', '赣州市', '吉安市', '宜春市', '抚州市', '上饶市'],
+    '山东省': ['济南市', '青岛市', '淄博市', '枣庄市', '东营市', '烟台市', '潍坊市', '济宁市', '泰安市', '威海市', '日照市', '临沂市', '德州市', '聊城市', '滨州市', '菏泽市'],
+    '河南省': ['郑州市', '开封市', '洛阳市', '平顶山市', '安阳市', '鹤壁市', '新乡市', '焦作市', '濮阳市', '许昌市', '漯河市', '三门峡市', '南阳市', '商丘市', '信阳市', '周口市', '驻马店市'],
+    '湖北省': ['武汉市', '黄石市', '十堰市', '宜昌市', '襄阳市', '鄂州市', '荆门市', '孝感市', '荆州市', '黄冈市', '咸宁市', '随州市'],
+    '湖南省': ['长沙市', '株洲市', '湘潭市', '衡阳市', '邵阳市', '岳阳市', '常德市', '张家界市', '益阳市', '郴州市', '永州市', '怀化市', '娄底市'],
+    '广东省': ['广州市', '韶关市', '深圳市', '珠海市', '汕头市', '佛山市', '江门市', '湛江市', '茂名市', '肇庆市', '惠州市', '梅州市', '汕尾市', '河源市', '阳江市', '清远市', '东莞市', '中山市', '潮州市', '揭阳市', '云浮市'],
+    '广西壮族自治区': ['南宁市', '柳州市', '桂林市', '梧州市', '北海市', '防城港市', '钦州市', '贵港市', '玉林市', '百色市', '贺州市', '河池市', '来宾市', '崇左市'],
+    '海南省': ['海口市', '三亚市', '三沙市', '儋州市'],
+    '四川省': ['成都市', '自贡市', '攀枝花市', '泸州市', '德阳市', '绵阳市', '广元市', '遂宁市', '内江市', '乐山市', '南充市', '眉山市', '宜宾市', '广安市', '达州市', '雅安市', '巴中市', '资阳市'],
+    '贵州省': ['贵阳市', '六盘水市', '遵义市', '安顺市', '毕节市', '铜仁市'],
+    '云南省': ['昆明市', '曲靖市', '玉溪市', '保山市', '昭通市', '丽江市', '普洱市', '临沧市'],
+    '西藏自治区': ['拉萨市', '日喀则市', '昌都市', '林芝市', '山南市', '那曲市'],
+    '陕西省': ['西安市', '铜川市', '宝鸡市', '咸阳市', '渭南市', '延安市', '汉中市', '榆林市', '安康市', '商洛市'],
+    '甘肃省': ['兰州市', '嘉峪关市', '金昌市', '白银市', '天水市', '武威市', '张掖市', '平凉市', '酒泉市', '庆阳市', '定西市', '陇南市'],
+    '青海省': ['西宁市', '海东市'],
+    '宁夏回族自治区': ['银川市', '石嘴山市', '吴忠市', '固原市', '中卫市'],
+    '新疆维吾尔自治区': ['乌鲁木齐市', '克拉玛依市', '吐鲁番市', '哈密市']
+  };
 
   const citiesPool = [
     '北京市', '上海市', '广州市', '深圳市', '成都市', '武汉市', '西安市', '南京市', '杭州市',
@@ -329,10 +381,10 @@ export default function App() {
   };
 
   const getRating = (mode: string, score: number) => {
-    if (mode === 'line' || mode === 'station') {
-      if (score >= 40) return { title: '巴士之神', color: 'text-amber-500 bg-amber-50 border-amber-200' };
-      if (score >= 30) return { title: '王者', color: 'text-purple-600 bg-purple-50 border-purple-200' };
-      if (score >= 20) return { title: '钻石', color: 'text-blue-600 bg-blue-50 border-blue-200' };
+    if (mode === 'line' || mode === 'station' || mode === 'county') {
+      if (score >= 30) return { title: '巴士之神', color: 'text-amber-500 bg-amber-50 border-amber-200' };
+      if (score >= 20) return { title: '王者', color: 'text-purple-600 bg-purple-50 border-purple-200' };
+      if (score >= 15) return { title: '钻石', color: 'text-blue-600 bg-blue-50 border-blue-200' };
       if (score >= 10) return { title: '黄金', color: 'text-yellow-600 bg-yellow-50 border-yellow-200' };
       if (score >= 5) return { title: '白银', color: 'text-slate-600 bg-slate-100 border-slate-200' };
       return { title: '青铜', color: 'text-amber-700 bg-amber-100/50 border-amber-200/50' };
@@ -381,7 +433,121 @@ export default function App() {
     isMinigameActiveRef.current = showMinigameModal && gameState === 'playing';
   }, [showMinigameModal, gameState]);
 
-  const startMinigame = (mode: 'line' | 'station' | 'city', diff: 'easy' | 'medium' | 'hard', city: string) => {
+  const fetchProvinceDivisions = (
+    AMap: any,
+    provinceName: string
+  ): Promise<{
+    cities: string[];
+    counties: Array<{ name: string; city: string; center?: [number, number] }>;
+  }> => {
+    const cached = provinceDivisionsCacheRef.current.get(provinceName);
+    if (cached && cached.cities.length > 0 && cached.counties.length > 0) {
+      return Promise.resolve(cached);
+    }
+
+    return new Promise((resolve) => {
+      const fallbackCities = provinceCitiesFallbackMap[provinceName] || [provinceName];
+      const finishFallback = () => {
+        resolve({
+          cities: fallbackCities,
+          counties: fallbackCities.map(c => ({ name: c, city: c }))
+        });
+      };
+
+      const timer = setTimeout(finishFallback, 5000);
+      const runSearch = () => {
+        try {
+          const ds = new AMap.DistrictSearch({
+            level: 'province',
+            subdistrict: 2,
+            extensions: 'base'
+          });
+          ds.search(provinceName, (status: string, result: any) => {
+            clearTimeout(timer);
+            if (status === 'complete' && result?.districtList?.[0]?.districtList) {
+              const level1 = result.districtList[0].districtList || [];
+              const cities: string[] = [];
+              const allSubs: Array<{ name: string; city: string; center?: [number, number] }> = [];
+              const trueCounties: Array<{ name: string; city: string; center?: [number, number] }> = [];
+
+              const isMunicipality = ['北京市', '上海市', '天津市', '重庆市'].includes(provinceName);
+              if (isMunicipality) {
+                cities.push(provinceName);
+                level1.forEach((d: any) => {
+                  const centerArr: [number, number] | undefined = d.center ? [d.center.lng, d.center.lat] : undefined;
+                  if (d.name) {
+                    const item = { name: d.name, city: provinceName, center: centerArr };
+                    allSubs.push(item);
+                    if (d.name.endsWith('县')) trueCounties.push(item);
+                  }
+                  (d.districtList || []).forEach((sub: any) => {
+                    const subCenter: [number, number] | undefined = sub.center ? [sub.center.lng, sub.center.lat] : undefined;
+                    if (sub.name) {
+                      const subItem = { name: sub.name, city: provinceName, center: subCenter };
+                      allSubs.push(subItem);
+                      if (sub.name.endsWith('县')) trueCounties.push(subItem);
+                    }
+                  });
+                });
+              } else {
+                level1.forEach((cityNode: any) => {
+                  if (cityNode.name) cities.push(cityNode.name);
+                  const subDistricts = cityNode.districtList || [];
+                  const cityCenter: [number, number] | undefined = cityNode.center ? [cityNode.center.lng, cityNode.center.lat] : undefined;
+                  if (subDistricts.length === 0 && cityNode.name) {
+                    const item = { name: cityNode.name, city: cityNode.name, center: cityCenter };
+                    allSubs.push(item);
+                    if (/[县市旗]$/.test(cityNode.name)) trueCounties.push(item);
+                  }
+                  subDistricts.forEach((d: any) => {
+                    const centerArr: [number, number] | undefined = d.center ? [d.center.lng, d.center.lat] : undefined;
+                    if (d.name) {
+                      const item = { name: d.name, city: cityNode.name, center: centerArr };
+                      allSubs.push(item);
+                      if (/([县市旗]|自治县|自治旗|林区)$/.test(d.name)) {
+                        trueCounties.push(item);
+                      }
+                    }
+                  });
+                });
+              }
+
+              const finalCities = cities.length > 0 ? cities : fallbackCities;
+              const finalCounties = trueCounties.length >= 4
+                ? trueCounties
+                : (allSubs.length > 0 ? allSubs : finalCities.map(c => ({ name: c, city: c })));
+              const res = { cities: finalCities, counties: finalCounties };
+              provinceDivisionsCacheRef.current.set(provinceName, res);
+              resolve(res);
+            } else {
+              finishFallback();
+            }
+          });
+        } catch (e) {
+          clearTimeout(timer);
+          finishFallback();
+        }
+      };
+
+      if (AMap.DistrictSearch) {
+        runSearch();
+      } else if (typeof AMap.plugin === 'function') {
+        AMap.plugin(['AMap.DistrictSearch'], runSearch);
+      } else {
+        clearTimeout(timer);
+        finishFallback();
+      }
+    });
+  };
+
+  const startMinigame = (
+    mode: 'line' | 'station' | 'city' | 'county',
+    diff: 'easy' | 'medium' | 'hard',
+    city: string,
+    province?: string
+  ) => {
+    const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
+
     if (!prevMapModeBeforeGameRef.current) {
       prevMapModeBeforeGameRef.current = mapMode;
     }
@@ -405,23 +571,34 @@ export default function App() {
     setGameUserInput('');
     setGameQuestionData(null);
 
-    if (mode === 'city' || diff === 'hard' || diff === 'medium') {
+    if (mode === 'city' || mode === 'county' || diff === 'hard' || diff === 'medium') {
       setMapMode('blank');
     } else {
       setMapMode('normal');
     }
 
-    generateQuestion(mode, diff, city, 1);
+    generateQuestion(mode, diff, city, 1, undefined, activeProv);
   };
 
-  const generateQuestion = async (mode: 'line' | 'station' | 'city', diff: 'easy' | 'medium' | 'hard', city: string, qNum: number, prevAnswer?: string) => {
+  const generateQuestion = async (
+    mode: 'line' | 'station' | 'city' | 'county',
+    diff: 'easy' | 'medium' | 'hard',
+    city: string,
+    qNum: number,
+    prevAnswer?: string,
+    provinceOverride?: string
+  ) => {
     const AMap = (window as any).AMap;
     if (!AMap || !mapInstance) return;
+
+    const activeProvince = provinceOverride ?? (mode === 'county' ? gameCountyProvince : gameProvince);
 
     const sessionId = ++gameSessionIdRef.current;
     setConfirmQuitGame(false);
     setGameLoadingText(
-      mode === 'city'
+      mode === 'county'
+        ? `正在「${activeProvince}」随机抽取县城并定位县政府检索周边线网，请稍候...`
+        : mode === 'city'
         ? '正在自动执行全市公交线网搜索，请稍候...'
         : '正在随机检索题目并绘制线网地图，请稍候...'
     );
@@ -557,9 +734,21 @@ export default function App() {
 
     try {
       const candidateCities = prevAnswer ? citiesPool.filter(c => c !== prevAnswer) : citiesPool;
-      const targetCity = (diff === 'hard' || mode === 'city')
-        ? candidateCities[Math.floor(Math.random() * candidateCities.length)]
-        : city;
+      let targetCity = city;
+      let provinceDivs: { cities: string[]; counties: Array<{ name: string; city: string; center?: [number, number] }> } | null = null;
+
+      if (mode === 'county') {
+        provinceDivs = await fetchProvinceDivisions(AMap, activeProvince);
+        if (gameSessionIdRef.current !== sessionId) return;
+        targetCity = provinceDivs.cities[0] || activeProvince;
+      } else if (mode === 'city') {
+        targetCity = candidateCities[Math.floor(Math.random() * candidateCities.length)];
+      } else if (diff === 'hard') {
+        provinceDivs = await fetchProvinceDivisions(AMap, activeProvince);
+        if (gameSessionIdRef.current !== sessionId) return;
+        const provCities = provinceDivs.cities.length > 0 ? provinceDivs.cities : [activeProvince];
+        targetCity = provCities[Math.floor(Math.random() * provCities.length)];
+      }
 
       if (mode === 'line') {
         const randPage = Math.floor(Math.random() * 6) + 1;
@@ -764,8 +953,251 @@ export default function App() {
             ? '请根据地图上红色站点及经过它的全部公交线网，猜一猜这是哪个公交站？'
             : `请根据地图上红色站点及经过它的全部公交线网（城市：${targetCity}），猜一猜这是哪个公交站？`
         });
+      } else if (mode === 'county') {
+        // County mode (看线网猜县城): 在用户指定的省份中随机某县城，先定位县政府再非全市搜索
+        const divs = provinceDivs || (await fetchProvinceDivisions(AMap, activeProvince));
+        if (gameSessionIdRef.current !== sessionId) return;
+
+        const allCounties: Array<{ name: string; city: string; center?: [number, number] }> = divs.counties.length > 0
+          ? divs.counties
+          : divs.cities.map(c => ({ name: c, city: c }));
+        const poolCounties = prevAnswer && allCounties.length > 1
+          ? allCounties.filter(ct => ct.name !== prevAnswer)
+          : allCounties;
+        const shuffledCandidates = shuffleArr(poolCounties);
+
+        const geocodeCountyCenter = (prov: string, countyName: string): Promise<[number, number] | null> => {
+          return new Promise((resolve) => {
+            const timer = setTimeout(() => resolve(null), 4000);
+            try {
+              const geocoder = new AMap.Geocoder({ city: prov });
+              geocoder.getLocation(`${prov}${countyName}`, (status: string, result: any) => {
+                clearTimeout(timer);
+                if (status === 'complete' && result?.geocodes?.[0]?.location) {
+                  const loc = result.geocodes[0].location;
+                  resolve([loc.lng, loc.lat]);
+                } else {
+                  resolve(null);
+                }
+              });
+            } catch (e) {
+              clearTimeout(timer);
+              resolve(null);
+            }
+          });
+        };
+
+        const searchCountyNearbyStops = (cityName: string, center: [number, number], radius: number, page: number): Promise<any[]> => {
+          return new Promise((resolve) => {
+            const timer = setTimeout(() => resolve([]), 5000);
+            try {
+              const ps = new AMap.PlaceSearch({
+                type: '公交车站',
+                city: cityName,
+                citylimit: true,
+                pageSize: 50,
+                pageIndex: page,
+                extensions: 'all'
+              });
+              ps.searchNearBy('', center, radius, (status: string, result: any) => {
+                clearTimeout(timer);
+                if (status === 'complete' && result?.poiList?.pois?.length > 0) {
+                  resolve(result.poiList.pois);
+                } else {
+                  resolve([]);
+                }
+              });
+            } catch (e) {
+              clearTimeout(timer);
+              resolve([]);
+            }
+          });
+        };
+
+        const searchCountyByKeyword = (cityName: string, keyword: string): Promise<any[]> => {
+          return new Promise((resolve) => {
+            const timer = setTimeout(() => resolve([]), 5000);
+            try {
+              const ps = new AMap.PlaceSearch({
+                type: '公交车站',
+                city: cityName,
+                citylimit: true,
+                pageSize: 50,
+                pageIndex: 1,
+                extensions: 'all'
+              });
+              ps.search(keyword, (status: string, result: any) => {
+                clearTimeout(timer);
+                if (status === 'complete' && result?.poiList?.pois?.length > 0) {
+                  resolve(result.poiList.pois);
+                } else {
+                  resolve([]);
+                }
+              });
+            } catch (e) {
+              clearTimeout(timer);
+              resolve([]);
+            }
+          });
+        };
+
+        const findCountyGovernmentLocation = (cityName: string, countyName: string): Promise<[number, number] | null> => {
+          const searchGov = (keyword: string, withGovType: boolean): Promise<[number, number] | null> => {
+            return new Promise((resolve) => {
+              const timer = setTimeout(() => resolve(null), 4000);
+              try {
+                const ps = new AMap.PlaceSearch({
+                  ...(withGovType ? { type: '政府机构及社会团体' } : {}),
+                  city: cityName,
+                  citylimit: true,
+                  pageSize: 10,
+                  pageIndex: 1
+                });
+                ps.search(keyword, (status: string, result: any) => {
+                  clearTimeout(timer);
+                  if (status === 'complete' && result?.poiList?.pois?.length > 0) {
+                    const pois = result.poiList.pois;
+                    const exact = pois.find((p: any) =>
+                      p?.location && p?.name && (p.name.includes(`${countyName}人民政府`) || p.name.includes('人民政府'))
+                    ) || pois.find((p: any) => p?.location && p?.name?.includes('政府')) || pois.find((p: any) => p?.location);
+                    if (exact?.location) {
+                      resolve([exact.location.lng, exact.location.lat]);
+                      return;
+                    }
+                  }
+                  resolve(null);
+                });
+              } catch (e) {
+                clearTimeout(timer);
+                resolve(null);
+              }
+            });
+          };
+
+          return (async () => {
+            const p1 = await searchGov(`${countyName}人民政府`, true);
+            if (p1) return p1;
+            const p2 = await searchGov(`${countyName}人民政府`, false);
+            if (p2) return p2;
+            const p3 = await searchGov(`${countyName}政府`, false);
+            return p3;
+          })();
+        };
+
+        let chosenCounty = shuffledCandidates[0] || { name: activeProvince, city: activeProvince };
+        let countyCenter: [number, number] | null = null;
+        let countyLineNames: string[] = [];
+
+        // Try up to 4 counties from the province until finding one with non-empty local bus network
+        for (const cand of shuffledCandidates.slice(0, 4)) {
+          if (gameSessionIdRef.current !== sessionId) return;
+          // 1. 先定位到该县城的人民政府（核心位置）
+          let center = await findCountyGovernmentLocation(cand.city, cand.name);
+          if (!center) {
+            center = cand.center || null;
+          }
+          if (!center) {
+            center = await geocodeCountyCenter(activeProvince, cand.name);
+          }
+
+          if (gameSessionIdRef.current !== sessionId) return;
+          if (center) {
+            mapInstance.setZoomAndCenter(14, center);
+          }
+
+          // 2. 以县政府为核心位置执行非全市范围检索周边公交线路网
+          let pois: any[] = [];
+          if (center) {
+            const [p1, p2] = await Promise.all([
+              searchCountyNearbyStops(cand.city, center, 5000, 1),
+              searchCountyNearbyStops(cand.city, center, 5000, 2)
+            ]);
+            pois = [...p1, ...p2];
+            if (pois.length < 3) {
+              const wider = await searchCountyNearbyStops(cand.city, center, 12000, 1);
+              pois = [...pois, ...wider];
+            }
+          }
+          if (pois.length === 0) {
+            pois = await searchCountyByKeyword(cand.city, cand.name);
+          }
+
+          const linesSet = new Set<string>();
+          pois.forEach(p => extractLineNames(p.address).forEach(n => linesSet.add(n)));
+          if (linesSet.size > 0) {
+            chosenCounty = cand;
+            countyCenter = center;
+            countyLineNames = Array.from(linesSet);
+            break;
+          }
+        }
+
+        if (gameSessionIdRef.current !== sessionId) return;
+
+        if (countyLineNames.length === 0) {
+          countyLineNames = linesPoolMap[chosenCounty.city] || linesPoolMap['default'];
+        }
+
+        const sampleCountyLines = countyLineNames.slice(0, 60);
+        const renderedCountyLineNames = new Set<string>();
+        const collectedCountyPaths: Array<[number, number][]> = [];
+
+        for (let i = 0; i < sampleCountyLines.length; i += 12) {
+          if (gameSessionIdRef.current !== sessionId) return;
+          const batch = sampleCountyLines.slice(i, i + 12);
+          await Promise.all(batch.map(async (lName) => {
+            const infos = await searchLineInfoPromise(chosenCounty.city, lName);
+            if (infos.length > 0) {
+              const info = infos[0];
+              if (!renderedCountyLineNames.has(info.name)) {
+                renderedCountyLineNames.add(info.name);
+                const coords = (info.path || []).map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat] as [number, number]);
+                if (coords.length > 1) {
+                  collectedCountyPaths.push(coords);
+                }
+              }
+            }
+          }));
+        }
+
+        if (gameSessionIdRef.current !== sessionId) return;
+
+        if (collectedCountyPaths.length > 0 && lineGroupRef.current) {
+          const countyNetworkOverlay = new AMap.Polyline({
+            path: collectedCountyPaths,
+            strokeColor: '#52796F',
+            strokeWeight: lineThickness === 'thin' ? 2.5 : 3.8,
+            strokeOpacity: 0.85,
+            lineJoin: 'round',
+            lineCap: 'round',
+            isOutline: true,
+            outlineColor: '#ffffff',
+            borderWeight: 0.6,
+            zIndex: 45
+          });
+          lineGroupRef.current.addOverlay(countyNetworkOverlay);
+          mapInstance.setFitView([countyNetworkOverlay], false, [48, 150, 36, 36]);
+        } else if (countyCenter) {
+          mapInstance.setZoomAndCenter(13, countyCenter);
+        }
+
+        const isFillIn = qNum > 10;
+        let options: string[] = [];
+        if (!isFillIn) {
+          const otherCounties = shuffleArr(
+            Array.from(new Set(allCounties.map(ct => ct.name).filter(n => n !== chosenCounty.name)))
+          ).slice(0, 3);
+          options = shuffleArr([chosenCounty.name, ...otherCounties]);
+        }
+
+        setGameQuestionData({
+          correctAnswer: chosenCounty.name,
+          options,
+          isFillIn,
+          promptText: `已定位${activeProvince}内随机县城政府核心并检索线网，请猜一猜这是哪个县城？`
+        });
       } else {
-        // City mode: 自动执行全市搜索（不依赖外部“全市搜索”开关）
+        // City mode (全国猜城市): 自动执行全市搜索（不依赖外部“全市搜索”开关）
         const searchCityWidePage = (page: number): Promise<{ pois: any[]; count: number }> => {
           return new Promise((resolve) => {
             const timer = setTimeout(() => resolve({ pois: [], count: 0 }), 6000);
@@ -934,6 +1366,9 @@ export default function App() {
         isCorrect = u === c || u.replace(/[路线]$/, '') === c.replace(/[路线]$/, '');
       } else if (gameMode === 'station') {
         isCorrect = u === c || u.replace(/(公交)?站$/, '') === c.replace(/(公交)?站$/, '');
+      } else if (gameMode === 'county') {
+        const stripAdminSuffix = (s: string) => s.replace(/(自治)?[县市区旗]$/, '');
+        isCorrect = u === c || stripAdminSuffix(u) === stripAdminSuffix(c);
       } else if (gameMode === 'city') {
         isCorrect = u === c || u.replace(/市$/, '') === c.replace(/市$/, '');
       }
@@ -947,11 +1382,16 @@ export default function App() {
         const modeKey = gameMode;
         const diffKey = gameDifficulty;
         setBestRecords((prev: any) => {
-          const currentBest = modeKey === 'city' ? prev.city.hard : prev[modeKey][diffKey];
+          const currentBest = (modeKey === 'city' || modeKey === 'county')
+            ? (prev[modeKey]?.hard || 0)
+            : (prev[modeKey]?.[diffKey] || 0);
           if (newScore > currentBest) {
-            const updated = { ...prev };
-            if (modeKey === 'city') {
-              updated.city.hard = newScore;
+            const updated = {
+              ...prev,
+              [modeKey]: { ...(prev[modeKey] || {}) }
+            };
+            if (modeKey === 'city' || modeKey === 'county') {
+              updated[modeKey].hard = newScore;
             } else {
               updated[modeKey][diffKey] = newScore;
             }
@@ -4685,7 +5125,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     AMapLoader.load({
       key: AMAP_KEY,
       version: '2.0',
-      plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking'],
+      plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.DistrictSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking'],
     }).then((AMap) => {
       if (watchdogTimer) clearTimeout(watchdogTimer);
       const savedCenter = localStorage.getItem('map_center');
@@ -7978,7 +8418,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         {[
                           { id: 'line', title: '看图猜线路', desc: '随机抽取线路观察走向，挑战猜出正确的公交线路名称' },
                           { id: 'station', title: '看通达度猜站名', desc: '观察站点周边多路公交交织网络，猜出对应的公交站点名称' },
-                          { id: 'city', title: '看线网猜城市', desc: '观察全国各城市线网布局，猜一猜这是哪个城市（共10题）' }
+                          { id: 'city', title: '看线网猜城市', desc: '全国随机城市并自动执行全市搜索，猜出所属城市（共10题）' },
+                          { id: 'county', title: '看线网猜县城', desc: '指定省份随机县城，定位县政府后检索周边线网猜出县城名' }
                         ].map(m => (
                           <div 
                             key={m.id}
@@ -7996,7 +8437,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                               <div className="mt-2 flex items-center gap-2 text-[10px] font-bold text-slate-600">
                                 <span>最佳纪录:</span>
                                 <span className="px-2 py-0.5 rounded-full bg-m3-surface-container text-m3-primary font-black">
-                                  {m.id === 'city' ? `${bestRecords.city.hard}分` : `易:${bestRecords[m.id].easy} | 中:${bestRecords[m.id].medium} | 难:${bestRecords[m.id].hard}`}
+                                  {(m.id === 'city' || m.id === 'county')
+                                    ? `${bestRecords[m.id]?.hard || 0}分`
+                                    : `易:${bestRecords[m.id].easy} | 中:${bestRecords[m.id].medium} | 难:${bestRecords[m.id].hard}`}
                                 </span>
                               </div>
                             </div>
@@ -8005,8 +8448,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       </div>
                     </div>
 
-                    {/* Difficulty & City Settings (Not for city mode) */}
-                    {gameMode && gameMode !== 'city' && (
+                    {/* Difficulty & Scope Settings */}
+                    {gameMode && gameMode !== 'city' && gameMode !== 'county' && (
                       <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20">
                         <div className="space-y-2">
                           <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择难度</label>
@@ -8014,7 +8457,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             {[
                               { id: 'easy', label: '易 (指定城市+底图)' },
                               { id: 'medium', label: '中 (指定城市+无底图)' },
-                              { id: 'hard', label: '难 (全国随机+无底图)' }
+                              { id: 'hard', label: '难 (指定省份+无底图)' }
                             ].map(d => (
                               <button
                                 key={d.id}
@@ -8028,7 +8471,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                           </div>
                         </div>
 
-                        {gameDifficulty !== 'hard' && (
+                        {gameDifficulty !== 'hard' ? (
                           <div className="space-y-2">
                             <label className="text-xs font-black text-slate-700 tracking-wide uppercase">指定城市</label>
                             <select
@@ -8041,7 +8484,37 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                               ))}
                             </select>
                           </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择省级行政单位（省内随机）</label>
+                            <select
+                              value={gameProvince}
+                              onChange={(e) => setGameProvince(e.target.value)}
+                              className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
+                            >
+                              {provincesPool.map(p => (
+                                <option key={p} value={p}>{p}</option>
+                              ))}
+                            </select>
+                          </div>
                         )}
+                      </div>
+                    )}
+
+                    {gameMode === 'county' && (
+                      <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20">
+                        <div className="space-y-2">
+                          <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择省级行政单位（无底图 · 先定位县政府）</label>
+                          <select
+                            value={gameCountyProvince}
+                            onChange={(e) => setGameCountyProvince(e.target.value)}
+                            className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
+                          >
+                            {provincesPool.map(p => (
+                              <option key={p} value={p}>{p}</option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
                     )}
 
@@ -8049,7 +8522,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     <button
                       type="button"
                       disabled={!gameMode}
-                      onClick={() => startMinigame(gameMode!, gameDifficulty, gameCity)}
+                      onClick={() => startMinigame(
+                        gameMode!,
+                        gameDifficulty,
+                        gameCity,
+                        gameMode === 'county' ? gameCountyProvince : gameProvince
+                      )}
                       className="w-full py-3.5 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-sm shadow-lg hover:opacity-95 transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                     >
                       <Sparkles className="w-4 h-4" />
@@ -8063,7 +8541,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
                       <div className="flex items-center gap-2 min-w-0 flex-1">
                         <span className="px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[11px] font-black shrink-0">
-                          {gameMode === 'line' ? '看图猜线路' : gameMode === 'station' ? '看通达度猜站名' : '看线网猜城市'}
+                          {gameMode === 'line'
+                            ? '看图猜线路'
+                            : gameMode === 'station'
+                            ? '看通达度猜站名'
+                            : gameMode === 'county'
+                            ? '看线网猜县城'
+                            : '看线网猜城市'}
                         </span>
                         <span className="text-[11px] font-bold text-slate-500 shrink-0">
                           {gameMode === 'city' ? `第 ${gameQuestionNum}/10 题` : `第 ${gameQuestionNum} 题`}
@@ -8139,7 +8623,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         <input
                           type="text"
                           disabled={gameFeedback !== null}
-                          placeholder={gameMode === 'city' ? '输入城市名称（如：北京市）' : gameMode === 'station' ? '输入站点名称（如：西单）' : '输入线路名称（如：1路）'}
+                          placeholder={
+                            gameMode === 'county'
+                              ? '输入县城名称（如：桐庐县）'
+                              : gameMode === 'city'
+                              ? '输入城市名称（如：北京市）'
+                              : gameMode === 'station'
+                              ? '输入站点名称（如：西单）'
+                              : '输入线路名称（如：1路）'
+                          }
                           value={gameUserInput}
                           onChange={(e) => setGameUserInput(e.target.value)}
                           onKeyDown={(e) => {
