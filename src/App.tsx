@@ -1,5 +1,7 @@
+import { BusPlanner } from './components/BusPlanner';
+import type { BusPlan } from './utils/busPlanner';
 import { TimelineBar } from './components/TimelineBar';
-import { isLineOperating } from './utils/timeline';
+import { isLineOperating, updateTimelineVisibility, type TimelineOverlayEntry } from './utils/timeline';
 import { getOperatingHours, SCHEDULE_DATA_VERSION } from './utils/operatingHours';
 import { OperatingHours } from './components/OperatingHours';
 import { GAME_QUOTA_KEY, PUBLIC_GAME_DAILY_LIMIT, readGameQuota, consumeGameQuota } from './utils/gameQuota';
@@ -19,7 +21,7 @@ import {
   saveCitySearchToCache,
   saveLinesToCache,
 } from './utils/lineCache';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
 import { OnboardingGuide } from './components/OnboardingGuide';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
@@ -129,7 +131,7 @@ const initialAmapConfig = getInitialAmapConfig();
 const AMAP_KEY = initialAmapConfig.key;
 const SECURITY_CODE = initialAmapConfig.securityCode;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
-const APP_VERSION = '5.1';
+const APP_VERSION = '5.5';
 const APP_LAST_VERSION_KEY = 'app_last_visited_version';
 
 const compareVersions = (v1: string, v2: string): number => {
@@ -1975,10 +1977,16 @@ export default function App() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [showBuslineAI, setShowBuslineAI] = useState(false);
+  const [showBusPlanner, setShowBusPlanner] = useState(false);
+  const plannerOverlaysRef = useRef<any[]>([]);
+  const plannerSearchVersionRef = useRef(0);
   const [showTimeline, setShowTimeline] = useState(false);
   const [timelineAvailable, setTimelineAvailable] = useState(false);
   const [timelineMinute, setTimelineMinute] = useState(() => new Date().getHours() * 60 + new Date().getMinutes());
   const [timelineLines, setTimelineLines] = useState<BusLine[]>([]);
+  const timelineOverlaysRef = useRef<TimelineOverlayEntry[]>([]);
+  const timelineMinuteRef = useRef(timelineMinute);
+  timelineMinuteRef.current = timelineMinute;
   const displayedLineNamesRef = useRef<string[]>([]);
   const timelineActiveCount = timelineLines.filter(line => isLineOperating(line, timelineMinute) === true).length;
   const timelineUnknownCount = timelineLines.filter(line => isLineOperating(line, timelineMinute) === null).length;
@@ -2558,10 +2566,12 @@ export default function App() {
   const [onboardingStep, setOnboardingStep] = useState<number>(() => {
     if (typeof window === 'undefined') return 0;
     const savedVer = localStorage.getItem(APP_LAST_VERSION_KEY);
-    if (!savedVer || compareVersions(APP_VERSION, savedVer) > 0) {
-      return 1;
-    }
+    if (!savedVer) return 1;
     return 0;
+  });
+  const [showVersionUpdate, setShowVersionUpdate] = useState(() => {
+    const savedVersion = localStorage.getItem(APP_LAST_VERSION_KEY);
+    return !!savedVersion && compareVersions(APP_VERSION, savedVersion) > 0;
   });
   const initialApiSnapshotRef = useRef({
     useCustom: useCustomApiKey,
@@ -5939,7 +5949,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     AMapLoader.load({
       key: AMAP_KEY,
       version: '2.0',
-      plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.DistrictSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking'],
+      plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.DistrictSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking', 'AMap.Transfer'],
     }).then((AMap) => {
       if (watchdogTimer) clearTimeout(watchdogTimer);
       const savedCenter = localStorage.getItem('map_center');
@@ -6737,6 +6747,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleClear = () => {
+    if (plannerOverlaysRef.current.length && mapRef.current) mapRef.current.remove(plannerOverlaysRef.current);
+    plannerOverlaysRef.current = [];
     setShowTimeline(false);
     setTimelineAvailable(false);
     displayedLineNamesRef.current = [];
@@ -7470,24 +7482,51 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const map = mapRef.current;
     const AMap = (window as any).AMap;
     const overlays: any[] = [];
-    const timer = window.setTimeout(() => {
-      const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
-      timelineLines.filter(line => isLineOperating(line, timelineMinute) === true).forEach(line => {
-        const path = (line.path || []).map((point: any) => getLatLng(point));
-        const paths = box ? clipPathToBox(path, box.minLng, box.maxLng, box.minLat, box.maxLat) : [path];
-        if (!paths.some(part => part.length > 1)) return;
-        const polyline = new AMap.Polyline({ path: paths, strokeColor: '#52796F', strokeWeight: lineThickness === 'thin' ? 3 : 6,
-          strokeOpacity: 0.85, lineJoin: 'round', lineCap: 'round', zIndex: 70, bubble: false });
-        polyline.on('click', () => { setSelectedSegmentLines([line.name]); setSelectedStop(null); setSelectedSegmentName(line.name); });
-        overlays.push(polyline);
-      });
-      map.add(overlays);
-    }, 100);
+    const entries: TimelineOverlayEntry[] = [];
+    const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
+    // Build each direction once. Dragging changes visibility without clearing geometry.
+    timelineLines.forEach(line => {
+      const path = (line.path || []).map((point: any) => getLatLng(point));
+      const paths = box ? clipPathToBox(path, box.minLng, box.maxLng, box.minLat, box.maxLat) : [path];
+      if (!paths.some(part => part.length > 1)) return;
+      const polyline = new AMap.Polyline({ path: paths, strokeColor: '#52796F', strokeWeight: lineThickness === 'thin' ? 3 : 6,
+        strokeOpacity: 0.85, lineJoin: 'round', lineCap: 'round', zIndex: 70, bubble: false });
+      polyline.on('click', () => { setSelectedSegmentLines([line.name]); setSelectedStop(null); setSelectedSegmentName(line.name); });
+      overlays.push(polyline);
+      entries.push({ line, overlay: polyline, visible: true });
+    });
+    map.add(overlays);
+    timelineOverlaysRef.current = entries;
+    updateTimelineVisibility(entries, timelineMinuteRef.current);
     return () => {
-      clearTimeout(timer);
       if (overlays.length) map.remove(overlays);
+      if (timelineOverlaysRef.current === entries) timelineOverlaysRef.current = [];
     };
-  }, [showTimeline, timelineMinute, timelineLines, lineThickness]);
+  }, [showTimeline, timelineLines]);
+
+  useEffect(() => {
+    if (showTimeline) updateTimelineVisibility(timelineOverlaysRef.current, timelineMinute);
+  }, [showTimeline, timelineMinute, timelineLines]);
+
+  useEffect(() => {
+    if (!showTimeline) return;
+    timelineOverlaysRef.current.forEach(entry => (entry.overlay as any).setOptions({ strokeWeight: lineThickness === 'thin' ? 3 : 6 }));
+  }, [showTimeline, timelineLines, lineThickness]);
+
+  const drawBusPlan = (plan: BusPlan) => {
+    const map = mapRef.current, AMap = (window as any).AMap;
+    if (!map || !AMap || isMinigameActiveRef.current || plannerSearchVersionRef.current !== searchVersionRef.current) throw new Error('地图状态已改变，请重新规划。');
+    if (plannerOverlaysRef.current.length) map.remove(plannerOverlaysRef.current);
+    const overlays: any[] = [];
+    plan.steps.forEach(step => {
+      if (step.path.length < 2) return;
+      overlays.push(new AMap.Polyline({ path: step.path, strokeColor: step.mode === 'WALK' ? '#B58A52' : '#52796F',
+        strokeWeight: step.mode === 'WALK' ? 4 : 6, strokeStyle: step.mode === 'WALK' ? 'dashed' : 'solid', strokeOpacity: 0.95, zIndex: 80, lineJoin: 'round', lineCap: 'round' }));
+    });
+    plannerOverlaysRef.current = overlays;
+    map.add(overlays);
+    if (overlays.length) map.setFitView(overlays, false, [100, 50, 120, window.innerWidth >= 640 ? 440 : 50]);
+  };
 
   const handleScreenshot = async () => {
     if (!containerRef.current) return;
@@ -7790,6 +7829,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       </AnimatePresence>
 
       <AnimatePresence>
+        {showBusPlanner && <BusPlanner onClose={() => { setShowBusPlanner(false); if (plannerOverlaysRef.current.length) mapRef.current?.remove(plannerOverlaysRef.current); plannerOverlaysRef.current = []; }}
+          disabled={isSearching || loading || showMinigameModal || isDrawingMode}
+          onClear={() => { handleClear(); plannerSearchVersionRef.current = searchVersionRef.current; }} onDraw={drawBusPlan} />}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {showBuslineAI && <BuslineAI onClose={() => setShowBuslineAI(false)} context={aiRegionContext}
           disabled={isSearching || (showMinigameModal && gameState !== 'menu')} searchProgress={aiSearchProgress} onApply={applyAILines} />}
       </AnimatePresence>
@@ -7973,8 +8018,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   <Clock className="w-4.5 h-4.5" />
                 </button>
               )}
+              {/* 公交路线规划入口暂时隐藏，保留实现以便后续恢复。 */}
               <div className="pointer-events-auto shrink-0">
-                <button onClick={() => setShowBuslineAI(prev => !prev)} title="Busline AI" aria-label="打开 Busline AI"
+                <button onClick={() => { setShowBuslineAI(prev => !prev); setShowBusPlanner(false); }} title="Busline AI" aria-label="打开 Busline AI"
                   className="backdrop-blur-md bg-m3-primary-container/95 text-m3-on-primary-container border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center hover:scale-105 transition-all duration-200 active:scale-95">
                   <Sparkles className="w-4.5 h-4.5" />
                 </button>
@@ -10628,7 +10674,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         </div>
                         <h3 className="text-lg font-black text-slate-800 tracking-tight">{t('title')}</h3>
                         <div className="px-3 py-1 bg-m3-primary-container rounded-full border border-m3-outline/5 select-none font-sans">
-                           <span className="text-[9px] font-black text-m3-on-primary-container tracking-widest uppercase">busline 5.1</span>
+                           <span className="text-[9px] font-black text-m3-on-primary-container tracking-widest uppercase">busline 5.5</span>
                         </div>
                         <div className="flex flex-col items-center mt-2 gap-3">
                            <span 
@@ -11285,6 +11331,24 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             <Navigation className="w-5 h-5 transition-transform group-hover:scale-110 text-m3-primary fill-current" />
           </button>
         )}
+
+        <AnimatePresence>
+          {showVersionUpdate && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm pointer-events-auto">
+              <motion.div role="dialog" aria-modal="true" aria-labelledby="version-update-title"
+                initial={{ opacity: 0, y: 16, scale: 0.94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.94 }}
+                transition={{ type: 'spring', damping: 24, stiffness: 240 }}
+                className="w-[360px] max-w-full bg-m3-surface border border-m3-outline-variant/40 rounded-[28px] shadow-2xl p-7 text-center">
+                <div className="mx-auto mb-4 w-14 h-14 rounded-2xl bg-m3-primary-container text-m3-primary flex items-center justify-center"><Check className="w-7 h-7" /></div>
+                <h2 id="version-update-title" className="text-lg font-black text-m3-on-primary-container">版本已更新至 {APP_VERSION}</h2>
+                <button type="button" autoFocus onClick={() => {
+                  localStorage.setItem(APP_LAST_VERSION_KEY, APP_VERSION);
+                  setShowVersionUpdate(false);
+                }} className="w-full mt-6 py-3 rounded-full bg-m3-primary text-white text-sm font-bold hover:opacity-95 active:scale-95 transition-all">进入主页</button>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
         <OnboardingGuide
           step={onboardingStep}
