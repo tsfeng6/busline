@@ -17,6 +17,8 @@ import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, 
 import { OnboardingGuide } from './components/OnboardingGuide';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
+import { getGameHint, isGameHintComplete } from './utils/gameHint';
+import { getGameTimeLimit, formatGameTime } from './utils/gameTimer';
 
 const isFirebaseEnabled = () => true;
 
@@ -302,6 +304,19 @@ export default function App() {
   const [gameLoading, setGameLoading] = useState(false);
   const [gameLoadingText, setGameLoadingText] = useState('正在随机检索题目并绘制线网地图，请稍候...');
   const [gameScore, setGameScore] = useState(0);
+  const [gameTimeLeft, setGameTimeLeft] = useState<number | null>(null);
+  const [gameTimedOut, setGameTimedOut] = useState(false);
+  const gameTimeRemainingMsRef = useRef<number | null>(null);
+  const gameDeadlineRef = useRef<number | null>(null);
+  const gameTimedOutRef = useRef(false);
+  const [gameHints, setGameHints] = useState({ remaining: 7, usedOnQuestion: 0 });
+  const handleGameHint = () => {
+    if (gameState !== 'playing' || gameLoading || gameFeedback || !gameQuestionData || gameTimedOutRef.current) return;
+    setGameHints(prev => {
+      if (prev.remaining <= 0 || isGameHintComplete(gameQuestionData.correctAnswer, prev.usedOnQuestion)) return prev;
+      return { remaining: prev.remaining - 1, usedOnQuestion: prev.usedOnQuestion + 1 };
+    });
+  };
   const [gameQuestionNum, setGameQuestionNum] = useState(1);
   const [gameQuestionData, setGameQuestionData] = useState<{
     correctAnswer: string;
@@ -337,6 +352,41 @@ export default function App() {
   const prevMapModeBeforeGameRef = useRef<'normal' | 'satellite' | 'blank' | null>(null);
   const gameSessionIdRef = useRef(0);
   const isMinigameActiveRef = useRef(false);
+  const finishGameOnTimeout = useCallback(() => {
+    if (gameTimedOutRef.current) return;
+    gameTimedOutRef.current = true;
+    gameTimeRemainingMsRef.current = 0;
+    gameDeadlineRef.current = null;
+    gameSessionIdRef.current++;
+    setGameTimeLeft(0);
+    setGameTimedOut(true);
+    setGameLoading(false);
+    setGameFeedback(null);
+    setConfirmQuitGame(false);
+    setGameState('gameover');
+  }, []);
+
+  // Use a deadline so background-tab throttling cannot extend the challenge.
+  // Loading questions pauses the clock; each new question keeps the same budget.
+  useEffect(() => {
+    const budget = gameTimeRemainingMsRef.current;
+    if (gameState !== 'playing' || gameLoading || !gameQuestionData || budget === null || gameTimedOutRef.current) return;
+    const deadline = Date.now() + budget;
+    gameDeadlineRef.current = deadline;
+    const tick = () => {
+      const remaining = Math.max(0, deadline - Date.now());
+      setGameTimeLeft(Math.ceil(remaining / 1000));
+      if (remaining === 0) finishGameOnTimeout();
+    };
+    tick();
+    const interval = window.setInterval(tick, 200);
+    return () => {
+      window.clearInterval(interval);
+      if (!gameTimedOutRef.current) gameTimeRemainingMsRef.current = Math.max(0, deadline - Date.now());
+      gameDeadlineRef.current = null;
+    };
+  }, [gameState, gameLoading, gameQuestionData, finishGameOnTimeout]);
+
   const provinceDivisionsCacheRef = useRef<Map<string, { cities: string[]; counties: Array<{ name: string; city: string; center?: [number, number] }> }>>(new Map());
   const [confirmQuitGame, setConfirmQuitGame] = useState(false);
   const [bestRecords, setBestRecords] = useState(() => {
@@ -680,8 +730,15 @@ export default function App() {
     setGameMode(mode);
     setGameDifficulty(diff);
     setGameCity(city);
+    const timeLimit = getGameTimeLimit(mode, diff);
+    gameTimeRemainingMsRef.current = timeLimit === null ? null : timeLimit * 1000;
+    gameDeadlineRef.current = null;
+    gameTimedOutRef.current = false;
+    setGameTimedOut(false);
+    setGameTimeLeft(timeLimit);
     setGameState('playing');
     setGameScore(0);
+    setGameHints({ remaining: 7, usedOnQuestion: 0 });
     setGameQuestionNum(1);
     setGameFeedback(null);
     setGameUserInput('');
@@ -714,6 +771,7 @@ export default function App() {
 
     const activeProvince = provinceOverride ?? (mode === 'county' ? gameCountyProvince : gameProvince);
 
+    setGameHints(prev => ({ ...prev, usedOnQuestion: 0 }));
     const sessionId = ++gameSessionIdRef.current;
     setConfirmQuitGame(false);
     setGameLoadingText(
@@ -1649,7 +1707,12 @@ export default function App() {
 
 
   const handleMinigameSubmit = (answer: string) => {
-    if (!gameQuestionData || gameState !== 'playing' || gameLoading || gameFeedback !== null) return;
+    if (!gameQuestionData || gameState !== 'playing' || gameLoading || gameFeedback !== null || gameTimedOutRef.current) return;
+    if (gameDeadlineRef.current !== null && Date.now() >= gameDeadlineRef.current) {
+      finishGameOnTimeout();
+      return;
+    }
+    const submittedSessionId = gameSessionIdRef.current;
 
     const rawUser = answer.trim();
     const rawCorrect = gameQuestionData.correctAnswer.trim();
@@ -1765,6 +1828,7 @@ export default function App() {
 
       setGameFeedback({ correct: true, msg: '回答正确！即将进入下一题...' });
       setTimeout(() => {
+        if (gameSessionIdRef.current !== submittedSessionId || gameTimedOutRef.current) return;
         setGameFeedback(null);
         setGameUserInput('');
         const nextNum = gameQuestionNum + 1;
@@ -1778,12 +1842,16 @@ export default function App() {
     } else {
       setGameFeedback({ correct: false, msg: `回答错误！正确答案是：${gameQuestionData.correctAnswer}` });
       setTimeout(() => {
+        if (gameSessionIdRef.current !== submittedSessionId || gameTimedOutRef.current) return;
         setGameState('gameover');
       }, 1500);
     }
   };
 
   const [isSearching, setIsSearching] = useState(false);
+  const [showEmptySearchNotice, setShowEmptySearchNotice] = useState(false);
+  const customApiSectionRef = useRef<HTMLDivElement>(null);
+  const focusCustomApiRef = useRef(false);
   const [showLargeAreaWarning, setShowLargeAreaWarning] = useState(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
   const [cacheUpdateTick, setCacheUpdateTick] = useState(0);
@@ -2398,6 +2466,16 @@ export default function App() {
   const [useCustomApiKey, setUseCustomApiKey] = useState(() => {
     return localStorage.getItem('app_use_custom_api_key') === 'true';
   });
+  useEffect(() => {
+    if (!showSettings || settingsTab !== 'general' || !focusCustomApiRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      customApiSectionRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      customApiSectionRef.current?.querySelector('input')?.focus({ preventScroll: true });
+      focusCustomApiRef.current = false;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [showSettings, settingsTab, useCustomApiKey]);
+
   const [customApiKey, setCustomApiKey] = useState(() => {
     return localStorage.getItem('app_custom_api_key') || '';
   });
@@ -6081,6 +6159,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
 
     setShowLargeAreaWarning(false);
+    setShowEmptySearchNotice(false);
+    const searchStartedAt = performance.now();
 
     setIsSearching(true);
     try {
@@ -6199,6 +6279,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             
             const callback = (status: string, result: any) => {
               clearTimeout(timeout);
+              checkAmapQuotaError(status, result);
               if (status === 'complete' && result.poiList && result.poiList.pois.length > 0) {
                 allPois.push(...result.poiList.pois);
                 const totalCount = result.poiList.count || 0;
@@ -6234,6 +6315,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
         setIsSearching(false);
         return;
+      }
+
+      // Fast empty responses can indicate exhausted shared quota. Cached successes
+      // and cancelled searches must never produce this notice.
+      if (!usedRegionCache && allPois.length === 0 && performance.now() - searchStartedAt < 3000) {
+        setShowEmptySearchNotice(true);
       }
 
       if (allPois.length > 0) {
@@ -6319,6 +6406,14 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
           setIsSearching(false);
           return;
+        }
+
+        if (!usedRegionCache && performance.now() - searchStartedAt < 3000) {
+          const hasMatchingLines = Array.from(fetchedLinesCache.current.values()).some((line: BusLine) =>
+            !line.isUserSubmitted && (!line.city || line.city === currentCity) &&
+            Array.from(lineNamesSet).some(name => line.name === name || line.name.startsWith(`${name}(`) || line.name.startsWith(`${name}#`))
+          );
+          if (!hasMatchingLines) setShowEmptySearchNotice(true);
         }
 
         // Fetch all exact physical platforms from the fetched bus lines
@@ -6484,7 +6579,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
   const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string) => {
     const startSearchVer = searchVersionRef.current;
-    const existingCacheKeys = Array.from(fetchedLinesCache.current.keys());
+    const existingCacheKeys = Array.from(fetchedLinesCache.current.keys()) as string[];
     const linesToFetch = lineNames.filter(name => {
       if (fetchedLinesCache.current.has(name)) return false;
       if (enableLineCacheRef.current) {
@@ -6562,6 +6657,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleClear = () => {
+    setShowEmptySearchNotice(false);
     isClearedRef.current = true;
     searchVersionRef.current++;
 
@@ -7470,8 +7566,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
       {/* Global API Quota / Error Banner */}
       <AnimatePresence>
-        {apiErrorNotification && (
+        {(apiErrorNotification || showEmptySearchNotice) && (
           <motion.div
+            role="status"
+            aria-live="polite"
             initial={{ opacity: 0, y: -20, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -20, scale: 0.95 }}
@@ -7479,23 +7577,27 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           >
             <div className="flex items-center gap-2.5 flex-1 min-w-0">
               <AlertTriangle className="w-5 h-5 shrink-0 text-amber-200" />
-              <span className="text-xs font-bold leading-tight">{apiErrorNotification}</span>
+              <span className="text-xs font-bold leading-tight">{showEmptySearchNotice ? (useCustomApiKey ? '当前区域无公交线路，或 您提供的API 已达到当月上限' : '当前区域无公交线路，或 公共API 已达到当月上限') : apiErrorNotification}</span>
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
               <button
                 type="button"
                 onClick={() => {
+                  focusCustomApiRef.current = true;
+                  setUseCustomApiKey(true);
                   setShowSettings(true);
                   setSettingsTab('general');
+                  setShowEmptySearchNotice(false);
                   setApiErrorNotification(null);
                 }}
                 className="px-2.5 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-xs font-black transition-all cursor-pointer"
               >
-                前往设置
+                填写自己的 API
               </button>
               <button
                 type="button"
-                onClick={() => setApiErrorNotification(null)}
+                aria-label="关闭提示"
+                onClick={() => { setApiErrorNotification(null); setShowEmptySearchNotice(false); }}
                 className="p-1 hover:bg-white/20 rounded-lg transition-all cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -9413,6 +9515,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   </div>
                 )}
 
+                {gameState === 'menu' && gameMode && (
+                  <p className="px-4 pb-3 text-center text-xs font-bold text-m3-primary">
+                    {getGameTimeLimit(gameMode, gameDifficulty) === null ? '本局不限时' : `本局限时 ${getGameTimeLimit(gameMode, gameDifficulty)! / 60} 分钟`}
+                    <span className="text-slate-500 font-medium"> · 出题加载期间暂停计时</span>
+                  </p>
+                )}
+
                 {gameState === 'playing' && gameQuestionData && (
                   <div className="px-4 py-3 flex flex-col gap-2 relative bg-m3-surface">
                     <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
@@ -9435,6 +9544,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         </div>
                       </div>
                       <div className="flex items-center gap-2.5 shrink-0 ml-auto">
+                        <span
+                          role="timer"
+                          aria-label={gameTimeLeft === null ? '无时间限制' : `剩余时间 ${formatGameTime(gameTimeLeft)}`}
+                          className={`px-2.5 py-1 rounded-full text-xs font-black tabular-nums ${gameTimeLeft !== null && gameTimeLeft <= 30 ? 'bg-red-50 text-red-600' : 'bg-m3-primary-container text-m3-on-primary-container'}`}
+                        >
+                          {gameTimeLeft === null ? '不限时' : formatGameTime(gameTimeLeft)}
+                        </span>
                         <span className="text-xs font-extrabold text-slate-700">得分: <strong className="text-m3-primary">{gameScore}</strong></span>
                         {confirmQuitGame ? (
                           <div className="flex items-center gap-1.5">
@@ -9469,6 +9585,45 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                       <span className="truncate">{gameQuestionData.promptText}</span>
                     </div>
+
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <span className="text-[11px] font-medium text-slate-500">每局共 7 次提示，从答案两端逐字揭示</span>
+                      <motion.button
+                        type="button"
+                        onClick={handleGameHint}
+                        disabled={gameLoading || gameFeedback !== null || gameHints.remaining === 0 || isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)}
+                        whileTap={{ scale: 0.94 }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-xs font-bold transition-colors hover:bg-m3-primary/20 disabled:opacity-45 disabled:cursor-not-allowed"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        {gameHints.remaining === 0 ? '提示已用完' : isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion) ? '本题已全部揭示' : '提示'}
+                        <span className="tabular-nums">{gameHints.remaining}/7</span>
+                      </motion.button>
+                    </div>
+                    <AnimatePresence>
+                      {gameHints.usedOnQuestion > 0 && !gameLoading && (
+                        <motion.div
+                          key={gameQuestionNum}
+                          initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                          animate={{ opacity: 1, y: 0, scale: 1 }}
+                          exit={{ opacity: 0, y: 4 }}
+                          transition={{ type: 'spring', damping: 24, stiffness: 260 }}
+                          role="status"
+                          aria-live="polite"
+                          className="px-3 py-2.5 rounded-2xl bg-m3-primary-container/50 border border-m3-outline-variant/40"
+                        >
+                          <div className="text-[10px] font-bold text-m3-primary mb-1">答案提示 · {Array.from(gameQuestionData.correctAnswer).length} 个字符</div>
+                          <motion.p
+                            key={gameHints.usedOnQuestion}
+                            initial={{ opacity: 0, y: 3 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="text-sm font-black tracking-widest text-m3-on-primary-container break-all"
+                          >
+                            {getGameHint(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)}
+                          </motion.p>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
 
                     {gameFeedback && (
                       <div className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold text-center ${gameFeedback.correct ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
@@ -9567,7 +9722,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     </div>
 
                     <div>
-                      <h2 className="text-xl font-black text-slate-900">挑战结束！</h2>
+                      <h2 className="text-xl font-black text-slate-900">{gameTimedOut ? '时间到，挑战结束！' : '挑战结束！'}</h2>
                       <p className="text-xs text-slate-500 font-medium mt-1">本次挑战最终得分</p>
                       <div className="text-4xl font-black text-m3-primary mt-2">{gameScore} <span className="text-sm font-bold text-slate-400">分</span></div>
                     </div>
@@ -10074,7 +10229,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
 
                       {/* Custom API Key & Security Code Toggle & Input (Always at the very bottom of General) */}
-                      <div className="flex flex-col gap-3 p-1">
+                      <div ref={customApiSectionRef} className="flex flex-col gap-3 p-1">
                         <div className="flex items-center justify-between">
                           <div className="flex flex-col">
                             <span className="text-xs font-bold text-slate-700">使用自定义高德API</span>
