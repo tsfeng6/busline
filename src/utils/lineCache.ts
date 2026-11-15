@@ -1,3 +1,4 @@
+import { formatOperatingTime } from './operatingHours';
 import { BusLine } from '../types';
 
 export const APP_LINE_CACHE_ENABLED_KEY = 'app_line_cache_enabled';
@@ -284,8 +285,11 @@ const serializeBusLine = (line: BusLine, city: string): BusLine => ({
     name: s.name || '',
     location: toPlainLngLat(s.location),
   })),
-  stime: line.stime,
-  etime: line.etime,
+  scheduleFetched: line.scheduleFetched,
+  scheduleDataVersion: line.scheduleDataVersion,
+  scheduleDescription: line.scheduleDescription,
+  stime: formatOperatingTime(line.stime) || undefined,
+  etime: formatOperatingTime(line.etime) || undefined,
 });
 
 export const saveCitySearchToCache = async (params: {

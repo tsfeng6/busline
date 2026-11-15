@@ -1,3 +1,7 @@
+import { TimelineBar } from './components/TimelineBar';
+import { isLineOperating } from './utils/timeline';
+import { getOperatingHours, SCHEDULE_DATA_VERSION } from './utils/operatingHours';
+import { OperatingHours } from './components/OperatingHours';
 import { GAME_QUOTA_KEY, PUBLIC_GAME_DAILY_LIMIT, readGameQuota, consumeGameQuota } from './utils/gameQuota';
 import { BuslineAI, type AIRegionContext } from './components/BuslineAI';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
@@ -15,7 +19,7 @@ import {
   saveCitySearchToCache,
   saveLinesToCache,
 } from './utils/lineCache';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
 import { OnboardingGuide } from './components/OnboardingGuide';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
@@ -1971,6 +1975,14 @@ export default function App() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [showBuslineAI, setShowBuslineAI] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [timelineAvailable, setTimelineAvailable] = useState(false);
+  const [timelineMinute, setTimelineMinute] = useState(() => new Date().getHours() * 60 + new Date().getMinutes());
+  const [timelineLines, setTimelineLines] = useState<BusLine[]>([]);
+  const displayedLineNamesRef = useRef<string[]>([]);
+  const timelineActiveCount = timelineLines.filter(line => isLineOperating(line, timelineMinute) === true).length;
+  const timelineUnknownCount = timelineLines.filter(line => isLineOperating(line, timelineMinute) === null).length;
+
   const [aiSearchProgress, setAISearchProgress] = useState('');
   const [aiRegionContext, setAIRegionContext] = useState<AIRegionContext | null>(null);
   const [settingsTab, setSettingsTab] = useState<'general' | 'experimental' | 'about' | 'dataFilter'>('general');
@@ -3902,6 +3914,13 @@ export default function App() {
 
   const renderBusLine = (line: any, AMap: any, map: any, clear = true, showMarkers = true, shouldFitView = true) => {
     const path = line.path.map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat]);
+    if (!line.isUserSubmitted) {
+      line = { ...line, ...getOperatingHours(line) };
+      fetchedLinesCache.current.set(line.name, { ...line, path, stops: [], scheduleFetched: true });
+      setCacheUpdateTick(value => value + 1);
+    }
+    displayedLineNamesRef.current = clear ? [line.name] : Array.from(new Set([...displayedLineNamesRef.current, line.name]));
+    setTimelineAvailable(true);
     let polylineObj: any = null;
     
     let displayPaths = [path];
@@ -5496,6 +5515,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleManualSearch = async (item: any) => {
+    setShowTimeline(false);
+    setTimelineAvailable(false);
     const map = mapRef.current;
     if (!map) return;
     isClearedRef.current = false;
@@ -6186,6 +6207,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   }, [showBaseMap, useSatelliteMap, mapInstance]);
 
   const handleSearch = async () => {
+    setShowTimeline(false);
+    setTimelineAvailable(false);
     const map = mapRef.current;
     if (!map) return;
 
@@ -6637,13 +6660,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const startSearchVer = searchVersionRef.current;
     const existingCacheKeys = Array.from(fetchedLinesCache.current.keys()) as string[];
     const linesToFetch = lineNames.filter(name => {
-      if (fetchedLinesCache.current.has(name)) return false;
+      if (fetchedLinesCache.current.get(name)?.scheduleDataVersion === SCHEDULE_DATA_VERSION) return false;
       if (enableLineCacheRef.current) {
-        if (queriedLineNamesRef.current.has(`${city}::${name}`)) return false;
+        if (queriedLineNamesRef.current.has(`${city}::${name}`) && !existingCacheKeys.some(k => (k === name || k.startsWith(`${name}(`)) && fetchedLinesCache.current.get(k)?.scheduleDataVersion !== SCHEDULE_DATA_VERSION)) return false;
         const matchedKey = existingCacheKeys.find(k => k === name || k.startsWith(`${name}(`) || k.startsWith(`${name}#`));
         if (matchedKey) {
           const matchedLine = fetchedLinesCache.current.get(matchedKey);
-          if (matchedLine && (!matchedLine.city || matchedLine.city === city)) {
+          if (matchedLine?.scheduleDataVersion === SCHEDULE_DATA_VERSION && (!matchedLine.city || matchedLine.city === city)) {
             return false;
           }
         }
@@ -6686,6 +6709,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   name: uniqueName,
                   city,
                   path: info.path.map((p: any) => [p.lng, p.lat]),
+                  ...getOperatingHours(info),
                   start_stop: info.start_stop,
                   end_stop: info.end_stop,
                   stops: [],
@@ -6713,6 +6737,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleClear = () => {
+    setShowTimeline(false);
+    setTimelineAvailable(false);
+    displayedLineNamesRef.current = [];
     setAIRegionContext(null);
     setShowEmptySearchNotice(false);
     isClearedRef.current = true;
@@ -6825,7 +6852,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               checkAmapQuotaError(status, result);
               const found = status === 'complete' ? (result?.lineInfo || []).filter((line: any) => normalize(line.name || '') === normalize(name) && line.path?.length > 1) : [];
               finish(found.map((line: any) => ({ id: line.id, name: line.name, city, path: line.path.map((point: any) => getLatLng(point)),
-                start_stop: line.start_stop, end_stop: line.end_stop, via_stops: line.via_stops || [], stops: [] })));
+                ...getOperatingHours(line), start_stop: line.start_stop, end_stop: line.end_stop, via_stops: line.via_stops || [], stops: [] })));
             });
           } catch { finish([]); }
         });
@@ -6900,6 +6927,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         });
       }
     }
+
+    displayedLineNamesRef.current = Array.from(new Set(expandedLineNames));
+    setTimelineAvailable(expandedLineNames.length > 0);
 
     const pointsGrid = new Map<string, [number, number][]>();
     const getGridKey = (lng: number, lat: number) => 
@@ -7420,6 +7450,45 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     drawReferenceArea(map, AMap);
   };
 
+  useEffect(() => {
+    if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
+    const map = mapRef.current;
+    const AMap = (window as any).AMap;
+    lineGroupRef.current?.hide();
+    markerGroupRef.current?.hide();
+    const oldClick = mapClickHandlerRef.current;
+    if (oldClick) map.off('click', oldClick);
+    return () => {
+      lineGroupRef.current?.show();
+      markerGroupRef.current?.show();
+      if (oldClick) map.on('click', oldClick);
+    };
+  }, [showTimeline]);
+
+  useEffect(() => {
+    if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
+    const map = mapRef.current;
+    const AMap = (window as any).AMap;
+    const overlays: any[] = [];
+    const timer = window.setTimeout(() => {
+      const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
+      timelineLines.filter(line => isLineOperating(line, timelineMinute) === true).forEach(line => {
+        const path = (line.path || []).map((point: any) => getLatLng(point));
+        const paths = box ? clipPathToBox(path, box.minLng, box.maxLng, box.minLat, box.maxLat) : [path];
+        if (!paths.some(part => part.length > 1)) return;
+        const polyline = new AMap.Polyline({ path: paths, strokeColor: '#52796F', strokeWeight: lineThickness === 'thin' ? 3 : 6,
+          strokeOpacity: 0.85, lineJoin: 'round', lineCap: 'round', zIndex: 70, bubble: false });
+        polyline.on('click', () => { setSelectedSegmentLines([line.name]); setSelectedStop(null); setSelectedSegmentName(line.name); });
+        overlays.push(polyline);
+      });
+      map.add(overlays);
+    }, 100);
+    return () => {
+      clearTimeout(timer);
+      if (overlays.length) map.remove(overlays);
+    };
+  }, [showTimeline, timelineMinute, timelineLines, lineThickness]);
+
   const handleScreenshot = async () => {
     if (!containerRef.current) return;
     try {
@@ -7522,10 +7591,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
   // Background fetch for missing line directions
   useEffect(() => {
-    if (selectedStop && selectedStop.lines && selectedStop.lines.length > 0) {
-      const missingLines = selectedStop.lines.filter(l => {
+    const visibleLines = selectedStop?.lines || selectedSegmentLines || [];
+    if (visibleLines.length > 0) {
+      const missingLines = visibleLines.filter((l: string) => {
         const parsed = parseLineInfo(l);
-        return parsed.start === '-' || parsed.end === '-';
+        const cached = fetchedLinesCache.current.get(l);
+        return parsed.start === '-' || parsed.end === '-' || (cached?.scheduleDataVersion !== SCHEDULE_DATA_VERSION && !cached?.isUserSubmitted);
       });
 
       if (missingLines.length > 0 && (window as any).AMap) {
@@ -7545,11 +7616,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
               result.lineInfo.forEach((info: any, index: number) => {
                 const uniqueName = info.name || `${shortName}#${index}`;
-                if (!fetchedLinesCache.current.has(uniqueName)) {
+                if (fetchedLinesCache.current.get(uniqueName)?.scheduleDataVersion !== SCHEDULE_DATA_VERSION) {
                   fetchedLinesCache.current.set(uniqueName, {
                     id: info.id,
                     name: uniqueName,
                     path: info.path.map((p: any) => [p.lng, p.lat]),
+                    ...getOperatingHours(info),
                     start_stop: info.start_stop,
                     end_stop: info.end_stop,
                     via_stops: info.via_stops || [],
@@ -7566,7 +7638,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         });
       }
     }
-  }, [selectedStop, currentCity]);
+  }, [selectedStop, selectedSegmentLines, currentCity]);
 
   // Background fetch for stop line counts when a bus line is active
   useEffect(() => {
@@ -7890,6 +7962,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               </div>
 
               {/* Settings FAB */}
+              {timelineAvailable && !isSearching && !loading && !isDrawingMode && !showMinigameModal && (
+                <button type="button" aria-pressed={showTimeline} aria-label="时间轴" title="时间轴" onClick={() => {
+                  if (showTimeline) { setShowTimeline(false); return; }
+                  const currentLines = displayedLineNamesRef.current.map(name => fetchedLinesCache.current.get(name)).filter(Boolean) as BusLine[];
+                  setTimelineLines(currentLines.map(line => ({ ...line })));
+                  setSelectedStop(null); setSelectedSegmentLines(null); setActiveBusLine(null); setStationConnectivityCard(null);
+                  setShowTimeline(true);
+                }} className={`pointer-events-auto shrink-0 w-[42px] h-[42px] rounded-2xl border border-m3-outline-variant/40 shadow-sm flex items-center justify-center transition-all active:scale-95 ${showTimeline ? 'bg-m3-primary text-white' : 'bg-m3-surface/95 text-m3-primary'}`}>
+                  <Clock className="w-4.5 h-4.5" />
+                </button>
+              )}
               <div className="pointer-events-auto shrink-0">
                 <button onClick={() => setShowBuslineAI(prev => !prev)} title="Busline AI" aria-label="打开 Busline AI"
                   className="backdrop-blur-md bg-m3-primary-container/95 text-m3-on-primary-container border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center hover:scale-105 transition-all duration-200 active:scale-95">
@@ -8303,7 +8386,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
 
 
-        {!isDrawingMode && (
+        {showTimeline && <TimelineBar minute={timelineMinute} onChange={minute => { setTimelineMinute(minute); setSelectedSegmentLines(null); setSelectedStop(null); }} onClose={() => setShowTimeline(false)}
+          active={timelineActiveCount} total={timelineLines.length} unknown={timelineUnknownCount} />}
+
+        {!isDrawingMode && !showTimeline && (
           <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 pointer-events-auto flex flex-col items-center select-none ${onboardingStep >= 6 ? 'z-[130]' : 'z-30'}`}>
             {/* Modular Bottom Hub Bar in Morandi Green theme - Icon Only, Enlarged */}
             <div className="backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-[0_8px_32px_rgba(28,47,39,0.15)] rounded-full px-3 py-2 sm:px-3.5 sm:py-2.5 flex items-center gap-1.5 sm:gap-2">
@@ -10886,7 +10972,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   )}
                 </div>
 
-                <div className="overflow-x-auto md:overflow-y-auto custom-scrollbar flex-1 pb-1 md:pb-0 px-1 -mx-1 md:mx-0 md:pr-2 gap-1.5 md:gap-2.5 flex md:flex-col items-center md:items-stretch h-[32px] md:h-auto snap-x snap-mandatory">
+                <div className="overflow-x-auto md:overflow-y-auto custom-scrollbar flex-1 pb-1 md:pb-0 px-1 -mx-1 md:mx-0 md:pr-2 gap-1.5 md:gap-2.5 flex md:flex-col items-center md:items-stretch h-[52px] md:h-auto snap-x snap-mandatory">
                   {Array.from(new Map(
                     (selectedStop ? selectedStop.lines : selectedSegmentLines || [])
                       .map((line: string) => {
@@ -10900,11 +10986,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     const { name, start, end } = info;
                     const isUserSub = fetchedLinesCache.current.get(line)?.isUserSubmitted || approvedUserLines.some(ul => ul.name === line);
                     const badgeText = name.replace('路', '');
+                    const schedule = fetchedLinesCache.current.get(line) || Array.from(fetchedLinesCache.current.values() as Iterable<BusLine>).find(candidate =>
+                      candidate.name.split(/[（(]/)[0].replace('路', '').trim() === name.replace('路', '').trim() && candidate.start_stop === start && candidate.end_stop === end);
                     return (
                       <div 
                         key={line + idx}
                         onClick={() => handleManualSearch({ name: line, type: 'busline' })}
-                        className="md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-3.5 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/30 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[140px] md:max-w-none md:w-auto md:h-[72px] border border-transparent shadow-xs"
+                        className="md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-3.5 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/30 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[220px] md:max-w-none md:w-auto md:h-[72px] border border-transparent shadow-xs"
                       >
                         <div className="hidden md:block absolute left-0 top-0 bottom-0 w-1 bg-m3-primary/0 md:group-hover:bg-m3-primary transition-all" />
                         
@@ -10949,6 +11037,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             )}
                           </div>
                         </div>
+                        <div className="shrink-0"><OperatingHours first={schedule?.stime} last={schedule?.etime} description={schedule?.scheduleDescription} /></div>
                       </div>
                     );
                   })}
@@ -11112,7 +11201,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
-                <div className="p-2.5 px-4 md:p-4 md:py-4 border-b border-m3-outline-variant/20 shrink-0 flex flex-col items-start gap-1">
+                <div className="relative p-2.5 px-4 pr-24 md:p-4 md:pr-24 md:py-4 border-b border-m3-outline-variant/20 shrink-0 flex flex-col items-start gap-1">
+                  <div className="absolute right-4 top-3"><OperatingHours first={activeBusLine.stime} last={activeBusLine.etime} description={activeBusLine.scheduleDescription} /></div>
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-black text-slate-800 text-sm md:text-lg whitespace-nowrap">
                       {parseLineInfo(activeBusLine.name).name.replace('路','')}
