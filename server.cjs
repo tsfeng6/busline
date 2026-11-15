@@ -32853,7 +32853,12 @@ async function runBuslineAI(body) {
     ] }),
     signal: AbortSignal.timeout(18e4)
   });
-  if (!response.ok) throw new Error("Busline AI \u6682\u65F6\u65E0\u6CD5\u54CD\u5E94\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) throw new Error("Busline AI \u670D\u52A1\u5BC6\u94A5\u65E0\u6548\u6216\u6743\u9650\u4E0D\u8DB3\uFF0C\u8BF7\u8054\u7CFB\u7BA1\u7406\u5458\u68C0\u67E5\u540E\u7AEF\u914D\u7F6E\u3002");
+    if (response.status === 402) throw new Error("Busline AI \u670D\u52A1\u4F59\u989D\u4E0D\u8DB3\uFF0C\u8BF7\u8054\u7CFB\u7BA1\u7406\u5458\u3002");
+    if (response.status === 429) throw new Error("Busline AI \u8BF7\u6C42\u8FC7\u4E8E\u9891\u7E41\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002");
+    throw new Error(`Busline AI \u6682\u65F6\u65E0\u6CD5\u54CD\u5E94\uFF08${response.status}\uFF09\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002`);
+  }
   let parsed;
   try {
     const result = await response.json();
