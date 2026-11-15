@@ -315,8 +315,9 @@ export default function App() {
   const [gameLoading, setGameLoading] = useState(false);
   const [gameLoadingText, setGameLoadingText] = useState('正在随机检索题目并绘制线网地图，请稍候...');
   const [gameScore, setGameScore] = useState(0);
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [publicGamesUsed, setPublicGamesUsed] = useState(() => readGameQuota(localStorage));
-  const publicGameLimitReached = !initialAmapConfig.isCustom && publicGamesUsed >= PUBLIC_GAME_DAILY_LIMIT;
+  const publicGameLimitReached = !isAdminVerified && !initialAmapConfig.isCustom && publicGamesUsed >= PUBLIC_GAME_DAILY_LIMIT;
   useEffect(() => {
     const refresh = () => setPublicGamesUsed(readGameQuota(localStorage));
     const interval = window.setInterval(refresh, 15000);
@@ -752,7 +753,7 @@ export default function App() {
       setApiErrorNotification('地图尚未就绪，请稍后再开始游戏。');
       return;
     }
-    if (!initialAmapConfig.isCustom) {
+    if (!initialAmapConfig.isCustom && !isAdminVerified) {
       try {
         if (!consumeGameQuota(localStorage)) {
           setPublicGamesUsed(readGameQuota(localStorage));
@@ -2633,7 +2634,6 @@ export default function App() {
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState('');
   const [adminMode, setAdminMode] = useState(false); // keep for compatibility or reference if needed
-  const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [showManageModal, setShowManageModal] = useState(false);
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
@@ -9790,9 +9790,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     )}
 
                     <div className="rounded-2xl border border-m3-outline-variant/40 bg-m3-primary-container/40 p-3 space-y-2">
-                      <p className="text-xs font-bold text-m3-on-primary-container">{initialAmapConfig.isCustom ? '当前使用自有高德API，不受每日3局限制。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局`}</p>
+                      <p className="text-xs font-bold text-m3-on-primary-container">{isAdminVerified ? '管理员模式已启用，不受每日3局限制。' : initialAmapConfig.isCustom ? '当前使用自有高德API，不受每日3局限制。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局`}</p>
                       <p className="text-[11px] leading-relaxed text-slate-500">为保障公共API使用，同一浏览器每天最多开始3局游戏，所有模式共用次数，按本地日期每日重置。开局即计1次，退出或重新挑战均不退还；复盘不消耗次数。填写自己的高德API并刷新生效后可不限局数游玩。</p>
-                      {!initialAmapConfig.isCustom && <button type="button" onClick={openGameApiSettings} className="text-xs font-black text-m3-primary underline">填写自己的高德API</button>}
+                      {!initialAmapConfig.isCustom && !isAdminVerified && <button type="button" onClick={openGameApiSettings} className="text-xs font-black text-m3-primary underline">填写自己的高德API</button>}
                     </div>
 
                     {/* Start & Review Buttons */}
@@ -10047,7 +10047,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       );
                     })()}
 
-                    {!initialAmapConfig.isCustom && <div className="w-full rounded-2xl bg-m3-primary-container/40 p-3 text-xs text-m3-on-primary-container leading-relaxed">
+                    {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式：不受每日3局限制</p>}
+                    {!initialAmapConfig.isCustom && !isAdminVerified && <div className="w-full rounded-2xl bg-m3-primary-container/40 p-3 text-xs text-m3-on-primary-container leading-relaxed">
                       <p>{publicGameLimitReached ? '本浏览器今日3局公共API游戏次数已用完。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局。`}</p>
                       <button type="button" onClick={openGameApiSettings} className="mt-2 font-black underline">填写自己的高德API，继续游玩</button>
                     </div>}
