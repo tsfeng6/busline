@@ -1,3 +1,4 @@
+import { getSuggestionKind, rankSearchSuggestions } from './utils/searchSuggestions';
 import { BusPlanner } from './components/BusPlanner';
 import type { BusPlan } from './utils/busPlanner';
 import { TimelineBar } from './components/TimelineBar';
@@ -3381,6 +3382,32 @@ export default function App() {
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const autoCompleteRef = useRef<any>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const searchActiveRef = useRef(false);
+  const searchComposingRef = useRef(false);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const searchIdRef = useRef(0);
+  const dismissSearchSuggestions = () => {
+    searchActiveRef.current = false;
+    searchIdRef.current++;
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    setSuggestionsLoading(false);
+    setShowSuggestions(false);
+    setIsMobileSearchOpen(false);
+  };
+  useEffect(() => {
+    const onOutsidePointer = (event: PointerEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) dismissSearchSuggestions();
+    };
+    document.addEventListener('pointerdown', onOutsidePointer, true);
+    return () => {
+      document.removeEventListener('pointerdown', onOutsidePointer, true);
+      searchIdRef.current++;
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, []);
+
   
   const getRandomPastelColor = () => {
     const h = Math.floor(Math.random() * 360);
@@ -5525,6 +5552,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleManualSearch = async (item: any) => {
+    dismissSearchSuggestions();
     setShowTimeline(false);
     setTimelineAvailable(false);
     const map = mapRef.current;
@@ -5651,21 +5679,27 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
   };
 
-  const searchIdRef = useRef(0);
 
   const onSearchInputChange = (val: string) => {
+    const currentSearchId = ++searchIdRef.current;
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setSearchQuery(val);
-    if (!val || val.length < 1) {
+    if (searchComposingRef.current) return;
+    searchActiveRef.current = true;
+    setSuggestionsLoading(!!val.trim());
+    setShowSuggestions(!!val.trim());
+    setSuggestions([]);
+    if (!val.trim()) {
       setSuggestions([]);
       setShowSuggestions(false);
       return;
     }
 
     const AMap = (window as any).AMap;
-    if (!AMap || !AMap.AutoComplete) return;
+    if (!AMap || !AMap.AutoComplete) { setSuggestionsLoading(false); return; }
 
-    const currentSearchId = ++searchIdRef.current;
-
+    searchDebounceRef.current = setTimeout(() => {
+    if (currentSearchId !== searchIdRef.current || !searchActiveRef.current) return;
     if (!autoCompleteRef.current) {
       autoCompleteRef.current = new AMap.AutoComplete({
         city: currentCity || '全国',
@@ -5675,7 +5709,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     
     // Parallel search for better results
     const fetchTips = new Promise<any[]>((resolve) => {
+      const timeout = setTimeout(() => resolve([]), 8000);
       autoCompleteRef.current.search(val, (status: string, result: any) => {
+        clearTimeout(timeout);
         if (status === 'complete' && result.tips) {
           resolve(result.tips);
         } else {
@@ -5693,11 +5729,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         pageSize: 10,
         extensions: 'all'
       });
+      const timeout = setTimeout(() => resolve([]), 8000);
       lineSearch.search(val, (status: string, result: any) => {
-        if (result.lineInfo) {
+        clearTimeout(timeout);
+        if (result?.lineInfo) {
           result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
         }
-        if (status === 'complete' && result.lineInfo) {
+        if (status === 'complete' && result?.lineInfo) {
           resolve(result.lineInfo.map((l: any) => ({
             name: l.name,
             district: l.city || currentCity,
@@ -5712,7 +5750,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }) : Promise.resolve([]);
 
     Promise.all([fetchTips, fetchLines]).then(([tips, lines]) => {
-      if (currentSearchId !== searchIdRef.current) return;
+      if (currentSearchId !== searchIdRef.current || !searchActiveRef.current) return;
  
       // Prioritize exact line matches, then other lines, then POIs with locations
       const combined = [...lines];
@@ -5722,10 +5760,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       
       tips.forEach((tip: any) => {
         // High fidelity station detection
-        const isStation = tip.typecode === '150700' || 
-                         tip.name.includes('站') || 
-                         tip.name.includes('口') || 
-                         tip.name.includes('枢纽');
+        const isStation = getSuggestionKind(tip) === 'station';
                          
         const isLine = !isStation && checkIsLineQuery(tip.name);
         
@@ -5738,7 +5773,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
            if (!stationGroups.has(cleanName)) {
              stationGroups.set(cleanName, []);
            }
-           stationGroups.get(cleanName)!.push(tip);
+           stationGroups.get(cleanName)!.push({ ...tip, type: 'busstop' });
         } else if (tip.location) {
            otherTips.push(tip);
         }
@@ -5794,12 +5829,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         });
       }
 
-      setSuggestions(combined.slice(0, 12));
+      setSuggestions(rankSearchSuggestions(combined, val).slice(0, 12));
+      setSuggestionsLoading(false);
       setShowSuggestions(true);
+    }).catch(() => {
+      if (currentSearchId === searchIdRef.current && searchActiveRef.current) setSuggestionsLoading(false);
     });
+    }, 220);
   };
 
   const performFullSearch = async (query: string) => {
+    dismissSearchSuggestions();
     if (!query) return;
     isClearedRef.current = false;
     searchVersionRef.current++;
@@ -6747,6 +6787,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleClear = () => {
+    dismissSearchSuggestions();
     if (plannerOverlaysRef.current.length && mapRef.current) mapRef.current.remove(plannerOverlaysRef.current);
     plannerOverlaysRef.current = [];
     setShowTimeline(false);
@@ -7843,7 +7884,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         {!isDrawingMode && (
           <div className="flex items-start justify-between gap-4 w-full h-[46px]">
             {/* Pure Material 3 Search Bar (without logo, slightly narrower) */}
-            <div className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative w-[180px] sm:w-[240px] md:w-[280px] rounded-full'}`}>
+            <div ref={searchContainerRef} className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative w-[180px] sm:w-[240px] md:w-[280px] rounded-full'}`}>
               
               {/* Search Lead Icon */}
               <div className="flex items-center justify-center pl-4 pr-1.5 shrink-0 text-m3-primary">
@@ -7858,9 +7899,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   className="bg-transparent border-none outline-none text-xs sm:text-sm font-medium text-slate-800 w-full placeholder:text-[#7A8E83] h-full"
                   value={searchQuery}
                   onChange={(e) => onSearchInputChange(e.target.value)}
-                  onFocus={() => searchQuery && suggestions.length > 0 && setShowSuggestions(true)}
-                  onBlur={() => setTimeout(() => { setShowSuggestions(false); setIsMobileSearchOpen(false); }, 200)}
+                  role="combobox"
+                  aria-label="搜索线路或地点"
+                  aria-autocomplete="list"
+                  aria-expanded={showSuggestions}
+                  aria-controls="search-suggestions"
+                  onFocus={() => { searchActiveRef.current = true; if (searchQuery.trim()) onSearchInputChange(searchQuery); }}
+                  onCompositionStart={() => { searchComposingRef.current = true; searchIdRef.current++; if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); }}
+                  onCompositionEnd={e => { searchComposingRef.current = false; onSearchInputChange(e.currentTarget.value); }}
                   onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing || searchComposingRef.current || e.keyCode === 229) return;
+                    if (e.key === 'Escape') { dismissSearchSuggestions(); return; }
                     if (e.key === 'Enter') {
                       if (suggestions.length > 0 && showSuggestions) {
                         handleManualSearch(suggestions[0]);
@@ -7888,21 +7937,25 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
               {/* Suggestions Dropdown - Material 3 Floating Card */}
               <AnimatePresence>
-                {showSuggestions && suggestions.length > 0 && (
-                  <motion.div 
+                {showSuggestions && searchQuery.trim().length > 0 && (
+                  <motion.div
+                    id="search-suggestions" role="listbox" aria-busy={suggestionsLoading}
                     initial={{ opacity: 0, scale: 0.95, y: -10 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: -10 }}
                     transition={{ type: 'spring', damping: 20, stiffness: 280 }}
                     className="absolute top-[calc(100%+8px)] left-0 right-0 bg-m3-surface/98 backdrop-blur-2xl border border-m3-outline-variant/40 rounded-3xl shadow-xl overflow-hidden py-2 z-50 pointer-events-auto"
                   >
+                    {suggestionsLoading && <p role="status" className="px-5 py-3 text-xs text-slate-500">正在查找…</p>}
+                    {!suggestionsLoading && suggestions.length === 0 && <p role="status" className="px-5 py-3 text-xs text-slate-500">暂无匹配结果，可按回车继续搜索</p>}
                     {suggestions.slice(0, 6).map((tip, idx) => (
                       <button
                         key={idx}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          handleManualSearch(tip);
-                        }}
+                        type="button"
+                        role="option"
+                        aria-selected={false}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => handleManualSearch(tip)}
                         className="w-full px-5 py-3.5 text-left hover:bg-m3-primary/8 transition-colors flex flex-col gap-0.5 relative border-b border-m3-outline-variant/15 last:border-0"
                       >
                         <div className="flex items-center gap-2">
@@ -7912,11 +7965,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                               汇总
                             </span>
                           )}
-                          {tip.type === 'busline' && (
-                            <span className="px-2 py-0.5 rounded-full bg-m3-secondary-container text-[8px] font-bold text-m3-on-secondary-container uppercase border border-m3-outline/10">
-                              {t('lineLabel')}
-                            </span>
-                          )}
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border border-m3-outline/10 whitespace-nowrap shrink-0 ${getSuggestionKind(tip) === 'station' ? 'bg-m3-primary-container text-m3-on-primary-container' : getSuggestionKind(tip) === 'line' ? 'bg-m3-secondary-container text-m3-on-secondary-container' : 'bg-m3-surface-container text-slate-500'}`}>
+                            {getSuggestionKind(tip) === 'station' ? '站点' : getSuggestionKind(tip) === 'line' ? '线路' : '地点'}
+                          </span>
                           {(tip.isUserSubmitted || tip.type === 'userLine') && (
                             <span className="px-2 py-0.5 rounded-full bg-m3-tertiary-container text-[8px] font-bold text-m3-on-tertiary-container border border-m3-outline/10 whitespace-nowrap">
                               用户
