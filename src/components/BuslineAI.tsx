@@ -1,3 +1,4 @@
+import { getBuslineAIEndpoint, readBuslineAIResponse, describeBuslineAIError } from '../utils/buslineAIClient';
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { X, Sparkles, Send, Loader2 } from 'lucide-react';
@@ -37,14 +38,13 @@ export function BuslineAI({ onClose, context, disabled, searchProgress, onApply 
     const controller = new AbortController(); abortRef.current = controller;
     const timeout = window.setTimeout(() => controller.abort(), 190000);
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/ai/chat`, {
+      const res = await fetch(getBuslineAIEndpoint(import.meta.env.VITE_API_BASE_URL || '', window.location.href), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
         body: JSON.stringify({ mode, message: question, history, context: mode === 'summary' ? context : { city: context?.city || '' } }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Busline AI 暂时不可用。');
+      const data = await readBuslineAIResponse(res);
       setMessages(prev => [...prev, { role: 'assistant', content: data.reply, city: data.city, lines: data.lines }]);
-    } catch (e: any) { if (!controller.signal.aborted) setError(e.message || '连接失败，请稍后重试。'); else setError('请求已停止或超时，请重试。'); }
+    } catch (e: any) { if (!controller.signal.aborted) setError(describeBuslineAIError(e)); else setError('请求已停止或超时，请重试。'); }
     finally { window.clearTimeout(timeout); setBusy(false); }
   };
   return (

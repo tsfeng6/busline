@@ -1,3 +1,4 @@
+import { getBuslineAIEndpoint, readBuslineAIResponse, describeBuslineAIError } from '../utils/buslineAIClient';
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { X, Route, Loader2, Footprints, Bus, Search } from 'lucide-react';
@@ -75,13 +76,12 @@ export function BusPlanner({ onClose, disabled, onDraw, onClear }: Props) {
       const timer = window.setTimeout(() => controller.abort(), 190000);
       let suggestion: any;
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || ''}/api/ai/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+        const res = await fetch(getBuslineAIEndpoint(import.meta.env.VITE_API_BASE_URL || '', window.location.href), { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
           body: JSON.stringify({ mode: 'planner', message: '这段路线高德直搜未找到符合纯城市公交与步行条件的结果。请提出实际公交接驳站作为中间点，供逐段核验。',
             context: { origin: { city: from.city, name: from.name }, destination: { city: to.city, name: to.name }, maxWalkingKm: maxWalk,
               previouslyLocated: Array.from(pointCache.values()).map(point => ({ city: point.city, name: point.name })), excludedModes: ['地铁', '铁路', '机场巴士', '长途客运'] } }) });
-        suggestion = await res.json();
-        if (!res.ok) throw new Error(suggestion.error || 'Busline AI 暂时不可用。');
-      } catch (e: any) { throw new Error(controller.signal.aborted ? 'Busline AI 请求已停止或超时，请重试。' : e.message || 'Busline AI 连接失败。'); }
+        suggestion = await readBuslineAIResponse(res);
+      } catch (e: any) { throw new Error(controller.signal.aborted ? 'Busline AI 请求已停止或超时，请重试。' : describeBuslineAIError(e)); }
       finally { clearTimeout(timer); aiAbortRef.current = null; }
       check();
       setAINotes(prev => [...prev, `${from.name} → ${to.name}\n${suggestion.reply || ''}`]);

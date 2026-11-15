@@ -31,7 +31,12 @@ export async function runBuslineAI(body: any) {
     ] }),
     signal: AbortSignal.timeout(180000),
   });
-  if (!response.ok) throw new Error('Busline AI 暂时无法响应，请稍后重试。');
+  if (!response.ok) {
+    if (response.status === 401 || response.status === 403) throw new Error('Busline AI 服务密钥无效或权限不足，请联系管理员检查后端配置。');
+    if (response.status === 402) throw new Error('Busline AI 服务余额不足，请联系管理员。');
+    if (response.status === 429) throw new Error('Busline AI 请求过于频繁，请稍后重试。');
+    throw new Error(`Busline AI 暂时无法响应（${response.status}），请稍后重试。`);
+  }
   let parsed: any;
   try {
     const result = await response.json();

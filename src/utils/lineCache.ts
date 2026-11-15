@@ -23,6 +23,7 @@ export interface CachedSearchRegion {
   city: string;
   isCityWide: boolean;
   isComplete: boolean;
+  discoveryVersion?: number;
   searchBounds: GeoBox;
   timestamp: number;
 }
@@ -226,12 +227,6 @@ const subtractGeoBox = (target: GeoBox, cutter: GeoBox, eps = 1e-4): GeoBox[] =>
   return pieces;
 };
 
-const isSameBox = (a: GeoBox, b: GeoBox, eps = 1e-4): boolean =>
-  Math.abs(a.minLng - b.minLng) <= eps &&
-  Math.abs(a.maxLng - b.maxLng) <= eps &&
-  Math.abs(a.minLat - b.minLat) <= eps &&
-  Math.abs(a.maxLat - b.maxLat) <= eps;
-
 export const isSearchScopeCached = (
   regions: CachedSearchRegion[],
   targetBounds: GeoBox,
@@ -239,7 +234,7 @@ export const isSearchScopeCached = (
 ): boolean => {
   if (!regions || regions.length === 0) return false;
 
-  if (regions.some((r) => r.isCityWide)) {
+  if (regions.some((r) => r.isCityWide && r.isComplete && r.discoveryVersion === 4)) {
     return true;
   }
 
@@ -249,7 +244,7 @@ export const isSearchScopeCached = (
 
   let remaining: GeoBox[] = [targetBounds];
   for (const region of regions) {
-    if (!region.isComplete && !isSameBox(targetBounds, region.searchBounds)) {
+    if ((region.isCityWide && region.discoveryVersion !== 4) || !region.isComplete) {
       continue;
     }
     remaining = remaining.flatMap((piece) => subtractGeoBox(piece, region.searchBounds));
@@ -288,6 +283,7 @@ const serializeBusLine = (line: BusLine, city: string): BusLine => ({
   scheduleFetched: line.scheduleFetched,
   scheduleDataVersion: line.scheduleDataVersion,
   scheduleDescription: line.scheduleDescription,
+  sourceQueries: Array.from(new Set(line.sourceQueries || [])),
   stime: formatOperatingTime(line.stime) || undefined,
   etime: formatOperatingTime(line.etime) || undefined,
 });
@@ -364,6 +360,7 @@ export const saveCitySearchToCache = async (params: {
         city,
         isCityWide,
         isComplete,
+        discoveryVersion: 4,
         searchBounds,
         timestamp: Date.now(),
       };

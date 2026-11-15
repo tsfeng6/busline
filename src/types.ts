@@ -9,6 +9,7 @@ export interface BusLine {
   scheduleFetched?: boolean;
   scheduleDataVersion?: number;
   scheduleDescription?: string;
+  sourceQueries?: string[];
   stime?: string;
   etime?: string;
   isUserSubmitted?: boolean;
