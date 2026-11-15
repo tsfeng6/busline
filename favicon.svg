@@ -1,11 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <!-- Rounded white squircle background -->
-  <rect x="0.5" y="0.5" width="31" height="31" rx="8" fill="#ffffff" stroke="#f1f5f9" stroke-width="1" />
-  
-  <!-- Centered logo lines with exact colored strokes -->
-  <g transform="translate(4, 4)">
-    <path d="M4 17H20" stroke="#3B6B91" stroke-width="2.5" stroke-linecap="round" />
-    <path d="M17 4V20" stroke="#3B6B91" stroke-width="2.5" stroke-linecap="round" />
-    <path d="M8 20V13L13 8H22" stroke="#3B6B91" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="15" fill="#52796F"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 43H49M42 15V52M22 52V36L34 24H53"/>
   </g>
 </svg>
