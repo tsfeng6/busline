@@ -1,3 +1,5 @@
+import { GAME_QUOTA_KEY, PUBLIC_GAME_DAILY_LIMIT, readGameQuota, consumeGameQuota } from './utils/gameQuota';
+import { BuslineAI, type AIRegionContext } from './components/BuslineAI';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { BusStop, BusLine, LineSegment } from './types';
@@ -106,15 +108,17 @@ const getInitialAmapConfig = () => {
       return {
         key: defaultKey,
         securityCode: defaultSecurityCode,
+        isCustom: false,
       };
     }
 
     return {
+      isCustom: !!(useCustom && customKey),
       key: useCustom && customKey ? customKey : defaultKey,
       securityCode: useCustom && customSec ? customSec : defaultSecurityCode,
     };
   }
-  return { key: defaultKey, securityCode: defaultSecurityCode };
+  return { key: defaultKey, securityCode: defaultSecurityCode, isCustom: false };
 };
 
 const initialAmapConfig = getInitialAmapConfig();
@@ -304,6 +308,23 @@ export default function App() {
   const [gameLoading, setGameLoading] = useState(false);
   const [gameLoadingText, setGameLoadingText] = useState('正在随机检索题目并绘制线网地图，请稍候...');
   const [gameScore, setGameScore] = useState(0);
+  const [publicGamesUsed, setPublicGamesUsed] = useState(() => readGameQuota(localStorage));
+  const publicGameLimitReached = !initialAmapConfig.isCustom && publicGamesUsed >= PUBLIC_GAME_DAILY_LIMIT;
+  useEffect(() => {
+    const refresh = () => setPublicGamesUsed(readGameQuota(localStorage));
+    const interval = window.setInterval(refresh, 15000);
+    window.addEventListener('storage', refresh);
+    window.addEventListener('focus', refresh);
+    return () => { clearInterval(interval); window.removeEventListener('storage', refresh); window.removeEventListener('focus', refresh); };
+  }, []);
+  const openGameApiSettings = () => {
+    exitMinigameToMap();
+    focusCustomApiRef.current = true;
+    setUseCustomApiKey(true);
+    setSettingsTab('general');
+    setShowSettings(true);
+  };
+
   const [gameTimeLeft, setGameTimeLeft] = useState<number | null>(null);
   const [gameTimedOut, setGameTimedOut] = useState(false);
   const gameTimeRemainingMsRef = useRef<number | null>(null);
@@ -719,6 +740,24 @@ export default function App() {
     city: string,
     province?: string
   ) => {
+    if (gameState === 'playing' && isMinigameActiveRef.current) return;
+    if (!(window as any).AMap || !mapInstance) {
+      setApiErrorNotification('地图尚未就绪，请稍后再开始游戏。');
+      return;
+    }
+    if (!initialAmapConfig.isCustom) {
+      try {
+        if (!consumeGameQuota(localStorage)) {
+          setPublicGamesUsed(readGameQuota(localStorage));
+          setApiErrorNotification('为保障公共API使用，本浏览器今日3局游戏已用完。请填写自己的高德API，刷新生效后继续游戏。');
+          return;
+        }
+        setPublicGamesUsed(readGameQuota(localStorage));
+      } catch {
+        setApiErrorNotification('无法保存每日游戏次数，请允许浏览器本地存储，或填写自己的高德API后继续。');
+        return;
+      }
+    }
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
 
     isMinigameActiveRef.current = true;
@@ -1931,6 +1970,9 @@ export default function App() {
   const stopCountCacheRef = useRef<Map<string, number>>(new Map());
 
   const [showSettings, setShowSettings] = useState(false);
+  const [showBuslineAI, setShowBuslineAI] = useState(false);
+  const [aiSearchProgress, setAISearchProgress] = useState('');
+  const [aiRegionContext, setAIRegionContext] = useState<AIRegionContext | null>(null);
   const [settingsTab, setSettingsTab] = useState<'general' | 'experimental' | 'about' | 'dataFilter'>('general');
   
   // WeChat Group QR Code management
@@ -2555,7 +2597,9 @@ export default function App() {
 
   const handleResetApp = async () => {
     try {
+      const gameQuota = localStorage.getItem(GAME_QUOTA_KEY);
       localStorage.clear();
+      if (gameQuota) localStorage.setItem(GAME_QUOTA_KEY, gameQuota);
       sessionStorage.clear();
       await clearAllLineCache();
     } catch {}
@@ -6159,6 +6203,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
 
     setShowLargeAreaWarning(false);
+    setAIRegionContext(null);
     setShowEmptySearchNotice(false);
     const searchStartedAt = performance.now();
 
@@ -6544,6 +6589,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           roadStopsDataRef.current = new Map(allMapStopsRef.current);
         }
 
+        const aiBox = referenceBoxRef.current || getBoxForStops(Array.from(roadStopsDataRef.current.values())) || targetSearchBox;
+        const areaLines = Array.from(fetchedLinesCache.current.values() as Iterable<BusLine>)
+          .filter(line => (!line.city || line.city === currentCity) && line.path?.length > 1 &&
+            clipPathToBox(line.path, aiBox.minLng, aiBox.maxLng, aiBox.minLat, aiBox.maxLat).length > 0)
+          .map(line => ({ name: line.name, start: line.start_stop || '', end: line.end_stop || '',
+            stopsInArea: (line.via_stops || []).filter(stop => {
+              const [lng, lat] = getLatLng(stop.location);
+              return lng >= aiBox.minLng && lng <= aiBox.maxLng && lat >= aiBox.minLat && lat <= aiBox.maxLat;
+            }).map(stop => stop.name) }));
+        if (areaLines.length) setAIRegionContext({ city: currentCity, bounds: { ...aiBox }, lines: areaLines });
+
         if (enableLineCacheRef.current && !usedRegionCache) {
           const linesToSave: BusLine[] = [];
           for (const lineVal of fetchedLinesCache.current.values()) {
@@ -6657,6 +6713,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleClear = () => {
+    setAIRegionContext(null);
     setShowEmptySearchNotice(false);
     isClearedRef.current = true;
     searchVersionRef.current++;
@@ -6738,6 +6795,59 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     activeRawMarkersRef.current = [];
     roadStopsDataRef.current.clear();
     activeBusLinePolylineRef.current = null;
+  };
+
+  const applyAILines = async (city: string, names: string[]): Promise<string> => {
+    const map = mapRef.current;
+    const AMap = (window as any).AMap;
+    if (!map || !AMap || isMinigameActiveRef.current || isSearching) throw new Error('请先等待地图就绪并结束其他检索。');
+    handleClear();
+    isClearedRef.current = false;
+    const version = ++searchVersionRef.current;
+    setIsSearching(true);
+    const matched: string[] = [];
+    const missing: string[] = [];
+    const lines: BusLine[] = [];
+    const normalize = (name: string) => name.split(/[（(]/)[0].replace(/\s+/g, '');
+    try {
+      for (let i = 0; i < names.length; i++) {
+        if (searchVersionRef.current !== version || isClearedRef.current || isMinigameActiveRef.current) throw new Error('地图检索已取消。');
+        const name = names[i];
+        setAISearchProgress(`正在检索 ${i + 1}/${names.length}：${name}`);
+        const found = await new Promise<BusLine[]>(resolve => {
+          let settled = false;
+          const finish = (result: BusLine[]) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result); } };
+          const timer = setTimeout(() => finish([]), 8000);
+          try {
+            const search = new AMap.LineSearch({ city, pageSize: 100, extensions: 'all' });
+            search.search(name, (status: string, result: any) => {
+              if (settled || searchVersionRef.current !== version) { finish([]); return; }
+              checkAmapQuotaError(status, result);
+              const found = status === 'complete' ? (result?.lineInfo || []).filter((line: any) => normalize(line.name || '') === normalize(name) && line.path?.length > 1) : [];
+              finish(found.map((line: any) => ({ id: line.id, name: line.name, city, path: line.path.map((point: any) => getLatLng(point)),
+                start_stop: line.start_stop, end_stop: line.end_stop, via_stops: line.via_stops || [], stops: [] })));
+            });
+          } catch { finish([]); }
+        });
+        if (searchVersionRef.current !== version || isClearedRef.current || isMinigameActiveRef.current) throw new Error('地图检索已取消。');
+        if (found.length) { matched.push(name); lines.push(...found); } else missing.push(name);
+      }
+      lines.forEach(line => fetchedLinesCache.current.set(line.name, line));
+      const points = lines.flatMap(line => line.path);
+      if (points.length) {
+        const lngs = points.map(point => point[0]);
+        const lats = points.map(point => point[1]);
+        const bounds = new AMap.Bounds(
+          [lngs.reduce((a, b) => Math.min(a, b)), lats.reduce((a, b) => Math.min(a, b))],
+          [lngs.reduce((a, b) => Math.max(a, b)), lats.reduce((a, b) => Math.max(a, b))]
+        );
+        map.setBounds(bounds);
+        const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
+        referenceBoxRef.current = { minLng: sw.lng, maxLng: ne.lng, minLat: sw.lat, maxLat: ne.lat };
+        aggregateAndVisualize(Array.from(new Set(lines.map(line => line.name))), map, AMap);
+      }
+      return `共 ${names.length} 条候选线路，成功检索 ${matched.length} 条，已显示到地图。${missing.length ? '\n未找到或请求失败：' + missing.join('、') : ''}\n地图检索仅核验线路存在性，不代表已验证全部筛选条件或已穷尽所有线路。`;
+    } finally { setAISearchProgress(''); if (searchVersionRef.current === version) setIsSearching(false); }
   };
 
   const aggregateAndVisualize = (activeLineSet: string[], map: any, AMap: any) => {
@@ -7607,6 +7717,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         )}
       </AnimatePresence>
 
+      <AnimatePresence>
+        {showBuslineAI && <BuslineAI onClose={() => setShowBuslineAI(false)} context={aiRegionContext}
+          disabled={isSearching || (showMinigameModal && gameState !== 'menu')} searchProgress={aiSearchProgress} onApply={applyAILines} />}
+      </AnimatePresence>
+
       <header className="fixed top-0 left-0 right-0 z-20 px-4 pt-5 pb-0 pointer-events-none">
         {!isDrawingMode && (
           <div className="flex items-start justify-between gap-4 w-full h-[46px]">
@@ -7775,6 +7890,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               </div>
 
               {/* Settings FAB */}
+              <div className="pointer-events-auto shrink-0">
+                <button onClick={() => setShowBuslineAI(prev => !prev)} title="Busline AI" aria-label="打开 Busline AI"
+                  className="backdrop-blur-md bg-m3-primary-container/95 text-m3-on-primary-container border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center hover:scale-105 transition-all duration-200 active:scale-95">
+                  <Sparkles className="w-4.5 h-4.5" />
+                </button>
+              </div>
               <div className="pointer-events-auto shrink-0">
                 <button 
                   onClick={() => {
@@ -9485,11 +9606,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       </div>
                     )}
 
+                    <div className="rounded-2xl border border-m3-outline-variant/40 bg-m3-primary-container/40 p-3 space-y-2">
+                      <p className="text-xs font-bold text-m3-on-primary-container">{initialAmapConfig.isCustom ? '当前使用自有高德API，不受每日3局限制。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局`}</p>
+                      <p className="text-[11px] leading-relaxed text-slate-500">为保障公共API使用，同一浏览器每天最多开始3局游戏，所有模式共用次数，按本地日期每日重置。开局即计1次，退出或重新挑战均不退还；复盘不消耗次数。填写自己的高德API并刷新生效后可不限局数游玩。</p>
+                      {!initialAmapConfig.isCustom && <button type="button" onClick={openGameApiSettings} className="text-xs font-black text-m3-primary underline">填写自己的高德API</button>}
+                    </div>
+
                     {/* Start & Review Buttons */}
                     <div className="flex gap-2.5">
                       <button
                         type="button"
-                        disabled={!gameMode}
+                        disabled={!gameMode || publicGameLimitReached}
                         onClick={() => startMinigame(
                           gameMode!,
                           gameDifficulty,
@@ -9499,7 +9626,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         className="flex-1 py-3.5 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-sm shadow-lg hover:opacity-95 transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                       >
                         <Sparkles className="w-4 h-4" />
-                        开始挑战
+                        {publicGameLimitReached ? '今日次数已用完' : '开始挑战'}
                       </button>
                       {gameHistory.length > 0 && (
                         <button
@@ -9737,6 +9864,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       );
                     })()}
 
+                    {!initialAmapConfig.isCustom && <div className="w-full rounded-2xl bg-m3-primary-container/40 p-3 text-xs text-m3-on-primary-container leading-relaxed">
+                      <p>{publicGameLimitReached ? '本浏览器今日3局公共API游戏次数已用完。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局。`}</p>
+                      <button type="button" onClick={openGameApiSettings} className="mt-2 font-black underline">填写自己的高德API，继续游玩</button>
+                    </div>}
+
                     <div className="flex gap-2.5 w-full pt-2">
                       {gameHistory.length > 0 && (
                         <button
@@ -9750,10 +9882,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       )}
                       <button
                         type="button"
+                        disabled={publicGameLimitReached}
                         onClick={() => startMinigame(gameMode!, gameDifficulty, gameCity)}
                         className="flex-1 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-md hover:opacity-95 transition-all"
                       >
-                        再玩一次
+                        {publicGameLimitReached ? '今日次数已用完' : '再玩一次'}
                       </button>
                       <button
                         type="button"

@@ -1,3 +1,4 @@
+import { runBuslineAI } from './src/server/buslineAI';
 import fs from 'fs';
 import path from 'path';
 
@@ -138,6 +139,11 @@ export function viteApiPlugin() {
         };
 
         try {
+          if (pathname === '/api/ai/chat' && method === 'POST') {
+            try { res.end(JSON.stringify(await runBuslineAI(await parseBody()))); }
+            catch (error: any) { res.statusCode = 400; res.end(JSON.stringify({ error: error.message || 'Busline AI 暂时不可用。' })); }
+            return;
+          }
           if (pathname === '/api/health') {
             res.end(JSON.stringify({ status: 'ok', firebaseProxyActive: firebaseEnabled }));
             return;

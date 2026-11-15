@@ -1,3 +1,4 @@
+import { runBuslineAI } from './src/server/buslineAI';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
@@ -344,6 +345,11 @@ async function startServer() {
       console.error("Delete error:", err);
       res.status(500).json({ error: err.message });
     }
+  });
+
+  app.post('/api/ai/chat', async (req, res) => {
+    try { res.json(await runBuslineAI(req.body)); }
+    catch (error: any) { res.status(400).json({ error: error.message || 'Busline AI 暂时不可用。' }); }
   });
 
   // API: AI Summary via DeepSeek
