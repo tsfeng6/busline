@@ -1,0 +1,789 @@
+import React, { useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import {
+  ArrowRight,
+  Check,
+  Sparkles,
+  Zap,
+  RefreshCw,
+  KeyRound,
+  Compass,
+  BoxSelect,
+  X,
+  Map as MapIcon,
+  MapPin,
+} from 'lucide-react';
+
+interface OnboardingGuideProps {
+  step: number;
+  setStep: React.Dispatch<React.SetStateAction<number>>;
+  lineThickness: 'thick' | 'thin';
+  setLineThickness: (val: 'thick' | 'thin') => void;
+  enableLineCache: boolean;
+  onSelectLineCache: (enabled: boolean) => void;
+  useCustomApiKey: boolean;
+  onSelectCustomApiKey: (enabled: boolean) => void;
+  customApiKey: string;
+  setCustomApiKey: (val: string) => void;
+  customApiSecurityCode: string;
+  setCustomApiSecurityCode: (val: string) => void;
+  onFinishOnboarding: () => void;
+  barButtonRefs: React.MutableRefObject<(HTMLElement | null)[]>;
+}
+
+const AbstractDaxingBusMapPreview: React.FC<{ thickness?: 'thick' | 'thin' }> = ({
+  thickness = 'thick',
+}) => {
+  const innerW = thickness === 'thin' ? 2.8 : 6.2;
+  const outerW = thickness === 'thin' ? 4.8 : 9.2;
+
+  const greenPaths = [
+    'M 96 0 L 136 270',
+    'M 58 84 L 188 70 L 194 164 L 130 164',
+    'M 192 122 L 228 118',
+    'M 198 238 L 226 238',
+    'M 294 0 L 302 32 L 298 78',
+    'M 300 78 L 366 78 L 366 154',
+    'M 324 78 L 324 98 L 344 98 L 344 128',
+    'M 344 108 L 480 108',
+    'M 342 182 L 394 270',
+    'M 380 232 L 408 220',
+    'M 392 252 L 420 246 L 420 230',
+    'M 424 244 L 444 240',
+    'M 464 226 L 480 226',
+  ];
+
+  const ochrePaths = [
+    'M 194 122 L 194 270',
+    'M 194 164 L 396 164',
+    'M 298 36 L 298 92 L 304 104 L 330 104',
+    'M 338 114 L 338 134 L 396 134 L 460 134',
+    'M 346 0 L 346 32',
+    'M 396 20 L 396 226 L 426 260 L 460 260',
+    'M 396 68 L 480 62',
+    'M 396 18 L 480 10',
+    'M 396 204 L 450 204',
+    'M 382 222 L 426 206',
+  ];
+
+  const terracottaPaths = [
+    'M 314 34 L 394 30',
+    'M 398 164 L 458 172 L 480 172',
+    'M 460 0 L 460 270',
+  ];
+
+  return (
+    <div className="relative w-full h-[184px] sm:h-[208px] rounded-2xl overflow-hidden border border-m3-outline-variant/35 bg-[#ECEFED] shadow-inner select-none">
+      <svg
+        viewBox="0 0 480 270"
+        className="w-full h-full object-cover"
+        preserveAspectRatio="xMidYMid slice"
+      >
+        {/* Map base land blocks */}
+        <rect x="0" y="0" width="480" height="270" fill="#ECEFED" />
+        <rect x="10" y="185" width="76" height="58" rx="8" fill="#DCE8DC" />
+        <rect x="134" y="82" width="54" height="106" rx="4" fill="#D9DCDD" />
+        <rect x="242" y="14" width="48" height="72" rx="6" fill="#E3E8E4" />
+        <rect x="330" y="44" width="60" height="52" rx="6" fill="#E3E8E4" />
+
+        {/* Secondary grey local roads */}
+        <path
+          d="M 196 254 L 240 250 L 240 270"
+          fill="none"
+          stroke="#C9CECC"
+          strokeWidth="5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M 196 254 L 240 250 L 240 270"
+          fill="none"
+          stroke="#FFFFFF"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {/* Diagonal railway / metro tracks */}
+        <path
+          d="M 284 0 C 266 70, 272 150, 326 270"
+          fill="none"
+          stroke="#B9C0BD"
+          strokeWidth="2.5"
+          strokeDasharray="7 5"
+        />
+        <path
+          d="M 294 0 C 276 74, 286 154, 342 270"
+          fill="none"
+          stroke="#C8CECC"
+          strokeWidth="2"
+          strokeDasharray="6 5"
+        />
+
+        {/* White outlines for all bus corridors */}
+        <g fill="none" stroke="#FFFFFF" strokeLinecap="round" strokeLinejoin="round">
+          {greenPaths.map((d, i) => (
+            <path
+              key={`gw-${i}`}
+              d={d}
+              strokeWidth={outerW}
+              style={{ transition: 'stroke-width 0.22s ease' }}
+            />
+          ))}
+          {ochrePaths.map((d, i) => (
+            <path
+              key={`ow-${i}`}
+              d={d}
+              strokeWidth={outerW}
+              style={{ transition: 'stroke-width 0.22s ease' }}
+            />
+          ))}
+          {terracottaPaths.map((d, i) => (
+            <path
+              key={`tw-${i}`}
+              d={d}
+              strokeWidth={outerW}
+              style={{ transition: 'stroke-width 0.22s ease' }}
+            />
+          ))}
+        </g>
+
+        {/* Morandi Green routes (low density) */}
+        <g fill="none" stroke="#5E8271" strokeLinecap="round" strokeLinejoin="round">
+          {greenPaths.map((d, i) => (
+            <path
+              key={`g-${i}`}
+              d={d}
+              strokeWidth={innerW}
+              style={{ transition: 'stroke-width 0.22s ease' }}
+            />
+          ))}
+        </g>
+
+        {/* Morandi Warm Ochre routes (medium density) */}
+        <g fill="none" stroke="#C29B63" strokeLinecap="round" strokeLinejoin="round">
+          {ochrePaths.map((d, i) => (
+            <path
+              key={`o-${i}`}
+              d={d}
+              strokeWidth={innerW}
+              style={{ transition: 'stroke-width 0.22s ease' }}
+            />
+          ))}
+        </g>
+
+        {/* Morandi Dusty Terracotta routes (high density) */}
+        <g fill="none" stroke="#B56666" strokeLinecap="round" strokeLinejoin="round">
+          {terracottaPaths.map((d, i) => (
+            <path
+              key={`t-${i}`}
+              d={d}
+              strokeWidth={innerW}
+              style={{ transition: 'stroke-width 0.22s ease' }}
+            />
+          ))}
+        </g>
+
+        {/* Landmark POI icons & crisp labels */}
+        <g>
+          <circle cx="164" cy="112" r="5.5" fill="#4B89DC" stroke="#FFFFFF" strokeWidth="1.5" />
+          <text
+            x="173"
+            y="110"
+            fontSize="9.5"
+            fontWeight="700"
+            fill="#334155"
+            stroke="#FFFFFF"
+            strokeWidth="2.5"
+            paintOrder="stroke"
+          >
+            北京建筑大学
+          </text>
+          <text
+            x="173"
+            y="121"
+            fontSize="9.5"
+            fontWeight="700"
+            fill="#334155"
+            stroke="#FFFFFF"
+            strokeWidth="2.5"
+            paintOrder="stroke"
+          >
+            大兴校区
+          </text>
+        </g>
+
+        <g>
+          <circle cx="24" cy="216" r="4.5" fill="#52B765" stroke="#FFFFFF" strokeWidth="1.4" />
+          <text
+            x="32"
+            y="219"
+            fontSize="8.5"
+            fontWeight="700"
+            fill="#3F5E48"
+            stroke="#FFFFFF"
+            strokeWidth="2.4"
+            paintOrder="stroke"
+          >
+            黄村城市森林公园
+          </text>
+        </g>
+
+        <g>
+          <circle cx="218" cy="222" r="4.5" fill="#4B89DC" stroke="#FFFFFF" strokeWidth="1.4" />
+          <text
+            x="226"
+            y="220"
+            fontSize="8.5"
+            fontWeight="700"
+            fill="#475569"
+            stroke="#FFFFFF"
+            strokeWidth="2.4"
+            paintOrder="stroke"
+          >
+            大兴第一中学
+          </text>
+          <text
+            x="226"
+            y="230"
+            fontSize="8.5"
+            fontWeight="700"
+            fill="#475569"
+            stroke="#FFFFFF"
+            strokeWidth="2.4"
+            paintOrder="stroke"
+          >
+            西校区
+          </text>
+        </g>
+      </svg>
+
+      {/* Subtle corner density legend pill */}
+      <div className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-white/85 backdrop-blur-sm border border-m3-outline-variant/30 shadow-xs flex items-center gap-2 text-[10px] font-bold text-slate-600">
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-[#5E8271]" />
+          低
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-[#C29B63]" />
+          中
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-[#B56666]" />
+          高
+        </span>
+      </div>
+    </div>
+  );
+};
+
+interface TourStepInfo {
+  title: string;
+  desc: string;
+  icon: React.ReactNode;
+}
+
+const TOUR_STEPS: TourStepInfo[] = [
+  {
+    title: '框选统计区域',
+    desc: '在检索出线网后开启框选模式，可拖拽框选任意一片站点，批量查看区域内的公交线路汇总与通达度。',
+    icon: <BoxSelect className="w-4 h-4 text-m3-primary" />,
+  },
+  {
+    title: '清空当前画布',
+    desc: '一键清除地图上已绘制的所有公交线网、站点标记与选中面板，还原清爽画布。',
+    icon: <X className="w-4 h-4 text-[#B56666]" />,
+  },
+  {
+    title: '检索公交线网',
+    desc: '核心按钮！放大地图到街区比例后点击它，即可抓取当前区域的所有公交站点并绘制密度叠加线路网。',
+    icon: <Compass className="w-4 h-4 text-m3-primary" />,
+  },
+  {
+    title: '切换底图样式',
+    desc: '点击在「正常底图 → 卫星底图 → 空白底图」间循环切换，选择空白底图可纯粹欣赏城市线网结构。',
+    icon: <MapIcon className="w-4 h-4 text-m3-primary" />,
+  },
+  {
+    title: '切换站点显示',
+    desc: '点击在「显示全部站点 → 仅终点站 → 隐藏站点」间切换，快速聚焦各大枢纽总站或隐藏圆点。',
+    icon: <MapPin className="w-4 h-4 text-m3-primary" />,
+  },
+];
+
+export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
+  step,
+  setStep,
+  lineThickness,
+  setLineThickness,
+  enableLineCache,
+  onSelectLineCache,
+  useCustomApiKey,
+  onSelectCustomApiKey,
+  customApiKey,
+  setCustomApiKey,
+  customApiSecurityCode,
+  setCustomApiSecurityCode,
+  onFinishOnboarding,
+  barButtonRefs,
+}) => {
+  const [confirmSkipAll, setConfirmSkipAll] = useState(false);
+  const [apiErrorHint, setApiErrorHint] = useState('');
+  const [bubblePos, setBubblePos] = useState<{
+    left: number;
+    bottom: number;
+    arrowLeft: number;
+    width: number;
+  } | null>(null);
+
+  useEffect(() => {
+    setConfirmSkipAll(false);
+    setApiErrorHint('');
+  }, [step]);
+
+  useEffect(() => {
+    if (step < 6 || step > 10) {
+      setBubblePos(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      const idx = step - 6;
+      const el = barButtonRefs.current[idx];
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const bubbleWidth = Math.min(288, vw - 24);
+      const centerX = rect.left + rect.width / 2;
+      let left = centerX - bubbleWidth / 2;
+      left = Math.max(12, Math.min(vw - bubbleWidth - 12, left));
+      const arrowLeft = Math.max(20, Math.min(bubbleWidth - 20, centerX - left));
+      const bottom = window.innerHeight - rect.top + 18;
+      setBubblePos({ left, bottom, arrowLeft, width: bubbleWidth });
+    };
+
+    updatePosition();
+    const timer = setTimeout(updatePosition, 80);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [step, barButtonRefs]);
+
+  if (step === 0) return null;
+
+  // Step 6 ~ 10: Bottom bar bubble tour
+  if (step >= 6 && step <= 10) {
+    const tourIdx = step - 6;
+    const currentTour = TOUR_STEPS[tourIdx];
+    const isLastTour = tourIdx === TOUR_STEPS.length - 1;
+
+    return (
+      <>
+        <div
+          className="fixed inset-0 z-[120] bg-slate-900/25 backdrop-blur-[1px] pointer-events-auto"
+          onClick={() => {
+            if (isLastTour) {
+              onFinishOnboarding();
+            } else {
+              setStep(step + 1);
+            }
+          }}
+        />
+        <AnimatePresence mode="wait">
+          {bubblePos && (
+            <motion.div
+              key={step}
+              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 6, scale: 0.96 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 260 }}
+              style={{
+                left: bubblePos.left,
+                bottom: bubblePos.bottom,
+                width: bubblePos.width,
+              }}
+              className="fixed z-[135] pointer-events-auto"
+            >
+              <div className="relative bg-m3-surface border border-m3-primary/35 rounded-2xl p-4 shadow-[0_14px_36px_rgba(28,47,39,0.25)]">
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-xl bg-m3-primary-container flex items-center justify-center shrink-0">
+                      {currentTour.icon}
+                    </div>
+                    <h4 className="text-sm font-black text-slate-900">{currentTour.title}</h4>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-m3-surface-container text-[10px] font-black text-m3-primary shrink-0">
+                    {tourIdx + 1} / {TOUR_STEPS.length}
+                  </span>
+                </div>
+                <p className="text-xs font-medium text-slate-600 leading-relaxed mb-3">
+                  {currentTour.desc}
+                </p>
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={onFinishOnboarding}
+                    className="text-[11px] font-bold text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                  >
+                    跳过指引
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isLastTour) {
+                        onFinishOnboarding();
+                      } else {
+                        setStep(step + 1);
+                      }
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-black shadow-sm hover:opacity-95 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>{isLastTour ? '完成引导' : '下一步'}</span>
+                    {isLastTour ? <Check className="w-3.5 h-3.5" /> : <ArrowRight className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+
+                {/* Bubble downward pointer */}
+                <div
+                  style={{ left: bubblePos.arrowLeft - 8 }}
+                  className="absolute -bottom-2 w-4 h-4 bg-m3-surface border-r border-b border-m3-primary/35 rotate-45"
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </>
+    );
+  }
+
+  // Step 1 ~ 5: Onboarding Wizard Cards
+  const handleNext = () => {
+    if (step === 4 && useCustomApiKey && customApiKey.trim().length < 5) {
+      setApiErrorHint('请填写有效的高德 Web端 API Key，或选择使用公共API');
+      return;
+    }
+    setStep(step + 1);
+  };
+
+  return (
+    <div className="fixed inset-0 z-[130] bg-slate-900/45 backdrop-blur-sm flex items-center justify-center p-4 pointer-events-auto">
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={step}
+          initial={{ opacity: 0, scale: 0.94, y: 14 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.94, y: -10 }}
+          transition={{ type: 'spring', damping: 24, stiffness: 240 }}
+          className="w-[460px] max-w-[94vw] bg-m3-surface border border-m3-outline-variant/40 rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
+        >
+          {/* Top progress bar */}
+          <div className="px-6 pt-5 pb-1 flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <div
+                  key={n}
+                  className={`h-1.5 rounded-full transition-all duration-300 ${
+                    n === step
+                      ? 'w-6 bg-m3-primary'
+                      : n < step
+                      ? 'w-2.5 bg-m3-primary/45'
+                      : 'w-2.5 bg-m3-surface-container-highest'
+                  }`}
+                />
+              ))}
+            </div>
+            <span className="text-[10px] font-black text-slate-400 tracking-wider">
+              {step} / 5
+            </span>
+          </div>
+
+          {/* Step Content */}
+          <div className="px-6 py-4 flex flex-col gap-4">
+            {step === 1 && (
+              <>
+                <AbstractDaxingBusMapPreview thickness="thick" />
+                <div className="space-y-1.5 pt-1">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[10px] font-black">
+                    <Sparkles className="w-3 h-3" />
+                    busline 5.1
+                  </div>
+                  <h2 className="text-xl font-black text-slate-900 tracking-tight">
+                    欢迎使用巴士线路图
+                  </h2>
+                  <p className="text-xs font-medium text-slate-500 leading-relaxed">
+                    探索城市公交线网分布、站点通达度与线路叠加密度的轻量级可视化工具。
+                  </p>
+                </div>
+              </>
+            )}
+
+            {step === 2 && (
+              <>
+                <AbstractDaxingBusMapPreview thickness={lineThickness} />
+                <div className="space-y-2.5">
+                  <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                    您愿意选择何种粗细的线路？
+                  </h2>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setLineThickness('thick')}
+                      className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer ${
+                        lineThickness === 'thick'
+                          ? 'bg-m3-primary-container/50 border-m3-primary shadow-sm'
+                          : 'bg-m3-surface-container-low border-m3-outline-variant/30 hover:border-m3-outline'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-black text-slate-900">粗线条</span>
+                        <div className="w-8 h-2 rounded-full bg-[#5E8271]" />
+                      </div>
+                      <span className="text-[10px] font-medium text-slate-500 leading-tight block">
+                        线条饱满醒目，适合整体线网密度俯瞰
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLineThickness('thin')}
+                      className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer ${
+                        lineThickness === 'thin'
+                          ? 'bg-m3-primary-container/50 border-m3-primary shadow-sm'
+                          : 'bg-m3-surface-container-low border-m3-outline-variant/30 hover:border-m3-outline'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-black text-slate-900">细线条</span>
+                        <div className="w-8 h-[3px] rounded-full bg-[#5E8271]" />
+                      </div>
+                      <span className="text-[10px] font-medium text-slate-500 leading-tight block">
+                        线条纤细利落，适合密集街区细节辨识
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {step === 3 && (
+              <div className="space-y-3 py-1">
+                <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                  您愿意快速检索吗？
+                </h2>
+                <div className="space-y-2.5">
+                  <button
+                    type="button"
+                    onClick={() => onSelectLineCache(true)}
+                    className={`w-full p-3.5 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-start gap-3 ${
+                      enableLineCache
+                        ? 'bg-m3-primary-container/50 border-m3-primary shadow-sm'
+                        : 'bg-m3-surface-container-low border-m3-outline-variant/30 hover:border-m3-outline'
+                    }`}
+                  >
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${enableLineCache ? 'bg-m3-primary text-m3-on-primary' : 'bg-m3-surface-container text-slate-600'}`}>
+                      <Zap className="w-4.5 h-4.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-black text-slate-900">快速检索</span>
+                        {enableLineCache && (
+                          <span className="px-2 py-0.5 rounded-full bg-m3-primary text-m3-on-primary text-[9px] font-black">
+                            已开启线路缓存
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] font-medium text-slate-500 mt-1 leading-relaxed">
+                        检索后缓存线路并加速下次检索
+                      </p>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onSelectLineCache(false)}
+                    className={`w-full p-3.5 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-start gap-3 ${
+                      !enableLineCache
+                        ? 'bg-m3-primary-container/50 border-m3-primary shadow-sm'
+                        : 'bg-m3-surface-container-low border-m3-outline-variant/30 hover:border-m3-outline'
+                    }`}
+                  >
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${!enableLineCache ? 'bg-m3-primary text-m3-on-primary' : 'bg-m3-surface-container text-slate-600'}`}>
+                      <RefreshCw className="w-4.5 h-4.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-black text-slate-900 block">实时检索</span>
+                      <p className="text-[11px] font-medium text-slate-500 mt-1 leading-relaxed">
+                        每次检索均调用API以获取实时线路数据
+                      </p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {step === 4 && (
+              <div className="space-y-3 py-1">
+                <div className="space-y-1">
+                  <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                    您是否愿意提供自定义的API以检索？
+                  </h2>
+                  <p className="text-[11px] font-medium text-slate-500 leading-relaxed">
+                    使用提供的高德API以检索，而不是公共API，公共的API在当月限额达到后，巴士线路图不可用
+                  </p>
+                </div>
+
+                {/* Toggle card matching Settings style */}
+                <div className="p-3.5 rounded-2xl bg-m3-surface-container-low border border-m3-outline-variant/30 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-m3-primary-container text-m3-on-primary-container flex items-center justify-center shrink-0">
+                        <KeyRound className="w-4 h-4" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-xs font-black text-slate-800">使用自定义高德API</span>
+                        <span className="text-[10px] font-medium text-slate-400">
+                          {useCustomApiKey ? '已启用专属 API（引导结束后刷新生效）' : '当前使用默认公共 API'}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setApiErrorHint('');
+                        onSelectCustomApiKey(!useCustomApiKey);
+                      }}
+                      className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 border-2 shrink-0 cursor-pointer ${
+                        useCustomApiKey
+                          ? 'bg-m3-primary border-m3-primary'
+                          : 'bg-m3-surface-container-highest border-m3-outline'
+                      }`}
+                    >
+                      <motion.div
+                        animate={{ x: useCustomApiKey ? 22 : 0 }}
+                        transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+                        className={`rounded-full shadow-sm transition-colors duration-200 ${
+                          useCustomApiKey
+                            ? 'w-4.5 h-4.5 bg-m3-on-primary'
+                            : 'w-3.5 h-3.5 bg-m3-outline'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {useCustomApiKey && (
+                    <div className="space-y-2.5 pt-2 border-t border-m3-outline-variant/20">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                          高德 Web端 API Key (VITE_AMAP_KEY)
+                        </label>
+                        <input
+                          type="text"
+                          value={customApiKey}
+                          onChange={(e) => {
+                            setApiErrorHint('');
+                            setCustomApiKey(e.target.value);
+                          }}
+                          placeholder="请输入高德API Key"
+                          className="px-3.5 py-2 bg-m3-surface border border-m3-outline-variant text-slate-800 rounded-xl outline-none text-xs font-bold focus:border-m3-primary transition-all w-full"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                          高德安全密钥 Security Code (VITE_AMAP_SECURITY_CODE)
+                        </label>
+                        <input
+                          type="text"
+                          value={customApiSecurityCode}
+                          onChange={(e) => setCustomApiSecurityCode(e.target.value)}
+                          placeholder="请输入高德API Security Code"
+                          className="px-3.5 py-2 bg-m3-surface border border-m3-outline-variant text-slate-800 rounded-xl outline-none text-xs font-bold focus:border-m3-primary transition-all w-full"
+                        />
+                      </div>
+                      {apiErrorHint ? (
+                        <p className="text-[10px] font-bold text-red-500">{apiErrorHint}</p>
+                      ) : (
+                        <p className="text-[10px] font-medium text-slate-400">
+                          填写数据将自动同步保存，待全部引导结束后自动刷新页面生效。
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {step === 5 && (
+              <div className="py-5 flex flex-col items-center text-center gap-3">
+                <div className="w-14 h-14 rounded-2xl bg-m3-primary-container text-m3-on-primary-container flex items-center justify-center shadow-sm">
+                  <Compass className="w-7 h-7" />
+                </div>
+                <h2 className="text-xl font-black text-slate-900 tracking-tight">
+                  我们即将完成最后一步
+                </h2>
+                <p className="text-xs font-medium text-slate-500 leading-relaxed max-w-[320px]">
+                  您是否需要我们指引你如何使用巴士线路图？
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Footer Action Bar */}
+          <div className="px-6 pb-5 pt-2 flex items-center justify-between gap-3">
+            {/* Left button: Skip on step 1 (with confirmation) or step 5 */}
+            <div>
+              {step === 1 && !confirmSkipAll && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmSkipAll(true)}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-500 hover:text-slate-800 hover:bg-m3-surface-container transition-all cursor-pointer"
+                >
+                  跳过
+                </button>
+              )}
+              {step === 1 && confirmSkipAll && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={onFinishOnboarding}
+                    className="px-3 py-1.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-xs font-black transition-all cursor-pointer"
+                  >
+                    确认跳过全部
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmSkipAll(false)}
+                    className="px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-500 hover:bg-m3-surface-container cursor-pointer"
+                  >
+                    取消
+                  </button>
+                </div>
+              )}
+              {step === 5 && (
+                <button
+                  type="button"
+                  onClick={onFinishOnboarding}
+                  className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-500 hover:text-slate-800 hover:bg-m3-surface-container transition-all cursor-pointer"
+                >
+                  跳过
+                </button>
+              )}
+            </div>
+
+            {/* Right prominent arrow button */}
+            <motion.button
+              type="button"
+              onClick={handleNext}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.94 }}
+              className="w-12 h-12 rounded-2xl bg-m3-primary text-m3-on-primary shadow-lg shadow-m3-primary/30 hover:opacity-95 flex items-center justify-center transition-all cursor-pointer ml-auto"
+              title="下一步"
+            >
+              <ArrowRight className="w-5.5 h-5.5" />
+            </motion.button>
+          </div>
+        </motion.div>
+      </AnimatePresence>
+    </div>
+  );
+};

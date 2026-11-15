@@ -1,7 +1,20 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { BusStop, BusLine, LineSegment } from './types';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Shield } from 'lucide-react';
+import {
+  APP_LINE_CACHE_ENABLED_KEY,
+  GeoBox,
+  LineCacheStats,
+  checkAndPurgeIfMonthChanged,
+  clearAllLineCache,
+  getCityCacheData,
+  getLineCacheStats,
+  isSearchScopeCached,
+  saveCitySearchToCache,
+  saveLinesToCache,
+} from './utils/lineCache';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
+import { OnboardingGuide } from './components/OnboardingGuide';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 
@@ -106,6 +119,21 @@ const initialAmapConfig = getInitialAmapConfig();
 const AMAP_KEY = initialAmapConfig.key;
 const SECURITY_CODE = initialAmapConfig.securityCode;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const APP_VERSION = '5.1';
+const APP_LAST_VERSION_KEY = 'app_last_visited_version';
+
+const compareVersions = (v1: string, v2: string): number => {
+  const p1 = v1.split('.').map((n) => parseInt(n, 10) || 0);
+  const p2 = v2.split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(p1.length, p2.length);
+  for (let i = 0; i < len; i++) {
+    const a = p1[i] || 0;
+    const b = p2[i] || 0;
+    if (a > b) return 1;
+    if (a < b) return -1;
+  }
+  return 0;
+};
 
 if (typeof window !== 'undefined') {
   (window as any)._AMapSecurityConfig = {
@@ -266,11 +294,11 @@ export default function App() {
   // Minigame States & Logic
   const [showMinigameModal, setShowMinigameModal] = useState(false);
   const [gameMode, setGameMode] = useState<'line' | 'station' | 'city' | 'county' | null>(null);
-  const [gameDifficulty, setGameDifficulty] = useState<'easy' | 'medium' | 'hard'>('easy');
+  const [gameDifficulty, setGameDifficulty] = useState<'easy' | 'medium' | 'hard' | 'hell'>('easy');
   const [gameCity, setGameCity] = useState('北京市');
   const [gameProvince, setGameProvince] = useState('广东省');
   const [gameCountyProvince, setGameCountyProvince] = useState('浙江省');
-  const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover'>('menu');
+  const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover' | 'review'>('menu');
   const [gameLoading, setGameLoading] = useState(false);
   const [gameLoadingText, setGameLoadingText] = useState('正在随机检索题目并绘制线网地图，请稍候...');
   const [gameScore, setGameScore] = useState(0);
@@ -283,6 +311,29 @@ export default function App() {
   } | null>(null);
   const [gameUserInput, setGameUserInput] = useState('');
   const [gameFeedback, setGameFeedback] = useState<{ correct: boolean; msg: string } | null>(null);
+  type GameHistoryItem = {
+    questionNum: number;
+    mode: 'line' | 'station' | 'city' | 'county';
+    difficulty: 'easy' | 'medium' | 'hard' | 'hell';
+    targetCity: string;
+    province?: string;
+    promptText: string;
+    correctAnswer: string;
+    userAnswer: string;
+    isCorrect: boolean;
+    lineInfos?: any[];
+    networkPaths?: Array<[number, number][]>;
+    networkStops?: Array<{ name?: string; lngLat: [number, number] }>;
+    targetPoint?: { name: string; lngLat: [number, number] };
+    fallbackCenter?: [number, number];
+  };
+  const [gameHistory, setGameHistory] = useState<GameHistoryItem[]>([]);
+  const currentGameQuestionRef = useRef<Omit<GameHistoryItem, 'userAnswer' | 'isCorrect'> | null>(null);
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [reviewShowBasemap, setReviewShowBasemap] = useState(true);
+  const [reviewShowStops, setReviewShowStops] = useState(true);
+  const [reviewAutoPlay, setReviewAutoPlay] = useState(false);
+  const [reviewHoveredStop, setReviewHoveredStop] = useState<string | null>(null);
   const prevMapModeBeforeGameRef = useRef<'normal' | 'satellite' | 'blank' | null>(null);
   const gameSessionIdRef = useRef(0);
   const isMinigameActiveRef = useRef(false);
@@ -290,22 +341,46 @@ export default function App() {
   const [confirmQuitGame, setConfirmQuitGame] = useState(false);
   const [bestRecords, setBestRecords] = useState(() => {
     const defaultRecords = {
-      line: { easy: 0, medium: 0, hard: 0 },
-      station: { easy: 0, medium: 0, hard: 0 },
+      line: { easy: 0, medium: 0, hard: 0, hell: 0 },
+      station: { easy: 0, medium: 0, hard: 0, hell: 0 },
       city: { hard: 0 },
-      county: { hard: 0 }
+      county: { hard: 0 },
+      migratedHell: true
     };
     try {
       const saved = localStorage.getItem('busline_minigame_records');
       if (!saved) return defaultRecords;
       const parsed = JSON.parse(saved);
       const migratedCounty = Math.max(parsed.county?.hard || 0, parsed.city?.county || 0);
-      return {
-        line: { ...defaultRecords.line, ...(parsed.line || {}) },
-        station: { ...defaultRecords.station, ...(parsed.station || {}) },
-        city: { hard: parsed.city?.hard || 0 },
-        county: { hard: migratedCounty }
+      const alreadyMigratedHell = parsed.migratedHell === true;
+      const migrateModeRecords = (rec: any) => {
+        if (!rec) return { easy: 0, medium: 0, hard: 0, hell: 0 };
+        if (!alreadyMigratedHell) {
+          return {
+            easy: rec.easy || 0,
+            medium: rec.medium || 0,
+            hard: 0,
+            hell: Math.max(rec.hell || 0, rec.hard || 0)
+          };
+        }
+        return {
+          easy: rec.easy || 0,
+          medium: rec.medium || 0,
+          hard: rec.hard || 0,
+          hell: rec.hell || 0
+        };
       };
+      const migrated = {
+        line: migrateModeRecords(parsed.line),
+        station: migrateModeRecords(parsed.station),
+        city: { hard: parsed.city?.hard || 0 },
+        county: { hard: migratedCounty },
+        migratedHell: true
+      };
+      if (!alreadyMigratedHell) {
+        localStorage.setItem('busline_minigame_records', JSON.stringify(migrated));
+      }
+      return migrated;
     } catch (e) {
       return defaultRecords;
     }
@@ -362,7 +437,7 @@ export default function App() {
 
   const linesPoolMap: Record<string, string[]> = {
     '北京市': ['1路', '2路', '9路', '特2路', '运通101路', '专1路', '300路内环', '368外环', '44路内环', '52路', '387路', '671路', 'X107路', '840路', '兴33路'],
-    '上海市': ['1路', '2路', '15路', '20路', '37路', '71路', '机场专线', '隧道一线', '42路', '49路'],
+    '上海市': ['1路', '2路', '15路', '20路', '37路', '71路', '18路', '机场专线', '隧道一线', '42路', '49路'],
     '广州市': ['1路', '3路', '14路', '24路', '30路', '62路', '107路', 'B2路', '2路', '5路'],
     '深圳市': ['1路', '11路', '12路', '14路', '19路', 'M191路', 'M200路', '2路', '5路'],
     '成都市': ['1路', '2路', '4路', '5路', '6路', '11路', '27路', '34路', '8路'],
@@ -406,8 +481,25 @@ export default function App() {
     if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
   };
 
+  const clearMapStateForMinigame = () => {
+    handleClear();
+    if (drawingGroupRef.current) {
+      try { drawingGroupRef.current.clearOverlays(); } catch {}
+    }
+    if (locationMarkerRef.current) {
+      try {
+        locationMarkerRef.current.setMap(null);
+        if (mapRef.current) mapRef.current.remove(locationMarkerRef.current);
+      } catch {}
+      locationMarkerRef.current = null;
+    }
+    setIsDrawingMode(false);
+    setStationConnectivityCard(null);
+  };
+
   const exitMinigameToMap = () => {
     gameSessionIdRef.current++;
+    isMinigameActiveRef.current = false;
     setConfirmQuitGame(false);
     setShowMinigameModal(false);
     setGameState('menu');
@@ -415,23 +507,54 @@ export default function App() {
     setGameQuestionData(null);
     setGameFeedback(null);
     setGameUserInput('');
+    setReviewAutoPlay(false);
+    setReviewHoveredStop(null);
     restoreMapAfterMinigame();
   };
 
   const returnToMinigameMenu = () => {
     gameSessionIdRef.current++;
+    isMinigameActiveRef.current = false;
     setConfirmQuitGame(false);
     setGameState('menu');
     setGameLoading(false);
     setGameQuestionData(null);
     setGameFeedback(null);
     setGameUserInput('');
+    setReviewAutoPlay(false);
+    setReviewHoveredStop(null);
     restoreMapAfterMinigame();
   };
 
+  const startMinigameReview = () => {
+    if (gameHistory.length === 0) return;
+    isMinigameActiveRef.current = true;
+    clearMapStateForMinigame();
+    if (!prevMapModeBeforeGameRef.current) {
+      prevMapModeBeforeGameRef.current = mapMode;
+    }
+    setConfirmQuitGame(false);
+    setReviewIndex(0);
+    setReviewAutoPlay(false);
+    setReviewHoveredStop(null);
+    setGameState('review');
+  };
+
   useEffect(() => {
-    isMinigameActiveRef.current = showMinigameModal && gameState === 'playing';
+    isMinigameActiveRef.current = showMinigameModal && (gameState === 'playing' || gameState === 'review');
   }, [showMinigameModal, gameState]);
+
+  useEffect(() => {
+    if (!showMinigameModal || gameState !== 'review' || !reviewAutoPlay) return;
+    if (reviewIndex >= gameHistory.length - 1) {
+      setReviewAutoPlay(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setReviewIndex(idx => Math.min(gameHistory.length - 1, idx + 1));
+    }, 3500);
+    return () => clearTimeout(timer);
+  }, [showMinigameModal, gameState, reviewAutoPlay, reviewIndex, gameHistory.length]);
 
   const fetchProvinceDivisions = (
     AMap: any,
@@ -542,24 +665,17 @@ export default function App() {
 
   const startMinigame = (
     mode: 'line' | 'station' | 'city' | 'county',
-    diff: 'easy' | 'medium' | 'hard',
+    diff: 'easy' | 'medium' | 'hard' | 'hell',
     city: string,
     province?: string
   ) => {
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
 
+    isMinigameActiveRef.current = true;
     if (!prevMapModeBeforeGameRef.current) {
       prevMapModeBeforeGameRef.current = mapMode;
     }
-    setActiveBusLine(null);
-    setSelectedStop(null);
-    setSelectedSegmentLines(null);
-    setStationConnectivityCard(null);
-    setSelectionPos(null);
-    activeBusLinePolylineRef.current = null;
-    roadOverlaysRef.current = [];
-    if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
-    if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
+    clearMapStateForMinigame();
 
     setGameMode(mode);
     setGameDifficulty(diff);
@@ -570,8 +686,13 @@ export default function App() {
     setGameFeedback(null);
     setGameUserInput('');
     setGameQuestionData(null);
+    setGameHistory([]);
+    currentGameQuestionRef.current = null;
+    setReviewIndex(0);
+    setReviewAutoPlay(false);
+    setReviewHoveredStop(null);
 
-    if (mode === 'city' || mode === 'county' || diff === 'hard' || diff === 'medium') {
+    if (mode === 'city' || mode === 'county' || diff === 'hell' || diff === 'hard' || diff === 'medium') {
       setMapMode('blank');
     } else {
       setMapMode('normal');
@@ -582,7 +703,7 @@ export default function App() {
 
   const generateQuestion = async (
     mode: 'line' | 'station' | 'city' | 'county',
-    diff: 'easy' | 'medium' | 'hard',
+    diff: 'easy' | 'medium' | 'hard' | 'hell',
     city: string,
     qNum: number,
     prevAnswer?: string,
@@ -607,6 +728,12 @@ export default function App() {
     setSelectedStop(null);
     setSelectedSegmentLines(null);
     setStationConnectivityCard(null);
+    setSelectionPos(null);
+    activeRawMarkersRef.current = [];
+    roadStopMarkersRef.current = [];
+    roadOverlaysRef.current = [];
+    allMapStopsRef.current.clear();
+    roadStopsDataRef.current.clear();
     if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
     if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
 
@@ -625,11 +752,11 @@ export default function App() {
       return base.replace(/\(.*?\)|（.*?）/g, '').trim();
     };
 
-    const extractLineNames = (addr: string): string[] => {
+    const extractLineNames = (addr: string, applyBlockedFilter = false): string[] => {
       return (addr || '')
         .split(';')
         .map(s => cleanGameLineName(s.trim()))
-        .filter(n => n && n.length >= 2 && !n.includes('地铁') && !isLineNameBlockedRef(n));
+        .filter(n => n && n.length >= 2 && !n.includes('地铁') && (!applyBlockedFilter || !isLineNameBlockedRef(n)));
     };
 
     const searchStopsInCity = (targetCityName: string, pageIndex: number): Promise<any[]> => {
@@ -685,7 +812,7 @@ export default function App() {
       });
     };
 
-    const searchLineInfoPromise = (targetCityName: string, keyword: string): Promise<any[]> => {
+    const searchLineInfoPromise = (targetCityName: string, keyword: string, applyBlockedFilter = false): Promise<any[]> => {
       return new Promise((resolve) => {
         const timer = setTimeout(() => resolve([]), 5000);
         try {
@@ -697,7 +824,10 @@ export default function App() {
           ls.search(keyword, (status: string, result: any) => {
             clearTimeout(timer);
             if (status === 'complete' && result?.lineInfo?.length > 0) {
-              resolve(result.lineInfo.filter((l: any) => l?.path?.length > 1 && !isLineNameBlockedRef(l.name)));
+              resolve(result.lineInfo.filter((l: any) =>
+                l?.path?.length > 1 &&
+                (!applyBlockedFilter || !isLineNameBlockedRef(l.name))
+              ));
             } else {
               resolve([]);
             }
@@ -743,7 +873,7 @@ export default function App() {
         targetCity = provinceDivs.cities[0] || activeProvince;
       } else if (mode === 'city') {
         targetCity = candidateCities[Math.floor(Math.random() * candidateCities.length)];
-      } else if (diff === 'hard') {
+      } else if (diff === 'hell') {
         provinceDivs = await fetchProvinceDivisions(AMap, activeProvince);
         if (gameSessionIdRef.current !== sessionId) return;
         const provCities = provinceDivs.cities.length > 0 ? provinceDivs.cities : [activeProvince];
@@ -758,25 +888,26 @@ export default function App() {
         }
 
         const candidatePoolSet = new Set<string>();
-        pois.forEach(p => extractLineNames(p.address).forEach(n => candidatePoolSet.add(n)));
-        const fallbackPool = linesPoolMap[targetCity] || linesPoolMap['default'];
+        pois.forEach(p => extractLineNames(p.address, true).forEach(n => candidatePoolSet.add(n)));
+        const rawFallback = linesPoolMap[targetCity] || linesPoolMap['default'];
+        const fallbackPool = rawFallback.filter(n => !isLineNameBlockedRef(n));
         let candidateLines = shuffleArr(Array.from(candidatePoolSet));
         if (candidateLines.length === 0) {
           candidateLines = shuffleArr(fallbackPool);
         }
 
         let chosenLine: any = null;
-        for (const cand of candidateLines.slice(0, 8)) {
+        for (const cand of candidateLines.slice(0, 12)) {
           if (gameSessionIdRef.current !== sessionId) return;
-          const infos = await searchLineInfoPromise(targetCity, cand);
+          const infos = await searchLineInfoPromise(targetCity, cand, true);
           if (infos.length > 0) {
             chosenLine = infos[0];
             break;
           }
         }
         if (!chosenLine) {
-          for (const fb of shuffleArr(fallbackPool).slice(0, 5)) {
-            const infos = await searchLineInfoPromise(targetCity, fb);
+          for (const fb of shuffleArr(fallbackPool).slice(0, 6)) {
+            const infos = await searchLineInfoPromise(targetCity, fb, true);
             if (infos.length > 0) {
               chosenLine = infos[0];
               break;
@@ -788,10 +919,76 @@ export default function App() {
 
         const actualLineName = chosenLine
           ? cleanGameLineName(chosenLine.name)
-          : (candidateLines[0] || fallbackPool[0]);
+          : (candidateLines[0] || fallbackPool[0] || '');
+        if (!actualLineName) {
+          setGameQuestionData(null);
+          return;
+        }
 
         if (chosenLine) {
           renderBusLine(chosenLine, AMap, mapInstance, false, false, false);
+          const validStops = (chosenLine.via_stops || []).filter((st: any) => st?.location);
+          if ((diff === 'easy' || diff === 'medium') && validStops.length > 2 && markerGroupRef.current) {
+            const midStops = validStops.slice(1, validStops.length - 1);
+            const stopMarkers = midStops.map((st: any) => new AMap.CircleMarker({
+              center: [st.location.lng, st.location.lat],
+              radius: 5,
+              fillColor: '#3b82f6',
+              strokeColor: '#ffffff',
+              strokeWeight: 1.5,
+              bubble: true,
+              zIndex: 65
+            }));
+            if (stopMarkers.length > 0) {
+              markerGroupRef.current.addOverlays(stopMarkers);
+            }
+          }
+          // 看图猜线路模式下，所有难度下均在线路上显示始末站圆点（始发站绿色，终点站红色，不显示站名）
+          if (markerGroupRef.current) {
+            const linePath = (chosenLine.path || []).map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat] as [number, number]);
+            const startPos: [number, number] | null = validStops.length > 0
+              ? [validStops[0].location.lng, validStops[0].location.lat]
+              : (linePath.length > 0 ? linePath[0] : null);
+            const endPos: [number, number] | null = validStops.length > 1
+              ? [validStops[validStops.length - 1].location.lng, validStops[validStops.length - 1].location.lat]
+              : (linePath.length > 1 ? linePath[linePath.length - 1] : null);
+
+            const isLoopOverlap = !!(
+              startPos &&
+              endPos &&
+              Math.abs(startPos[0] - endPos[0]) < 1e-4 &&
+              Math.abs(startPos[1] - endPos[1]) < 1e-4
+            );
+
+            const terminalMarkers: any[] = [];
+            if (startPos) {
+              terminalMarkers.push(new AMap.CircleMarker({
+                center: startPos,
+                radius: isLoopOverlap ? 9.5 : 7.5,
+                fillColor: '#16a34a',
+                fillOpacity: 1,
+                strokeColor: '#ffffff',
+                strokeWeight: 2.2,
+                bubble: true,
+                zIndex: 90
+              }));
+            }
+            if (endPos) {
+              terminalMarkers.push(new AMap.CircleMarker({
+                center: endPos,
+                radius: isLoopOverlap ? 5.5 : 7.5,
+                fillColor: '#ef4444',
+                fillOpacity: 1,
+                strokeColor: '#ffffff',
+                strokeWeight: 2,
+                bubble: true,
+                zIndex: 92
+              }));
+            }
+            if (terminalMarkers.length > 0) {
+              markerGroupRef.current.addOverlays(terminalMarkers);
+            }
+          }
           const overlays = lineGroupRef.current?.getOverlays?.() || [];
           if (overlays.length > 0) {
             mapInstance.setFitView(overlays, false, [48, 150, 36, 36]);
@@ -809,27 +1006,38 @@ export default function App() {
             const midStop = chosenLine.via_stops[Math.floor(chosenLine.via_stops.length / 2)];
             if (midStop?.location) {
               const nearPois = await searchNearbyStops(targetCity, [midStop.location.lng, midStop.location.lat], 1500);
-              nearPois.forEach(p => extractLineNames(p.address).forEach(n => nearbySet.add(n)));
+              nearPois.forEach(p => extractLineNames(p.address, true).forEach(n => nearbySet.add(n)));
             }
           }
-          pois.forEach(p => extractLineNames(p.address).forEach(n => nearbySet.add(n)));
+          pois.forEach(p => extractLineNames(p.address, true).forEach(n => nearbySet.add(n)));
           fallbackPool.forEach(n => nearbySet.add(n));
 
           const distractors = shuffleArr(
-            Array.from(nearbySet).filter(n => n !== actualLineName && baseKey(n) !== actualBase)
+            Array.from(nearbySet).filter(n => n !== actualLineName && baseKey(n) !== actualBase && !isLineNameBlockedRef(n))
           ).slice(0, 3);
 
           options = shuffleArr([actualLineName, ...distractors]);
         }
 
         if (gameSessionIdRef.current !== sessionId) return;
+        const linePromptText = diff === 'hell'
+          ? '请根据地图上的公交线路走向，猜一猜这是哪条线路？'
+          : `请根据地图上的公交线路走向（城市：${targetCity}），猜一猜这是哪条线路？`;
+        currentGameQuestionRef.current = {
+          questionNum: qNum,
+          mode,
+          difficulty: diff,
+          targetCity,
+          province: diff === 'hell' ? activeProvince : undefined,
+          promptText: linePromptText,
+          correctAnswer: actualLineName,
+          lineInfos: chosenLine ? [chosenLine] : []
+        };
         setGameQuestionData({
           correctAnswer: actualLineName,
           options,
           isFillIn,
-          promptText: diff === 'hard'
-            ? '请根据地图上的公交线路走向，猜一猜这是哪条线路？'
-            : `请根据地图上的公交线路走向（城市：${targetCity}），猜一猜这是哪条线路？`
+          promptText: linePromptText
         });
       } else if (mode === 'station') {
         const randPage = Math.floor(Math.random() * 6) + 1;
@@ -863,7 +1071,7 @@ export default function App() {
             stopLngLat = [stInfo.location.lng, stInfo.location.lat];
             (stInfo.buslines || []).forEach((bl: any) => {
               const nm = cleanGameLineName(bl.name || '');
-              if (nm && !isLineNameBlockedRef(nm)) lineNamesSet.add(nm);
+              if (nm) lineNamesSet.add(nm);
             });
           }
         }
@@ -877,7 +1085,7 @@ export default function App() {
             if (details?.lines) {
               details.lines.forEach((l: string) => {
                 const nm = cleanGameLineName(l);
-                if (nm && !isLineNameBlockedRef(nm)) lineNamesSet.add(nm);
+                if (nm) lineNamesSet.add(nm);
               });
             }
           } catch (e) {}
@@ -885,6 +1093,8 @@ export default function App() {
 
         const uniqueLineNames = Array.from(lineNamesSet).slice(0, 18);
         const renderedNames = new Set<string>();
+        const capturedStationLines: any[] = [];
+        const stationStopsToShow = new Map<string, { name?: string; lngLat: [number, number] }>();
         for (let i = 0; i < uniqueLineNames.length; i += 6) {
           if (gameSessionIdRef.current !== sessionId) return;
           const batch = uniqueLineNames.slice(i, i + 6);
@@ -893,13 +1103,39 @@ export default function App() {
             infos.forEach(info => {
               if (!renderedNames.has(info.name)) {
                 renderedNames.add(info.name);
+                capturedStationLines.push(info);
                 renderBusLine(info, AMap, mapInstance, false, false, false);
+                if (Array.isArray(info.via_stops)) {
+                  info.via_stops.forEach((vs: any) => {
+                    if (vs?.location) {
+                      const k = `${Number(vs.location.lng).toFixed(5)},${Number(vs.location.lat).toFixed(5)}`;
+                      if (!stationStopsToShow.has(k)) {
+                        stationStopsToShow.set(k, { name: vs.name, lngLat: [vs.location.lng, vs.location.lat] });
+                      }
+                    }
+                  });
+                }
               }
             });
           }));
         }
 
         if (gameSessionIdRef.current !== sessionId) return;
+
+        if ((diff === 'easy' || diff === 'medium') && markerGroupRef.current && stationStopsToShow.size > 0) {
+          const otherStopMarkers = Array.from(stationStopsToShow.values()).map((st) =>
+            new AMap.CircleMarker({
+              center: st.lngLat,
+              radius: 4.5,
+              fillColor: '#52796F',
+              strokeColor: '#ffffff',
+              strokeWeight: 1.5,
+              bubble: true,
+              zIndex: 60
+            })
+          );
+          markerGroupRef.current.addOverlays(otherStopMarkers);
+        }
 
         if (stopLngLat && markerGroupRef.current) {
           const targetMarker = new AMap.CircleMarker({
@@ -945,13 +1181,27 @@ export default function App() {
         }
 
         if (gameSessionIdRef.current !== sessionId) return;
+        const stationPromptText = diff === 'hell'
+          ? '请根据地图上红色站点及经过它的全部公交线网，猜一猜这是哪个公交站？'
+          : `请根据地图上红色站点及经过它的全部公交线网（城市：${targetCity}），猜一猜这是哪个公交站？`;
+        currentGameQuestionRef.current = {
+          questionNum: qNum,
+          mode,
+          difficulty: diff,
+          targetCity,
+          province: diff === 'hell' ? activeProvince : undefined,
+          promptText: stationPromptText,
+          correctAnswer: actualStopName,
+          lineInfos: capturedStationLines,
+          networkStops: Array.from(stationStopsToShow.values()),
+          targetPoint: stopLngLat ? { name: actualStopName, lngLat: stopLngLat } : undefined,
+          fallbackCenter: stopLngLat || undefined
+        };
         setGameQuestionData({
           correctAnswer: actualStopName,
           options,
           isFillIn,
-          promptText: diff === 'hard'
-            ? '请根据地图上红色站点及经过它的全部公交线网，猜一猜这是哪个公交站？'
-            : `请根据地图上红色站点及经过它的全部公交线网（城市：${targetCity}），猜一猜这是哪个公交站？`
+          promptText: stationPromptText
         });
       } else if (mode === 'county') {
         // County mode (看线网猜县城): 在用户指定的省份中随机某县城，先定位县政府再非全市搜索
@@ -1141,6 +1391,7 @@ export default function App() {
         const sampleCountyLines = countyLineNames.slice(0, 60);
         const renderedCountyLineNames = new Set<string>();
         const collectedCountyPaths: Array<[number, number][]> = [];
+        const collectedCountyStops = new Map<string, { name?: string; lngLat: [number, number] }>();
 
         for (let i = 0; i < sampleCountyLines.length; i += 12) {
           if (gameSessionIdRef.current !== sessionId) return;
@@ -1154,6 +1405,16 @@ export default function App() {
                 const coords = (info.path || []).map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat] as [number, number]);
                 if (coords.length > 1) {
                   collectedCountyPaths.push(coords);
+                }
+                if (Array.isArray(info.via_stops)) {
+                  info.via_stops.forEach((vs: any) => {
+                    if (vs?.location && collectedCountyStops.size < 1200) {
+                      const k = `${Number(vs.location.lng).toFixed(4)},${Number(vs.location.lat).toFixed(4)}`;
+                      if (!collectedCountyStops.has(k)) {
+                        collectedCountyStops.set(k, { name: vs.name, lngLat: [vs.location.lng, vs.location.lat] });
+                      }
+                    }
+                  });
                 }
               }
             }
@@ -1190,11 +1451,24 @@ export default function App() {
           options = shuffleArr([chosenCounty.name, ...otherCounties]);
         }
 
+        const countyPromptText = `已定位${activeProvince}内随机县城政府核心并检索线网，请猜一猜这是哪个县城？`;
+        currentGameQuestionRef.current = {
+          questionNum: qNum,
+          mode,
+          difficulty: diff,
+          targetCity: chosenCounty.name,
+          province: activeProvince,
+          promptText: countyPromptText,
+          correctAnswer: chosenCounty.name,
+          networkPaths: collectedCountyPaths,
+          networkStops: Array.from(collectedCountyStops.values()),
+          fallbackCenter: countyCenter || undefined
+        };
         setGameQuestionData({
           correctAnswer: chosenCounty.name,
           options,
           isFillIn,
-          promptText: `已定位${activeProvince}内随机县城政府核心并检索线网，请猜一猜这是哪个县城？`
+          promptText: countyPromptText
         });
       } else {
         // City mode (全国猜城市): 自动执行全市搜索（不依赖外部“全市搜索”开关）
@@ -1264,6 +1538,7 @@ export default function App() {
 
         const renderedCityLineNames = new Set<string>();
         const collectedPaths: Array<[number, number][]> = [];
+        const collectedCityStops = new Map<string, { name?: string; lngLat: [number, number] }>();
 
         const searchCityLineFast = (keyword: string): Promise<any[]> => {
           return new Promise((resolve) => {
@@ -1277,7 +1552,7 @@ export default function App() {
               ls.search(keyword, (status: string, result: any) => {
                 clearTimeout(timer);
                 if (status === 'complete' && result?.lineInfo?.length > 0) {
-                  resolve(result.lineInfo.filter((l: any) => l?.path?.length > 1 && !isLineNameBlockedRef(l.name)));
+                  resolve(result.lineInfo.filter((l: any) => l?.path?.length > 1));
                 } else {
                   resolve([]);
                 }
@@ -1301,6 +1576,16 @@ export default function App() {
                 const coords = (info.path || []).map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat] as [number, number]);
                 if (coords.length > 1) {
                   collectedPaths.push(coords);
+                }
+                if (Array.isArray(info.via_stops)) {
+                  info.via_stops.forEach((vs: any) => {
+                    if (vs?.location && collectedCityStops.size < 1200) {
+                      const k = `${Number(vs.location.lng).toFixed(4)},${Number(vs.location.lat).toFixed(4)}`;
+                      if (!collectedCityStops.has(k)) {
+                        collectedCityStops.set(k, { name: vs.name, lngLat: [vs.location.lng, vs.location.lat] });
+                      }
+                    }
+                  });
                 }
               }
             }
@@ -1337,11 +1622,22 @@ export default function App() {
           options = shuffleArr([targetCity, ...otherCities]);
         }
 
+        const cityPromptText = '已执行全市搜索，请根据公交线网布局猜一猜这是哪个城市？';
+        currentGameQuestionRef.current = {
+          questionNum: qNum,
+          mode,
+          difficulty: diff,
+          targetCity,
+          promptText: cityPromptText,
+          correctAnswer: targetCity,
+          networkPaths: collectedPaths,
+          networkStops: Array.from(collectedCityStops.values())
+        };
         setGameQuestionData({
           correctAnswer: targetCity,
           options,
           isFillIn,
-          promptText: '已执行全市搜索，请根据公交线网布局猜一猜这是哪个城市？'
+          promptText: cityPromptText
         });
       }
     } finally {
@@ -1351,27 +1647,92 @@ export default function App() {
     }
   };
 
+
   const handleMinigameSubmit = (answer: string) => {
-    if (!gameQuestionData || gameState !== 'playing' || gameLoading) return;
+    if (!gameQuestionData || gameState !== 'playing' || gameLoading || gameFeedback !== null) return;
 
     const rawUser = answer.trim();
     const rawCorrect = gameQuestionData.correctAnswer.trim();
     let isCorrect = rawUser === rawCorrect;
 
     if (!isCorrect && gameQuestionData.isFillIn) {
-      const norm = (s: string) => s.toLowerCase().replace(/\s+/g, '').replace(/\(.*?\)|（.*?）/g, '');
+      const toHalfWidth = (s: string) =>
+        s.replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)).replace(/\u3000/g, ' ');
+      const norm = (s: string) =>
+        toHalfWidth(s)
+          .toLowerCase()
+          .replace(/\s+/g, '')
+          .replace(/\(.*?\)|（.*?）/g, '')
+          .replace(/[·\-—_.,，。、'"“”‘’]/g, '');
+
       const u = norm(rawUser);
       const c = norm(rawCorrect);
-      if (gameMode === 'line') {
-        isCorrect = u === c || u.replace(/[路线]$/, '') === c.replace(/[路线]$/, '');
+
+      if (!u) {
+        isCorrect = false;
+      } else if (gameMode === 'line') {
+        const normLineName = (s: string) =>
+          s
+            .replace(/快速直达专线/g, '快直')
+            .replace(/快速直达/g, '快直')
+            .replace(/快速公交/g, '快')
+            .replace(/([内外])环/g, '$1')
+            .replace(/(?:公交|巴士|专线|路线|快车|班车|区间车|车|路|线)/g, (m) => {
+              if (m === '快车') return '快';
+              if (m === '专线') return '专';
+              if (m === '区间车') return '区间';
+              return '';
+            });
+        const nu = normLineName(u);
+        const nc = normLineName(c);
+        isCorrect = u === c || (nu.length > 0 && nu === nc);
       } else if (gameMode === 'station') {
-        isCorrect = u === c || u.replace(/(公交)?站$/, '') === c.replace(/(公交)?站$/, '');
+        const stripStationEnd = (s: string) => {
+          const stripped = s.replace(
+            /(?:公交枢纽站|公交场站|公交总站|公交车站|公交站|枢纽站|首末站|总站|车站|站)$/,
+            ''
+          );
+          return stripped || s;
+        };
+        const stripStationAll = (s: string) => {
+          let res = stripStationEnd(s).replace(/^(?:地铁|公交)/, '');
+          res = res.replace(/(?:火车站|高铁站|汽车站|地铁站)$/, '') || res;
+          return res || s;
+        };
+        const u1 = stripStationEnd(u);
+        const c1 = stripStationEnd(c);
+        const u2 = stripStationAll(u);
+        const c2 = stripStationAll(c);
+        isCorrect = u === c || u1 === c1 || (u2.length >= 2 && u2 === c2);
       } else if (gameMode === 'county') {
-        const stripAdminSuffix = (s: string) => s.replace(/(自治)?[县市区旗]$/, '');
-        isCorrect = u === c || stripAdminSuffix(u) === stripAdminSuffix(c);
+        const stripCountySuffix = (s: string) => {
+          const stripped = s
+            .replace(/(?:[一-龥]{1,8}?(?:族|各族))*自治(?:县|州|旗)$/, '')
+            .replace(/(?:特别行政区|行政委员会|林区|矿区|新区|特区|[县市区旗盟])$/, '');
+          return stripped || s;
+        };
+        isCorrect = u === c || stripCountySuffix(u) === stripCountySuffix(c);
       } else if (gameMode === 'city') {
-        isCorrect = u === c || u.replace(/市$/, '') === c.replace(/市$/, '');
+        const stripCitySuffix = (s: string) => {
+          const stripped = s
+            .replace(/(?:[一-龥]{1,8}?(?:族|各族))*自治州$/, '')
+            .replace(/(?:特别行政区|地区|[市盟])$/, '');
+          return stripped || s;
+        };
+        isCorrect = u === c || stripCitySuffix(u) === stripCitySuffix(c);
       }
+    }
+
+    const snapshot = currentGameQuestionRef.current;
+    if (snapshot) {
+      setGameHistory(prev => [
+        ...prev,
+        {
+          ...snapshot,
+          userAnswer: rawUser,
+          isCorrect
+        }
+      ]);
     }
 
     if (isCorrect) {
@@ -1484,7 +1845,7 @@ export default function App() {
     const isTerm = stationMode === 'terminal';
     setFilterTerminalOnly(isTerm);
     filterTerminalOnlyRef.current = isTerm;
-    if (mapRef.current && (window as any).AMap) {
+    if (!isMinigameActiveRef.current && mapRef.current && (window as any).AMap) {
       syncStopMarkersToMap(mapRef.current, (window as any).AMap);
     }
   }, [stationMode]);
@@ -1620,6 +1981,37 @@ export default function App() {
     return localStorage.getItem('app_experimental_citywide') === 'true';
   });
   const [showCityWideConfirm, setShowCityWideConfirm] = useState(false);
+
+  const [enableLineCache, setEnableLineCache] = useState(() => {
+    return localStorage.getItem(APP_LINE_CACHE_ENABLED_KEY) === 'true';
+  });
+  const enableLineCacheRef = useRef(enableLineCache);
+  useEffect(() => {
+    enableLineCacheRef.current = enableLineCache;
+  }, [enableLineCache]);
+  const [lineCacheStats, setLineCacheStats] = useState<LineCacheStats>({ linesCount: 0, stopsCount: 0, regionsCount: 0 });
+  const [cacheClearedFeedback, setCacheClearedFeedback] = useState(false);
+  const queriedLineNamesRef = useRef<Set<string>>(new Set());
+  const lastSearchCityRef = useRef<string>('');
+
+  const refreshLineCacheStats = useCallback(async () => {
+    const statsData = await getLineCacheStats();
+    setLineCacheStats(statsData);
+  }, []);
+
+  useEffect(() => {
+    const initLineCache = async () => {
+      await checkAndPurgeIfMonthChanged();
+      await refreshLineCacheStats();
+    };
+    initLineCache();
+  }, [refreshLineCacheStats]);
+
+  useEffect(() => {
+    if (showSettings) {
+      checkAndPurgeIfMonthChanged().then(() => refreshLineCacheStats());
+    }
+  }, [showSettings, refreshLineCacheStats]);
   const [lineThickness, setLineThickness] = useState<'thick' | 'thin'>(() => {
     const saved = localStorage.getItem('app_line_thickness');
     return (saved === 'thin' || saved === 'thick') ? saved : 'thick';
@@ -1647,6 +2039,197 @@ export default function App() {
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [activeBusLine, setActiveBusLine] = useState<any | null>(null);
   const [topCard, setTopCard] = useState<'stop' | 'line'>('stop');
+
+  useEffect(() => {
+    if (!showMinigameModal || gameState !== 'review') return;
+    const item = gameHistory[reviewIndex];
+    const AMap = (window as any).AMap;
+    if (!item || !AMap || !mapInstance) return;
+
+    setMapMode(reviewShowBasemap ? 'normal' : 'blank');
+    setActiveBusLine(null);
+    setSelectedStop(null);
+    setSelectedSegmentLines(null);
+    setStationConnectivityCard(null);
+    setReviewHoveredStop(null);
+    activeBusLinePolylineRef.current = null;
+    roadOverlaysRef.current = [];
+    if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
+    if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
+
+    if (item.mode === 'line' && item.lineInfos && item.lineInfos.length > 0) {
+      const chosenLine = item.lineInfos[0];
+      renderBusLine(chosenLine, AMap, mapInstance, false, false, false);
+      const validStops = (chosenLine.via_stops || []).filter((st: any) => st?.location);
+      if (reviewShowStops && validStops.length > 2 && markerGroupRef.current) {
+        const midStops = validStops.slice(1, validStops.length - 1);
+        const stopMarkers = midStops.map((st: any) => {
+          const m = new AMap.CircleMarker({
+            center: [st.location.lng, st.location.lat],
+            radius: 5,
+            fillColor: '#3b82f6',
+            strokeColor: '#ffffff',
+            strokeWeight: 1.5,
+            bubble: true,
+            zIndex: 65
+          });
+          if (st.name) {
+            m.on('mouseover', () => setReviewHoveredStop(st.name));
+            m.on('click', () => setReviewHoveredStop(st.name));
+          }
+          return m;
+        });
+        if (stopMarkers.length > 0) {
+          markerGroupRef.current.addOverlays(stopMarkers);
+        }
+      }
+
+      if (markerGroupRef.current) {
+        const linePath = (chosenLine.path || []).map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat] as [number, number]);
+        const startPos: [number, number] | null = validStops.length > 0
+          ? [validStops[0].location.lng, validStops[0].location.lat]
+          : (linePath.length > 0 ? linePath[0] : null);
+        const endPos: [number, number] | null = validStops.length > 1
+          ? [validStops[validStops.length - 1].location.lng, validStops[validStops.length - 1].location.lat]
+          : (linePath.length > 1 ? linePath[linePath.length - 1] : null);
+        const isLoopOverlap = !!(
+          startPos &&
+          endPos &&
+          Math.abs(startPos[0] - endPos[0]) < 1e-4 &&
+          Math.abs(startPos[1] - endPos[1]) < 1e-4
+        );
+        const terminalMarkers: any[] = [];
+        if (startPos) {
+          const sm = new AMap.CircleMarker({
+            center: startPos,
+            radius: isLoopOverlap ? 9.5 : 7.5,
+            fillColor: '#16a34a',
+            fillOpacity: 1,
+            strokeColor: '#ffffff',
+            strokeWeight: 2.2,
+            bubble: true,
+            zIndex: 90
+          });
+          if (validStops[0]?.name) {
+            sm.on('mouseover', () => setReviewHoveredStop(`始发站：${validStops[0].name}`));
+            sm.on('click', () => setReviewHoveredStop(`始发站：${validStops[0].name}`));
+          }
+          terminalMarkers.push(sm);
+        }
+        if (endPos) {
+          const em = new AMap.CircleMarker({
+            center: endPos,
+            radius: isLoopOverlap ? 5.5 : 7.5,
+            fillColor: '#ef4444',
+            fillOpacity: 1,
+            strokeColor: '#ffffff',
+            strokeWeight: 2,
+            bubble: true,
+            zIndex: 92
+          });
+          const lastName = validStops[validStops.length - 1]?.name;
+          if (lastName) {
+            em.on('mouseover', () => setReviewHoveredStop(`终点站：${lastName}`));
+            em.on('click', () => setReviewHoveredStop(`终点站：${lastName}`));
+          }
+          terminalMarkers.push(em);
+        }
+        if (terminalMarkers.length > 0) {
+          markerGroupRef.current.addOverlays(terminalMarkers);
+        }
+      }
+      const overlays = lineGroupRef.current?.getOverlays?.() || [];
+      if (overlays.length > 0) {
+        mapInstance.setFitView(overlays, false, [48, 170, 36, 36]);
+      }
+    } else if (item.mode === 'station') {
+      (item.lineInfos || []).forEach((info: any) => {
+        renderBusLine(info, AMap, mapInstance, false, false, false);
+      });
+      if (reviewShowStops && item.networkStops && item.networkStops.length > 0 && markerGroupRef.current) {
+        const otherMarkers = item.networkStops.map((st) => {
+          const m = new AMap.CircleMarker({
+            center: st.lngLat,
+            radius: 4.5,
+            fillColor: '#52796F',
+            strokeColor: '#ffffff',
+            strokeWeight: 1.5,
+            bubble: true,
+            zIndex: 60
+          });
+          if (st.name) {
+            m.on('mouseover', () => setReviewHoveredStop(st.name!));
+            m.on('click', () => setReviewHoveredStop(st.name!));
+          }
+          return m;
+        });
+        markerGroupRef.current.addOverlays(otherMarkers);
+      }
+      if (item.targetPoint && markerGroupRef.current) {
+        const tm = new AMap.CircleMarker({
+          center: item.targetPoint.lngLat,
+          radius: 10,
+          fillColor: '#ef4444',
+          strokeColor: '#ffffff',
+          strokeWeight: 3,
+          zIndex: 95
+        });
+        tm.on('mouseover', () => setReviewHoveredStop(`目标站：${item.targetPoint!.name}`));
+        tm.on('click', () => setReviewHoveredStop(`目标站：${item.targetPoint!.name}`));
+        markerGroupRef.current.addOverlay(tm);
+      }
+      const overlays = lineGroupRef.current?.getOverlays?.() || [];
+      if (overlays.length > 0) {
+        mapInstance.setFitView(overlays, false, [48, 170, 36, 36]);
+      } else if (item.fallbackCenter) {
+        mapInstance.setCenter(item.fallbackCenter);
+        mapInstance.setZoom(14);
+      }
+    } else {
+      if (item.networkPaths && item.networkPaths.length > 0 && lineGroupRef.current) {
+        const netOverlay = new AMap.Polyline({
+          path: item.networkPaths,
+          strokeColor: '#52796F',
+          strokeWeight: lineThickness === 'thin' ? (item.mode === 'city' ? 2 : 2.5) : (item.mode === 'city' ? 3.2 : 3.8),
+          strokeOpacity: 0.85,
+          lineJoin: 'round',
+          lineCap: 'round',
+          isOutline: true,
+          outlineColor: '#ffffff',
+          borderWeight: 0.5,
+          zIndex: 45
+        });
+        lineGroupRef.current.addOverlay(netOverlay);
+        if (reviewShowStops && item.networkStops && item.networkStops.length > 0 && markerGroupRef.current) {
+          const netStopMarkers = item.networkStops.map((st) => {
+            const m = new AMap.CircleMarker({
+              center: st.lngLat,
+              radius: 3.5,
+              fillColor: '#3b82f6',
+              fillOpacity: 0.85,
+              strokeColor: '#ffffff',
+              strokeWeight: 1,
+              bubble: true,
+              zIndex: 60
+            });
+            if (st.name) {
+              m.on('mouseover', () => setReviewHoveredStop(st.name!));
+              m.on('click', () => setReviewHoveredStop(st.name!));
+            }
+            return m;
+          });
+          markerGroupRef.current.addOverlays(netStopMarkers);
+        }
+        mapInstance.setFitView([netOverlay], false, [48, 170, 36, 36]);
+      } else if (item.fallbackCenter) {
+        mapInstance.setZoomAndCenter(13, item.fallbackCenter);
+      } else if (item.targetCity) {
+        try {
+          mapInstance.setCity(item.targetCity);
+        } catch (e) {}
+      }
+    }
+  }, [showMinigameModal, gameState, reviewIndex, reviewShowBasemap, reviewShowStops, gameHistory, mapInstance, lineThickness]);
 
   // --- USER DEFINED DRAWING AND ADMIN STATES ---
   // Switch to show user submitted data (defaults to false / disabled)
@@ -1838,6 +2421,68 @@ export default function App() {
       };
     }
   }, [customApiSecurityCode, useCustomApiKey]);
+
+  // First-time / version-upgrade onboarding state
+  const [onboardingStep, setOnboardingStep] = useState<number>(() => {
+    if (typeof window === 'undefined') return 0;
+    const savedVer = localStorage.getItem(APP_LAST_VERSION_KEY);
+    if (!savedVer || compareVersions(APP_VERSION, savedVer) > 0) {
+      return 1;
+    }
+    return 0;
+  });
+  const initialApiSnapshotRef = useRef({
+    useCustom: useCustomApiKey,
+    key: customApiKey,
+    sec: customApiSecurityCode,
+  });
+  const barButtonRefs = useRef<(HTMLElement | null)[]>([]);
+
+  const handleOnboardingSelectCache = async (enabled: boolean) => {
+    if (enabled) {
+      setEnableLineCache(true);
+      enableLineCacheRef.current = true;
+      localStorage.setItem(APP_LINE_CACHE_ENABLED_KEY, 'true');
+      await checkAndPurgeIfMonthChanged();
+      await refreshLineCacheStats();
+    } else {
+      setEnableLineCache(false);
+      enableLineCacheRef.current = false;
+      localStorage.setItem(APP_LINE_CACHE_ENABLED_KEY, 'false');
+      await clearAllLineCache();
+      queriedLineNamesRef.current.clear();
+      await refreshLineCacheStats();
+    }
+  };
+
+  const handleOnboardingSelectCustomApi = (enabled: boolean) => {
+    setUseCustomApiKey(enabled);
+    localStorage.setItem('app_use_custom_api_key', String(enabled));
+  };
+
+  const handleFinishOnboarding = () => {
+    localStorage.setItem(APP_LAST_VERSION_KEY, APP_VERSION);
+    setOnboardingStep(0);
+    const snap = initialApiSnapshotRef.current;
+    const apiChanged =
+      useCustomApiKey !== snap.useCustom ||
+      (useCustomApiKey && (customApiKey !== snap.key || customApiSecurityCode !== snap.sec));
+    if (apiChanged) {
+      localStorage.setItem('app_use_custom_api_key', String(useCustomApiKey));
+      localStorage.setItem('app_custom_api_key', customApiKey);
+      localStorage.setItem('app_custom_api_security_code', customApiSecurityCode);
+      window.location.reload();
+    }
+  };
+
+  const handleResetApp = async () => {
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+      await clearAllLineCache();
+    } catch {}
+    window.location.reload();
+  };
 
   // Admin and stats
   const [showAdminLogin, setShowAdminLogin] = useState(false);
@@ -2858,7 +3503,7 @@ export default function App() {
   }, [normalizeStopName, updateTerminalNamesCache]);
 
   function syncStopMarkersToMap(map: any, AMap: any) {
-    if (!markerGroupRef.current) return;
+    if (!markerGroupRef.current || isMinigameActiveRef.current) return;
     
     try {
       markerGroupRef.current.clearOverlays();
@@ -3345,6 +3990,7 @@ export default function App() {
           extData: { key: `${stop.location.lng},${stop.location.lat}`, type: 'busLineStop' }
         });
         marker.on('click', async () => {
+          if (isMinigameActiveRef.current) return;
           const stopLatLng = getLatLng(stop.location);
           if (isPosOutsideReferenceArea(stopLatLng[0], stopLatLng[1])) {
             return;
@@ -4702,6 +5348,31 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setShowCityWideConfirm(false);
   };
 
+  const handleClearLineCache = async () => {
+    await clearAllLineCache();
+    queriedLineNamesRef.current.clear();
+    await refreshLineCacheStats();
+    setCacheClearedFeedback(true);
+    setTimeout(() => setCacheClearedFeedback(false), 2000);
+  };
+
+  const toggleLineCache = async () => {
+    if (!enableLineCache) {
+      setEnableLineCache(true);
+      enableLineCacheRef.current = true;
+      localStorage.setItem(APP_LINE_CACHE_ENABLED_KEY, 'true');
+      await checkAndPurgeIfMonthChanged();
+      await refreshLineCacheStats();
+    } else {
+      setEnableLineCache(false);
+      enableLineCacheRef.current = false;
+      localStorage.setItem(APP_LINE_CACHE_ENABLED_KEY, 'false');
+      await clearAllLineCache();
+      queriedLineNamesRef.current.clear();
+      await refreshLineCacheStats();
+    }
+  };
+
   const handleManualSearch = async (item: any) => {
     const map = mapRef.current;
     if (!map) return;
@@ -5397,7 +6068,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     if (!map) return;
 
     isClearedRef.current = false;
-    searchVersionRef.current++;
+    const thisSearchVer = ++searchVersionRef.current;
 
     // Reset reference box so the new search initiates a fresh reference bounds calculation
     referenceBoxRef.current = null;
@@ -5446,51 +6117,123 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         [boundCenter.lng - lngDiff * 5.0, boundCenter.lat - latDiff * 5.0],
         [boundCenter.lng + lngDiff * 5.0, boundCenter.lat + latDiff * 5.0]
       );
-      
-      const placeSearch = new AMap.PlaceSearch({
-        type: '公交车站',
-        pageSize: 100, 
-        city: currentCity,
-        pageIndex: 1,
-        extensions: 'all',
-      });
 
-      const allPois: any[] = [];
-      let pageIndex = 1;
-      const MAX_PAGES = enableCityWideSearch ? 100 : 30; // Increased when city wide
-      const fetchPage = async (page: number): Promise<boolean> => {
-        return new Promise((resolve) => {
-          const timeout = setTimeout(() => resolve(false), 10000);
-          placeSearch.setPageIndex(page);
-          
-          const callback = (status: string, result: any) => {
-            clearTimeout(timeout);
-            if (status === 'complete' && result.poiList && result.poiList.pois.length > 0) {
-              allPois.push(...result.poiList.pois);
-              const totalCount = result.poiList.count || 0;
-              const fetchedCount = page * 100;
-              if (fetchedCount < totalCount && page < MAX_PAGES) {
-                resolve(true); 
+      const targetSearchBox: GeoBox = {
+        minLng: boundCenter.lng - lngDiff * 5.0,
+        maxLng: boundCenter.lng + lngDiff * 5.0,
+        minLat: boundCenter.lat - latDiff * 5.0,
+        maxLat: boundCenter.lat + latDiff * 5.0,
+      };
+
+      if (lastSearchCityRef.current && lastSearchCityRef.current !== currentCity) {
+        for (const [k, v] of fetchedLinesCache.current.entries()) {
+          if (!v?.isUserSubmitted) {
+            fetchedLinesCache.current.delete(k);
+          }
+        }
+        queriedLineNamesRef.current.clear();
+      }
+      lastSearchCityRef.current = currentCity;
+
+      let allPois: any[] = [];
+      let usedRegionCache = false;
+      let wasTruncated = false;
+
+      if (enableLineCacheRef.current) {
+        const cityCache = await getCityCacheData(currentCity);
+        if (cityCache.purged) {
+          for (const [k, v] of fetchedLinesCache.current.entries()) {
+            if (!v?.isUserSubmitted) {
+              fetchedLinesCache.current.delete(k);
+            }
+          }
+          queriedLineNamesRef.current.clear();
+          refreshLineCacheStats();
+        }
+        if (cityCache.lines.length > 0) {
+          cityCache.lines.forEach((cachedLine) => {
+            const existing = fetchedLinesCache.current.get(cachedLine.name);
+            if (!existing || !existing.isUserSubmitted) {
+              fetchedLinesCache.current.set(cachedLine.name, cachedLine);
+            }
+          });
+          cachedLinesVersionRef.current++;
+          updateTerminalNamesCache();
+        }
+        cityCache.queriedNames.forEach((qn) => {
+          queriedLineNamesRef.current.add(`${currentCity}::${qn}`);
+        });
+
+        if (cityCache.regions.length > 0 && isSearchScopeCached(cityCache.regions, targetSearchBox, enableCityWideSearch)) {
+          const matchedStops = enableCityWideSearch
+            ? cityCache.stops
+            : cityCache.stops.filter((s) =>
+                s.location &&
+                s.location.lng >= targetSearchBox.minLng &&
+                s.location.lng <= targetSearchBox.maxLng &&
+                s.location.lat >= targetSearchBox.minLat &&
+                s.location.lat <= targetSearchBox.maxLat
+              );
+          if (matchedStops.length > 0) {
+            allPois = matchedStops;
+            usedRegionCache = true;
+          }
+        }
+      }
+
+      if (!usedRegionCache) {
+        const placeSearch = new AMap.PlaceSearch({
+          type: '公交车站',
+          pageSize: 100, 
+          city: currentCity,
+          pageIndex: 1,
+          extensions: 'all',
+        });
+
+        let pageIndex = 1;
+        const MAX_PAGES = enableCityWideSearch ? 100 : 30; // Increased when city wide
+        const fetchPage = async (page: number): Promise<boolean> => {
+          return new Promise((resolve) => {
+            const timeout = setTimeout(() => resolve(false), 10000);
+            placeSearch.setPageIndex(page);
+            
+            const callback = (status: string, result: any) => {
+              clearTimeout(timeout);
+              if (status === 'complete' && result.poiList && result.poiList.pois.length > 0) {
+                allPois.push(...result.poiList.pois);
+                const totalCount = result.poiList.count || 0;
+                const fetchedCount = page * 100;
+                if (fetchedCount < totalCount && page < MAX_PAGES) {
+                  resolve(true); 
+                } else {
+                  if (fetchedCount < totalCount && page >= MAX_PAGES) {
+                    wasTruncated = true;
+                  }
+                  resolve(false);
+                }
               } else {
                 resolve(false);
               }
+            };
+
+            if (enableCityWideSearch) {
+               placeSearch.search('', callback);
             } else {
-              resolve(false);
+               placeSearch.searchInBounds('', expandedBounds, callback);
             }
-          };
+          });
+        };
 
-          if (enableCityWideSearch) {
-             placeSearch.search('', callback);
-          } else {
-             placeSearch.searchInBounds('', expandedBounds, callback);
-          }
-        });
-      };
+        let hasMore = true;
+        while (hasMore) {
+          hasMore = await fetchPage(pageIndex);
+          if (hasMore) pageIndex++;
+        }
+      }
 
-      let hasMore = true;
-      while (hasMore) {
-        hasMore = await fetchPage(pageIndex);
-        if (hasMore) pageIndex++;
+      if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
+        setIsSearching(false);
+        return;
       }
 
       if (allPois.length > 0) {
@@ -5573,6 +6316,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         });
 
         await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity);
+        if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
+          setIsSearching(false);
+          return;
+        }
 
         // Fetch all exact physical platforms from the fetched bus lines
         const trueStopsMap = new Map<string, any>();
@@ -5632,6 +6379,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         });
 
         // Redraw with precise platforms
+        if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
+          setIsSearching(false);
+          return;
+        }
         if (trueStopsMap.size > 0) {
           markerGroupRef.current.clearOverlays();
           allMapStopsRef.current.clear();
@@ -5698,6 +6449,31 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           roadStopsDataRef.current = new Map(allMapStopsRef.current);
         }
 
+        if (enableLineCacheRef.current && !usedRegionCache) {
+          const linesToSave: BusLine[] = [];
+          for (const lineVal of fetchedLinesCache.current.values()) {
+            if (!lineVal.isUserSubmitted && (!lineVal.city || lineVal.city === currentCity)) {
+              linesToSave.push(lineVal);
+            }
+          }
+          const queriedPrefix = `${currentCity}::`;
+          const queriedToSave: string[] = [];
+          queriedLineNamesRef.current.forEach((qk) => {
+            if (qk.startsWith(queriedPrefix)) {
+              queriedToSave.push(qk.slice(queriedPrefix.length));
+            }
+          });
+          await saveCitySearchToCache({
+            city: currentCity,
+            isCityWide: enableCityWideSearch,
+            isComplete: !wasTruncated,
+            searchBounds: targetSearchBox,
+            pois,
+            lines: linesToSave,
+            queriedNames: queriedToSave,
+          });
+          refreshLineCacheStats();
+        }
       }
       setIsSearching(false);
     } catch (error) {
@@ -5707,7 +6483,22 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string) => {
-    const linesToFetch = lineNames.filter(name => !fetchedLinesCache.current.has(name));
+    const startSearchVer = searchVersionRef.current;
+    const existingCacheKeys = Array.from(fetchedLinesCache.current.keys());
+    const linesToFetch = lineNames.filter(name => {
+      if (fetchedLinesCache.current.has(name)) return false;
+      if (enableLineCacheRef.current) {
+        if (queriedLineNamesRef.current.has(`${city}::${name}`)) return false;
+        const matchedKey = existingCacheKeys.find(k => k === name || k.startsWith(`${name}(`) || k.startsWith(`${name}#`));
+        if (matchedKey) {
+          const matchedLine = fetchedLinesCache.current.get(matchedKey);
+          if (matchedLine && (!matchedLine.city || matchedLine.city === city)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    });
     
     if (linesToFetch.length > 0) {
       const lineSearch = new AMap.LineSearch({
@@ -5717,28 +6508,40 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         extensions: 'all'
       });
 
+      const newlyFetchedLines: BusLine[] = [];
+      const newlyQueriedNames: string[] = [];
       const batchSize = 5;
       for (let i = 0; i < linesToFetch.length; i += batchSize) {
+        if (searchVersionRef.current !== startSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
+          return;
+        }
         const batch = linesToFetch.slice(i, i + batchSize);
         await Promise.all(batch.map(name => new Promise<void>((resolve) => {
           const timeout = setTimeout(() => resolve(), 8000);
           lineSearch.search(name, (status: string, result: any) => {
             clearTimeout(timeout);
+            if (status === 'complete' || status === 'no_data') {
+              queriedLineNamesRef.current.add(`${city}::${name}`);
+              newlyQueriedNames.push(name);
+            }
             if (result.lineInfo) {
               result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
             }
             if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
               result.lineInfo.forEach((info: any, index: number) => {
                 const uniqueName = info.name || `${name}#${index}`;
-                fetchedLinesCache.current.set(uniqueName, {
+                const lineObj: BusLine = {
                   id: info.id,
                   name: uniqueName,
+                  city,
                   path: info.path.map((p: any) => [p.lng, p.lat]),
                   start_stop: info.start_stop,
                   end_stop: info.end_stop,
                   stops: [],
                   via_stops: info.via_stops || []
-                });
+                };
+                fetchedLinesCache.current.set(uniqueName, lineObj);
+                newlyFetchedLines.push(lineObj);
               });
             }
             resolve();
@@ -5747,8 +6550,14 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
       cachedLinesVersionRef.current++;
       updateTerminalNamesCache();
+      if (enableLineCacheRef.current && (newlyFetchedLines.length > 0 || newlyQueriedNames.length > 0)) {
+        saveLinesToCache(city, newlyFetchedLines, newlyQueriedNames).then(() => refreshLineCacheStats());
+      }
     }
 
+    if (searchVersionRef.current !== startSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
+      return;
+    }
     aggregateAndVisualize(lineNames, map, AMap);
   };
 
@@ -5807,8 +6616,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       } catch {}
     }
     
-    // Clear local caches and states fully as requested
+    // Clear local runtime map overlays/refs (persistent IndexedDB line cache is managed separately)
     fetchedLinesCache.current.clear();
+    queriedLineNamesRef.current.clear();
     allMapStopsRef.current.clear();
     stopCountCacheRef.current.clear();
     setBoxSelectedStops([]);
@@ -7271,16 +8081,21 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
 
         {!isDrawingMode && (
-          <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 pointer-events-auto flex flex-col items-center select-none">
+          <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 pointer-events-auto flex flex-col items-center select-none ${onboardingStep >= 6 ? 'z-[130]' : 'z-30'}`}>
             {/* Modular Bottom Hub Bar in Morandi Green theme - Icon Only, Enlarged */}
             <div className="backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-[0_8px_32px_rgba(28,47,39,0.15)] rounded-full px-3 py-2 sm:px-3.5 sm:py-2.5 flex items-center gap-1.5 sm:gap-2">
               
               {/* Module 1: Left of Search - Box Select (Permanent, Icon Only) */}
               <button
+                ref={(el) => { barButtonRefs.current[0] = el; }}
                 type="button"
-                disabled={loading || (!activeBusLine && stats.lines === 0 && stats.stops === 0)}
+                disabled={onboardingStep < 6 && (loading || (!activeBusLine && stats.lines === 0 && stats.stops === 0))}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (onboardingStep >= 6) {
+                    if (onboardingStep === 6) setOnboardingStep(7);
+                    return;
+                  }
                   if (loading || (!activeBusLine && stats.lines === 0 && stats.stops === 0)) return;
                   setIsBoxSelectMode(prev => {
                     const next = !prev;
@@ -7291,11 +8106,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   });
                 }}
                 className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 ${
-                  loading || (!activeBusLine && stats.lines === 0 && stats.stops === 0)
-                    ? 'text-[#8F9E96]/50 bg-transparent cursor-not-allowed opacity-45' 
-                    : isBoxSelectMode 
-                      ? 'bg-m3-primary text-m3-on-primary shadow-sm hover:bg-m3-primary/95 cursor-pointer active:scale-95' 
-                      : 'text-[#334D43] hover:bg-[#E8EFEA] hover:text-[#1C2F27] cursor-pointer active:scale-95'
+                  onboardingStep === 6
+                    ? 'ring-4 ring-m3-primary/55 bg-m3-primary-container text-m3-on-primary-container scale-110 shadow-md cursor-pointer'
+                    : onboardingStep >= 6
+                      ? 'opacity-40 pointer-events-none text-[#334D43]'
+                      : loading || (!activeBusLine && stats.lines === 0 && stats.stops === 0)
+                        ? 'text-[#8F9E96]/50 bg-transparent cursor-not-allowed opacity-45' 
+                        : isBoxSelectMode 
+                          ? 'bg-m3-primary text-m3-on-primary shadow-sm hover:bg-m3-primary/95 cursor-pointer active:scale-95' 
+                          : 'text-[#334D43] hover:bg-[#E8EFEA] hover:text-[#1C2F27] cursor-pointer active:scale-95'
                 }`}
                 title={isBoxSelectMode ? "关闭框选模式" : "开启框选模式"}
               >
@@ -7304,17 +8123,26 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
               {/* Module 1: Left of Search - Clear (Permanent, Icon Only) */}
               <button
+                ref={(el) => { barButtonRefs.current[1] = el; }}
                 type="button"
-                disabled={loading || (stats.stops === 0 && stats.lines === 0 && !activeBusLine && !selectedStop && !selectedSegmentLines && boxSelectedStops.length === 0)}
+                disabled={onboardingStep < 6 && (loading || (stats.stops === 0 && stats.lines === 0 && !activeBusLine && !selectedStop && !selectedSegmentLines && boxSelectedStops.length === 0))}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (onboardingStep >= 6) {
+                    if (onboardingStep === 7) setOnboardingStep(8);
+                    return;
+                  }
                   if (loading || (stats.stops === 0 && stats.lines === 0 && !activeBusLine && !selectedStop && !selectedSegmentLines && boxSelectedStops.length === 0)) return;
                   handleClear();
                 }}
                 className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 ${
-                  loading || (stats.stops === 0 && stats.lines === 0 && !activeBusLine && !selectedStop && !selectedSegmentLines && boxSelectedStops.length === 0)
-                    ? 'text-[#8F9E96]/50 bg-transparent cursor-not-allowed opacity-45' 
-                    : 'text-[#8D5B5B] hover:bg-[#F9EBEB] hover:text-[#B56666] cursor-pointer active:scale-95'
+                  onboardingStep === 7
+                    ? 'ring-4 ring-m3-primary/55 bg-[#F9EBEB] text-[#B56666] scale-110 shadow-md cursor-pointer'
+                    : onboardingStep >= 6
+                      ? 'opacity-40 pointer-events-none text-[#8D5B5B]'
+                      : loading || (stats.stops === 0 && stats.lines === 0 && !activeBusLine && !selectedStop && !selectedSegmentLines && boxSelectedStops.length === 0)
+                        ? 'text-[#8F9E96]/50 bg-transparent cursor-not-allowed opacity-45' 
+                        : 'text-[#8D5B5B] hover:bg-[#F9EBEB] hover:text-[#B56666] cursor-pointer active:scale-95'
                 }`}
                 title="清空地图"
               >
@@ -7326,19 +8154,31 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
               {/* Module 2: Center - Search with Logo & Loading Animation (Icon Only, Enlarged) */}
               <motion.button 
+                ref={(el) => { barButtonRefs.current[2] = el; }}
                 layout
                 type="button"
-                onClick={handleSearch}
-                disabled={isSearching || (!enableCityWideSearch && zoomLevel < 12)}
-                whileHover={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 1.05 } : {}}
-                whileTap={!isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 0.94 } : {}}
+                onClick={(e) => {
+                  if (onboardingStep >= 6) {
+                    e.stopPropagation();
+                    if (onboardingStep === 8) setOnboardingStep(9);
+                    return;
+                  }
+                  handleSearch();
+                }}
+                disabled={onboardingStep < 6 && (isSearching || (!enableCityWideSearch && zoomLevel < 12))}
+                whileHover={onboardingStep < 6 && !isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 1.05 } : {}}
+                whileTap={onboardingStep < 6 && !isSearching && (enableCityWideSearch || zoomLevel >= 12) ? { scale: 0.94 } : {}}
                 className={`w-12 h-12 sm:w-13 sm:h-13 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 shadow-sm ${
-                  isSearching 
-                    ? 'bg-[#E0EBE4] border border-[#BFD3C6] text-[#334D43] cursor-wait' 
-                    : enableCityWideSearch 
-                      ? 'bg-m3-error border border-m3-error text-m3-on-error shadow-m3-error/25 hover:bg-m3-error/90 cursor-pointer' 
-                      : (zoomLevel < 12 ? 'bg-[#DEE5E1] text-[#8C9E95] border border-transparent cursor-not-allowed' : 
-                        'bg-m3-primary border border-m3-primary text-m3-on-primary shadow-m3-primary/30 hover:bg-[#466960] cursor-pointer')
+                  onboardingStep === 8
+                    ? 'ring-4 ring-m3-primary/55 bg-m3-primary text-m3-on-primary scale-110 shadow-lg cursor-pointer'
+                    : onboardingStep >= 6
+                      ? 'opacity-40 pointer-events-none bg-m3-primary text-m3-on-primary'
+                      : isSearching 
+                        ? 'bg-[#E0EBE4] border border-[#BFD3C6] text-[#334D43] cursor-wait' 
+                        : enableCityWideSearch 
+                          ? 'bg-m3-error border border-m3-error text-m3-on-error shadow-m3-error/25 hover:bg-m3-error/90 cursor-pointer' 
+                          : (zoomLevel < 12 ? 'bg-[#DEE5E1] text-[#8C9E95] border border-transparent cursor-not-allowed' : 
+                            'bg-m3-primary border border-m3-primary text-m3-on-primary shadow-m3-primary/30 hover:bg-[#466960] cursor-pointer')
                 }`}
                 title={isSearching ? t('searching') : (enableCityWideSearch ? t('cityWideSearch') : (zoomLevel < 12 ? t('searchHint') : t('startSearch')))}
               >
@@ -7414,14 +8254,26 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
               {/* Module 3: Combined Map Mode Cycle Button (Normal -> Satellite -> Blank -> Normal) */}
               <button
+                ref={(el) => { barButtonRefs.current[3] = el; }}
                 type="button"
-                onClick={cycleMapMode}
+                onClick={(e) => {
+                  if (onboardingStep >= 6) {
+                    e.stopPropagation();
+                    if (onboardingStep === 9) setOnboardingStep(10);
+                    return;
+                  }
+                  cycleMapMode();
+                }}
                 className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 cursor-pointer active:scale-95 ${
-                  mapMode === 'satellite'
-                    ? 'bg-m3-primary text-m3-on-primary border border-m3-primary shadow-xs'
-                    : mapMode === 'normal'
-                      ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs'
-                      : 'text-[#8F9E96]/70 hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
+                  onboardingStep === 9
+                    ? 'ring-4 ring-m3-primary/55 bg-m3-primary-container text-m3-on-primary-container scale-110 shadow-md'
+                    : onboardingStep >= 6
+                      ? 'opacity-40 pointer-events-none text-[#8F9E96]/70'
+                      : mapMode === 'satellite'
+                        ? 'bg-m3-primary text-m3-on-primary border border-m3-primary shadow-xs'
+                        : mapMode === 'normal'
+                          ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs'
+                          : 'text-[#8F9E96]/70 hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
                 }`}
                 title={
                   mapMode === 'normal'
@@ -7445,14 +8297,26 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
               {/* Module 3: Combined Station Display Mode Cycle Button (All -> Terminal -> None -> All) */}
               <button
+                ref={(el) => { barButtonRefs.current[4] = el; }}
                 type="button"
-                onClick={cycleStationMode}
+                onClick={(e) => {
+                  if (onboardingStep >= 6) {
+                    e.stopPropagation();
+                    if (onboardingStep === 10) handleFinishOnboarding();
+                    return;
+                  }
+                  cycleStationMode();
+                }}
                 className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 cursor-pointer active:scale-95 ${
-                  stationMode === 'terminal'
-                    ? 'bg-slate-700 text-white border border-slate-600 shadow-xs'
-                    : stationMode === 'all'
-                      ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs'
-                      : 'text-[#8F9E96]/70 hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
+                  onboardingStep === 10
+                    ? 'ring-4 ring-m3-primary/55 bg-m3-primary-container text-m3-on-primary-container scale-110 shadow-md'
+                    : onboardingStep >= 6
+                      ? 'opacity-40 pointer-events-none text-[#8F9E96]/70'
+                      : stationMode === 'terminal'
+                        ? 'bg-slate-700 text-white border border-slate-600 shadow-xs'
+                        : stationMode === 'all'
+                          ? 'bg-m3-primary-container text-m3-on-primary-container border border-m3-outline-variant/40 shadow-xs'
+                          : 'text-[#8F9E96]/70 hover:bg-[#E8EFEA] hover:text-[#1C2F27]'
                 }`}
                 title={
                   stationMode === 'all'
@@ -8384,8 +9248,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 exit={{ opacity: 0, scale: 0.92, y: 16 }}
                 transition={{ type: 'spring', damping: 24, stiffness: 220 }}
                 className={
-                  gameState === 'playing' && !gameLoading
-                    ? "fixed bottom-3 left-1/2 -translate-x-1/2 z-[121] w-[820px] max-w-[96vw] bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 rounded-[22px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
+                  (gameState === 'playing' || gameState === 'review') && !gameLoading
+                    ? "fixed bottom-3 left-1/2 -translate-x-1/2 z-[121] w-[860px] max-w-[96vw] bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 rounded-[22px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
                     : gameState === 'playing' && gameLoading
                     ? "hidden"
                     : "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[121] w-[520px] max-w-[94vw] max-h-[85vh] bg-m3-surface-container-high border border-m3-outline-variant/30 rounded-[32px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
@@ -8439,7 +9303,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                                 <span className="px-2 py-0.5 rounded-full bg-m3-surface-container text-m3-primary font-black">
                                   {(m.id === 'city' || m.id === 'county')
                                     ? `${bestRecords[m.id]?.hard || 0}分`
-                                    : `易:${bestRecords[m.id].easy} | 中:${bestRecords[m.id].medium} | 难:${bestRecords[m.id].hard}`}
+                                    : `易:${bestRecords[m.id].easy} | 中:${bestRecords[m.id].medium} | 难:${bestRecords[m.id].hard} | 地狱:${bestRecords[m.id].hell || 0}`}
                                 </span>
                               </div>
                             </div>
@@ -8453,11 +9317,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20">
                         <div className="space-y-2">
                           <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择难度</label>
-                          <div className="grid grid-cols-3 gap-2">
+                          <div className="grid grid-cols-2 gap-2">
                             {[
-                              { id: 'easy', label: '易 (指定城市+底图)' },
-                              { id: 'medium', label: '中 (指定城市+无底图)' },
-                              { id: 'hard', label: '难 (指定省份+无底图)' }
+                              { id: 'easy', label: '易 (指定城市+底图+站点)' },
+                              { id: 'medium', label: '中 (指定城市+无底图+站点)' },
+                              { id: 'hard', label: '难 (指定城市+无底图+无站点)' },
+                              { id: 'hell', label: '地狱 (指定省份+无底图+无站点)' }
                             ].map(d => (
                               <button
                                 key={d.id}
@@ -8471,7 +9336,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                           </div>
                         </div>
 
-                        {gameDifficulty !== 'hard' ? (
+                        {gameDifficulty !== 'hell' ? (
                           <div className="space-y-2">
                             <label className="text-xs font-black text-slate-700 tracking-wide uppercase">指定城市</label>
                             <select
@@ -8518,21 +9383,33 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       </div>
                     )}
 
-                    {/* Start Button */}
-                    <button
-                      type="button"
-                      disabled={!gameMode}
-                      onClick={() => startMinigame(
-                        gameMode!,
-                        gameDifficulty,
-                        gameCity,
-                        gameMode === 'county' ? gameCountyProvince : gameProvince
+                    {/* Start & Review Buttons */}
+                    <div className="flex gap-2.5">
+                      <button
+                        type="button"
+                        disabled={!gameMode}
+                        onClick={() => startMinigame(
+                          gameMode!,
+                          gameDifficulty,
+                          gameCity,
+                          gameMode === 'county' ? gameCountyProvince : gameProvince
+                        )}
+                        className="flex-1 py-3.5 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-sm shadow-lg hover:opacity-95 transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                        开始挑战
+                      </button>
+                      {gameHistory.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={startMinigameReview}
+                          className="px-4 py-3.5 rounded-2xl bg-m3-surface border border-m3-outline-variant/40 text-slate-800 font-black text-xs shadow-sm hover:bg-m3-surface-container transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+                        >
+                          <History className="w-4 h-4 text-m3-primary" />
+                          复盘上局 ({gameHistory.length}题)
+                        </button>
                       )}
-                      className="w-full py-3.5 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-sm shadow-lg hover:opacity-95 transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
-                    >
-                      <Sparkles className="w-4 h-4" />
-                      开始挑战
-                    </button>
+                    </div>
                   </div>
                 )}
 
@@ -8625,12 +9502,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                           disabled={gameFeedback !== null}
                           placeholder={
                             gameMode === 'county'
-                              ? '输入县城名称（如：桐庐县）'
+                              ? '输入县城名称（如：桐庐 / 桐庐县）'
                               : gameMode === 'city'
-                              ? '输入城市名称（如：北京市）'
+                              ? '输入城市名称（如：北京 / 北京市）'
                               : gameMode === 'station'
                               ? '输入站点名称（如：西单）'
-                              : '输入线路名称（如：1路）'
+                              : '输入线路名称（如：1路 / 919快）'
                           }
                           value={gameUserInput}
                           onChange={(e) => setGameUserInput(e.target.value)}
@@ -8705,7 +9582,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       );
                     })()}
 
-                    <div className="flex gap-3 w-full pt-2">
+                    <div className="flex gap-2.5 w-full pt-2">
+                      {gameHistory.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={startMinigameReview}
+                          className="flex-1 py-3 rounded-2xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-black text-xs transition-all flex items-center justify-center gap-1.5"
+                        >
+                          <History className="w-4 h-4" />
+                          复盘本局 ({gameHistory.length}题)
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => startMinigame(gameMode!, gameDifficulty, gameCity)}
@@ -8723,6 +9610,182 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     </div>
                   </div>
                 )}
+
+                {gameState === 'review' && gameHistory[reviewIndex] && (() => {
+                  const item = gameHistory[reviewIndex];
+                  const lineMeta = item.mode === 'line' && item.lineInfos?.[0]?.name
+                    ? parseLineInfo(item.lineInfos[0].name)
+                    : null;
+                  const modeLabel = item.mode === 'line'
+                    ? '看图猜线路'
+                    : item.mode === 'station'
+                    ? '看通达度猜站名'
+                    : item.mode === 'county'
+                    ? '看线网猜县城'
+                    : '看线网猜城市';
+
+                  return (
+                    <div className="px-4 py-3 flex flex-col gap-2.5 bg-m3-surface">
+                      {/* Top Header */}
+                      <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
+                        <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                          <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-black flex items-center gap-1 shrink-0">
+                            <History className="w-3 h-3" />
+                            题目复盘
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[11px] font-bold shrink-0">
+                            {modeLabel}
+                          </span>
+                          <span className="text-[11px] font-black text-slate-700 shrink-0">
+                            第 {reviewIndex + 1} / {gameHistory.length} 题
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full bg-m3-surface-container text-slate-600 text-[11px] font-bold shrink-0">
+                            {item.province ? `${item.province} · ${item.targetCity}` : item.targetCity}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[11px] font-black shrink-0 ${item.isCorrect ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                            {item.isCorrect ? '回答正确' : '回答错误'}
+                          </span>
+                          {reviewHoveredStop && (
+                            <span className="px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[11px] font-bold truncate max-w-[200px]">
+                              {reviewHoveredStop}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 ml-auto">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReviewAutoPlay(false);
+                              restoreMapAfterMinigame();
+                              setGameState('gameover');
+                            }}
+                            className="text-xs font-bold text-slate-600 hover:text-slate-900 px-2 py-0.5 rounded-lg hover:bg-m3-surface-container transition-colors"
+                          >
+                            返回结算
+                          </button>
+                          <button
+                            type="button"
+                            onClick={returnToMinigameMenu}
+                            className="text-xs font-bold text-red-500 hover:underline"
+                          >
+                            返回菜单
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Answer Summary Row */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-m3-surface-container-low border border-m3-outline-variant/20 text-xs">
+                        <div className="flex flex-wrap items-center gap-3 min-w-0">
+                          <span className="font-bold text-slate-600">
+                            你的答案：<strong className={item.isCorrect ? 'text-emerald-700' : 'text-red-600'}>{item.userAnswer || '（未填）'}</strong>
+                          </span>
+                          <span className="font-bold text-slate-700">
+                            正确答案：<strong className="text-m3-primary">{item.correctAnswer}</strong>
+                          </span>
+                          {lineMeta && lineMeta.start && lineMeta.start !== '-' && (
+                            <span className="text-[11px] font-medium text-slate-500">
+                              （<span className="text-emerald-600 font-bold">●</span> {lineMeta.start} → <span className="text-red-500 font-bold">●</span> {lineMeta.end}）
+                            </span>
+                          )}
+                        </div>
+                        {item.mode === 'line' && (
+                          <div className="flex items-center gap-2.5 text-[11px] font-bold text-slate-500 shrink-0">
+                            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-green-600 inline-block" /> 始发站</span>
+                            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" /> 终点站</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Controls Row: Sequence Stepper + Basemap & Stops Toggles */}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <button
+                            type="button"
+                            disabled={reviewIndex <= 0}
+                            onClick={() => { setReviewAutoPlay(false); setReviewIndex(i => Math.max(0, i - 1)); }}
+                            className="px-2.5 py-1.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-container-high disabled:opacity-40 text-xs font-bold text-slate-700 flex items-center gap-1 transition-colors"
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                            上一题
+                          </button>
+                          <div className="flex items-center gap-1 overflow-x-auto max-w-[260px] sm:max-w-[340px] py-0.5">
+                            {gameHistory.map((h, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => { setReviewAutoPlay(false); setReviewIndex(idx); }}
+                                className={`w-6 h-6 rounded-lg text-[11px] font-black transition-all shrink-0 border ${
+                                  idx === reviewIndex
+                                    ? 'bg-m3-primary text-m3-on-primary border-m3-primary shadow-sm'
+                                    : h.isCorrect
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                    : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                                }`}
+                              >
+                                {idx + 1}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            type="button"
+                            disabled={reviewIndex >= gameHistory.length - 1}
+                            onClick={() => { setReviewAutoPlay(false); setReviewIndex(i => Math.min(gameHistory.length - 1, i + 1)); }}
+                            className="px-2.5 py-1.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-container-high disabled:opacity-40 text-xs font-bold text-slate-700 flex items-center gap-1 transition-colors"
+                          >
+                            下一题
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                          {gameHistory.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!reviewAutoPlay && reviewIndex >= gameHistory.length - 1) {
+                                  setReviewIndex(0);
+                                }
+                                setReviewAutoPlay(v => !v);
+                              }}
+                              className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 border transition-colors ${
+                                reviewAutoPlay
+                                  ? 'bg-m3-primary text-m3-on-primary border-m3-primary'
+                                  : 'bg-m3-surface border-m3-outline-variant/30 text-slate-700 hover:bg-m3-surface-container'
+                              }`}
+                            >
+                              {reviewAutoPlay ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                              {reviewAutoPlay ? '暂停播放' : '依次播放'}
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 ml-auto">
+                          <button
+                            type="button"
+                            onClick={() => setReviewShowBasemap(v => !v)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 transition-all ${
+                              reviewShowBasemap
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                : 'bg-m3-surface border-m3-outline-variant/30 text-slate-600 hover:bg-m3-surface-container'
+                            }`}
+                          >
+                            <MapIcon className="w-3.5 h-3.5" />
+                            底图：{reviewShowBasemap ? '开' : '关'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setReviewShowStops(v => !v)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 transition-all ${
+                              reviewShowStops
+                                ? 'bg-blue-50 text-blue-800 border-blue-300'
+                                : 'bg-m3-surface border-m3-outline-variant/30 text-slate-600 hover:bg-m3-surface-container'
+                            }`}
+                          >
+                            <MapPin className="w-3.5 h-3.5" />
+                            站点：{reviewShowStops ? '开' : '关'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </motion.div>
             </>
           )}
@@ -8968,6 +10031,48 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
                       <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
 
+                      {/* Line Cache Setting & Clear Cache Button */}
+                      <div className="flex flex-col gap-2.5 p-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col">
+                            <span className="text-xs font-bold text-slate-700">线路缓存</span>
+                            <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">
+                              缓存每次检索的线路数据以加速同范围检索（跨月自动清除）
+                            </span>
+                          </div>
+                          <button 
+                            type="button"
+                            onClick={toggleLineCache}
+                            className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 border-2 ${enableLineCache ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
+                          >
+                            <motion.div 
+                              animate={{ x: enableLineCache ? 22 : 0 }}
+                              transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+                              className={`rounded-full shadow-sm transition-colors duration-200 ${enableLineCache ? 'w-4.5 h-4.5 bg-m3-on-primary' : 'w-3.5 h-3.5 bg-m3-outline'}`}
+                            />
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 bg-m3-surface-container-low border border-m3-outline-variant/25 rounded-xl px-3 py-2">
+                          <span className="text-[10px] font-bold text-slate-500 truncate">
+                            {cacheClearedFeedback
+                              ? '本地缓存已清除'
+                              : lineCacheStats.linesCount > 0 || lineCacheStats.stopsCount > 0
+                              ? `已缓存 ${lineCacheStats.linesCount} 条线路 · ${lineCacheStats.stopsCount} 个站点`
+                              : '当前暂无本地缓存'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleClearLineCache}
+                            className="px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200/70 text-[10px] font-black flex items-center gap-1 transition-all cursor-pointer shrink-0 active:scale-95"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            清除缓存
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
+
                       {/* Custom API Key & Security Code Toggle & Input (Always at the very bottom of General) */}
                       <div className="flex flex-col gap-3 p-1">
                         <div className="flex items-center justify-between">
@@ -9033,6 +10138,26 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             </div>
                           </div>
                         )}
+                      </div>
+
+                      <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
+
+                      {/* Reset App Button */}
+                      <div className="flex items-center justify-between gap-3 p-1">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-bold text-slate-700">重置</span>
+                          <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">
+                            重置巴士线路图，从头开始
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleResetApp}
+                          className="px-3.5 py-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 border border-red-200/80 text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shrink-0 active:scale-95"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          重置
+                        </button>
                       </div>
                     </div>
                     ) : settingsTab === 'dataFilter' ? (
@@ -9782,6 +10907,23 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             <Navigation className="w-5 h-5 transition-transform group-hover:scale-110 text-m3-primary fill-current" />
           </button>
         )}
+
+        <OnboardingGuide
+          step={onboardingStep}
+          setStep={setOnboardingStep}
+          lineThickness={lineThickness}
+          setLineThickness={setLineThickness}
+          enableLineCache={enableLineCache}
+          onSelectLineCache={handleOnboardingSelectCache}
+          useCustomApiKey={useCustomApiKey}
+          onSelectCustomApiKey={handleOnboardingSelectCustomApi}
+          customApiKey={customApiKey}
+          setCustomApiKey={setCustomApiKey}
+          customApiSecurityCode={customApiSecurityCode}
+          setCustomApiSecurityCode={setCustomApiSecurityCode}
+          onFinishOnboarding={handleFinishOnboarding}
+          barButtonRefs={barButtonRefs}
+        />
 
       </main>
 
