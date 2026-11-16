@@ -1,0 +1,53 @@
+name: Update shared city lines
+on:
+  workflow_dispatch:
+    inputs:
+      city:
+        description: City requested through the protected gateway
+        required: true
+        type: string
+      request_id:
+        description: Gateway-issued task UUID
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: city-data-refresh
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Collect, validate and publish city JSON
+        run: npm run city-data:update
+        env:
+          CITY_UPDATE_CITY: ${{ inputs.city }}
+          CITY_UPDATE_REQUEST_ID: ${{ inputs.request_id }}
+          CITY_UPDATE_GATEWAY_URL: ${{ vars.CITY_UPDATE_GATEWAY_URL }}
+          CITY_UPDATE_CALLBACK_SECRET: ${{ secrets.CITY_UPDATE_CALLBACK_SECRET }}
+          AMAP_WEB_SERVICE_KEY: ${{ secrets.AMAP_WEB_SERVICE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CITY_DATA_GITHUB_BRANCH: busline-data
+          CITY_SEARCH_PAGE_LIMIT: '100'
+          CITY_LINE_QUERY_LIMIT: '1500'
+      - name: Retain non-sensitive collection report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: city-update-report
+          path: city-update-report.json
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,3 +1,19 @@
+import { CityUpdateStatus } from './components/CityUpdateStatus';
+import type { CityUpdateJob } from './utils/cityUpdateJobs';
+import { CityDataPanel } from './components/CityDataPanel';
+import { normalizeCityDataset, type CityDataset } from './utils/cityDataset';
+import { actionsCityUpdatesEnabled, cityUpdateJobs, loadSharedCity, inspectSharedCity, saveSharedCity, acquireCityRefresh, releaseCityRefresh, citySnapshotFresh, sharedCityDataEnabled } from './utils/sharedCityClient';
+import { lineBaseIdentity, matchesLineQuery, matchesReturnedLine } from './utils/lineIdentity';
+import { resolveSearchCity } from './utils/searchCity';
+import { discoverStationLines, segmentGridKeys } from './utils/stationCoverage';
+import { joinLineSegments } from './utils/mapPerformance';
+import { getSuggestionKind, rankSearchSuggestions } from './utils/searchSuggestions';
+import { BusPlanner } from './components/BusPlanner';
+import type { BusPlan } from './utils/busPlanner';
+import { TimelineBar } from './components/TimelineBar';
+import { isLineOperating, updateTimelineVisibility, type TimelineOverlayEntry } from './utils/timeline';
+import { getOperatingHours, SCHEDULE_DATA_VERSION } from './utils/operatingHours';
+import { OperatingHours } from './components/OperatingHours';
 import { GAME_QUOTA_KEY, PUBLIC_GAME_DAILY_LIMIT, readGameQuota, consumeGameQuota } from './utils/gameQuota';
 import { BuslineAI, type AIRegionContext } from './components/BuslineAI';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
@@ -15,7 +31,7 @@ import {
   saveCitySearchToCache,
   saveLinesToCache,
 } from './utils/lineCache';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
 import { OnboardingGuide } from './components/OnboardingGuide';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
@@ -125,7 +141,7 @@ const initialAmapConfig = getInitialAmapConfig();
 const AMAP_KEY = initialAmapConfig.key;
 const SECURITY_CODE = initialAmapConfig.securityCode;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
-const APP_VERSION = '5.1';
+const APP_VERSION = '5.5';
 const APP_LAST_VERSION_KEY = 'app_last_visited_version';
 
 const compareVersions = (v1: string, v2: string): number => {
@@ -150,7 +166,8 @@ if (typeof window !== 'undefined') {
 const checkIsLineQuery = (str: string): boolean => {
   if (!str) return false;
   const s = str.trim();
-  
+  // District names such as 下花园 are valid route prefixes despite containing 园.
+  if (/^[\u4e00-\u9fffA-Za-z]{0,12}\d{1,4}(?:路|线)?(?:快|慢|支|区间|内环|外环)?$/.test(s)) return true;
   const excludeWords = ['站', '口', '校区', '公寓', '小区', '公园', '中心', '大厦', '大学', '中学', '小学', '医院', '市场', '公司', '广场', '胡同', '街', '路口', '桥', '枢纽', '住宅', '东门', '西门', '南门', '北门', '酒店', '餐', '超市', '商场', '银行', '居委会', '村', '寺', '庙', '庭', '园', '苑', '府', '湾'];
   if (excludeWords.some(w => s.includes(w))) {
     return false;
@@ -270,6 +287,8 @@ export default function App() {
   const activeBusLinePolylineRef = useRef<any | null>(null);
   const referenceAreaOverlayRef = useRef<any | null>(null);
   const searchVersionRef = useRef<number>(0);
+  const aggregateVersionRef = useRef(0);
+  const roadLookupVersionRef = useRef(0);
   const isClearedRef = useRef<boolean>(false);
 
   const getStopColor = useCallback((count: number, defaultColor: string) => {
@@ -287,6 +306,9 @@ export default function App() {
     return saved ? parseFloat(saved) : 11;
   });
   const [selectedSegmentLines, setSelectedSegmentLines] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!selectedSegmentLines) roadLookupVersionRef.current++;
+  }, [selectedSegmentLines]);
   const [selectedStop, setSelectedStop] = useState<any | null>(null);
   const [stationConnectivityCard, setStationConnectivityCard] = useState<{
     stop: any;
@@ -308,8 +330,9 @@ export default function App() {
   const [gameLoading, setGameLoading] = useState(false);
   const [gameLoadingText, setGameLoadingText] = useState('正在随机检索题目并绘制线网地图，请稍候...');
   const [gameScore, setGameScore] = useState(0);
+  const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [publicGamesUsed, setPublicGamesUsed] = useState(() => readGameQuota(localStorage));
-  const publicGameLimitReached = !initialAmapConfig.isCustom && publicGamesUsed >= PUBLIC_GAME_DAILY_LIMIT;
+  const publicGameLimitReached = !isAdminVerified && !initialAmapConfig.isCustom && publicGamesUsed >= PUBLIC_GAME_DAILY_LIMIT;
   useEffect(() => {
     const refresh = () => setPublicGamesUsed(readGameQuota(localStorage));
     const interval = window.setInterval(refresh, 15000);
@@ -745,7 +768,7 @@ export default function App() {
       setApiErrorNotification('地图尚未就绪，请稍后再开始游戏。');
       return;
     }
-    if (!initialAmapConfig.isCustom) {
+    if (!initialAmapConfig.isCustom && !isAdminVerified) {
       try {
         if (!consumeGameQuota(localStorage)) {
           setPublicGamesUsed(readGameQuota(localStorage));
@@ -1891,7 +1914,14 @@ export default function App() {
   const [showEmptySearchNotice, setShowEmptySearchNotice] = useState(false);
   const customApiSectionRef = useRef<HTMLDivElement>(null);
   const focusCustomApiRef = useRef(false);
-  const [showLargeAreaWarning, setShowLargeAreaWarning] = useState(false);
+  const [lastCityDataset, setLastCityDataset] = useState<CityDataset | null>(null);
+  const [sharedCityStatus, setSharedCityStatus] = useState('');
+  const [cityUpdateJob, setCityUpdateJob] = useState<CityUpdateJob | null>(null);
+  const cityJobWatchRef = useRef<AbortController | null>(null);
+  useEffect(() => () => cityJobWatchRef.current?.abort(), []);
+  const [cityDataNotice, setCityDataNotice] = useState<{city: string; kind: 'missing' | 'expired' | 'busy' | 'unavailable'} | null>(null);
+  const cityAutoChecksRef = useRef(new Map<string, number>());
+  const sharedMapDataRef = useRef(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
   const [cacheUpdateTick, setCacheUpdateTick] = useState(0);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
@@ -1971,9 +2001,23 @@ export default function App() {
 
   const [showSettings, setShowSettings] = useState(false);
   const [showBuslineAI, setShowBuslineAI] = useState(false);
+  const [showBusPlanner, setShowBusPlanner] = useState(false);
+  const plannerOverlaysRef = useRef<any[]>([]);
+  const plannerSearchVersionRef = useRef(0);
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [timelineAvailable, setTimelineAvailable] = useState(false);
+  const [timelineMinute, setTimelineMinute] = useState(() => new Date().getHours() * 60 + new Date().getMinutes());
+  const [timelineLines, setTimelineLines] = useState<BusLine[]>([]);
+  const timelineOverlaysRef = useRef<TimelineOverlayEntry[]>([]);
+  const timelineMinuteRef = useRef(timelineMinute);
+  timelineMinuteRef.current = timelineMinute;
+  const displayedLineNamesRef = useRef<string[]>([]);
+  const timelineActiveCount = useMemo(() => timelineLines.filter(line => isLineOperating(line, timelineMinute) === true).length, [timelineLines, timelineMinute]);
+  const timelineUnknownCount = useMemo(() => timelineLines.filter(line => isLineOperating(line, 0) === null).length, [timelineLines]);
+
   const [aiSearchProgress, setAISearchProgress] = useState('');
   const [aiRegionContext, setAIRegionContext] = useState<AIRegionContext | null>(null);
-  const [settingsTab, setSettingsTab] = useState<'general' | 'experimental' | 'about' | 'dataFilter'>('general');
+  const [settingsTab, setSettingsTab] = useState<'general' | 'about' | 'dataFilter'>('general');
   
   // WeChat Group QR Code management
   const [showWeChatQR, setShowWeChatQR] = useState(false);
@@ -2087,11 +2131,7 @@ export default function App() {
     filterTerminalOnlyRef.current = filterTerminalOnly;
   }, [filterTerminalOnly]);
 
-  const [enableCityWideSearch, setEnableCityWideSearch] = useState(() => {
-    return localStorage.getItem('app_experimental_citywide') === 'true';
-  });
-  const [showCityWideConfirm, setShowCityWideConfirm] = useState(false);
-
+  const enableCityWideSearch = true;
   const [enableLineCache, setEnableLineCache] = useState(() => {
     return localStorage.getItem(APP_LINE_CACHE_ENABLED_KEY) === 'true';
   });
@@ -2453,6 +2493,8 @@ export default function App() {
   });
 
   const blockedKeywordsRef = useRef<string[]>(blockedKeywords);
+  const searchFilterVersionRef = useRef(0);
+  useEffect(() => { searchFilterVersionRef.current++; }, [filterIntervalBus, filterAirportBus, blockedKeywords]);
   useEffect(() => {
     blockedKeywordsRef.current = blockedKeywords;
     localStorage.setItem('app_blocked_keywords', JSON.stringify(blockedKeywords));
@@ -2546,10 +2588,12 @@ export default function App() {
   const [onboardingStep, setOnboardingStep] = useState<number>(() => {
     if (typeof window === 'undefined') return 0;
     const savedVer = localStorage.getItem(APP_LAST_VERSION_KEY);
-    if (!savedVer || compareVersions(APP_VERSION, savedVer) > 0) {
-      return 1;
-    }
+    if (!savedVer) return 1;
     return 0;
+  });
+  const [showVersionUpdate, setShowVersionUpdate] = useState(() => {
+    const savedVersion = localStorage.getItem(APP_LAST_VERSION_KEY);
+    return !!savedVersion && compareVersions(APP_VERSION, savedVersion) > 0;
   });
   const initialApiSnapshotRef = useRef({
     useCustom: useCustomApiKey,
@@ -2610,7 +2654,6 @@ export default function App() {
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState('');
   const [adminMode, setAdminMode] = useState(false); // keep for compatibility or reference if needed
-  const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [showManageModal, setShowManageModal] = useState(false);
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
@@ -3297,9 +3340,7 @@ export default function App() {
     lineThickness: '线条粗细',
     thick: '粗线条',
     thin: '细线条',
-    experimental: '实验功能',
     cityWideSearch: '全市搜索',
-    cityWideSearchWarning: '警告！全市搜索性能消耗较大，可能会导致设备极度不稳定，请知悉',
     cancel: '取消',
     confirmEnable: '确认开启',
     stats: '统计',
@@ -3359,6 +3400,32 @@ export default function App() {
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const autoCompleteRef = useRef<any>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const searchActiveRef = useRef(false);
+  const searchComposingRef = useRef(false);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const searchIdRef = useRef(0);
+  const dismissSearchSuggestions = () => {
+    searchActiveRef.current = false;
+    searchIdRef.current++;
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    setSuggestionsLoading(false);
+    setShowSuggestions(false);
+    setIsMobileSearchOpen(false);
+  };
+  useEffect(() => {
+    const onOutsidePointer = (event: PointerEvent) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(event.target as Node)) dismissSearchSuggestions();
+    };
+    document.addEventListener('pointerdown', onOutsidePointer, true);
+    return () => {
+      document.removeEventListener('pointerdown', onOutsidePointer, true);
+      searchIdRef.current++;
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, []);
+
   
   const getRandomPastelColor = () => {
     const h = Math.floor(Math.random() * 360);
@@ -3536,6 +3603,7 @@ export default function App() {
   const cachedLinesVersionRef = useRef(0);
   const lastTerminalLinesVersionRef = useRef(-1);
   const terminalNamesCacheRef = useRef<Set<string>>(new Set());
+  const terminalCacheSizeRef = useRef(-1);
 
   const updateTerminalNamesCache = useCallback(() => {
     const cache = fetchedLinesCache.current;
@@ -3566,6 +3634,8 @@ export default function App() {
       }
     }
     terminalNamesCacheRef.current = terminalSet;
+    terminalCacheSizeRef.current = cache.size;
+    lastTerminalLinesVersionRef.current = cachedLinesVersionRef.current;
   }, [normalizeStopName]);
 
   const isTerminalStation = useCallback((stop: any): boolean => {
@@ -3578,7 +3648,7 @@ export default function App() {
       return true;
     }
 
-    if (lastTerminalLinesVersionRef.current !== cachedLinesVersionRef.current || terminalNamesCacheRef.current.size === 0) {
+    if (lastTerminalLinesVersionRef.current !== cachedLinesVersionRef.current || terminalCacheSizeRef.current !== fetchedLinesCache.current.size) {
       updateTerminalNamesCache();
       lastTerminalLinesVersionRef.current = cachedLinesVersionRef.current;
     }
@@ -3586,39 +3656,6 @@ export default function App() {
     // 1. Check direct cache set
     if (terminalNamesCacheRef.current.has(sClean)) {
       return true;
-    }
-
-    // 2. Check if stop lines match any line's start or end stop
-    const cache = fetchedLinesCache.current;
-    const stopLines: string[] = Array.isArray(stop.lines) ? stop.lines : [];
-    if (cache && cache.size > 0 && stopLines.length > 0) {
-      const getBaseLineName = (l: string) => {
-        if (!l) return '';
-        return l.split('(')[0].split('#')[0].replace(/路$/, '').trim().toUpperCase();
-      };
-      const stopBaseNames = new Set(stopLines.map(getBaseLineName).filter(Boolean));
-
-      for (const [, line] of cache.entries()) {
-        if (!line) continue;
-        const lineBase = getBaseLineName(line.name || '');
-        if (stopBaseNames.size > 0 && !stopBaseNames.has(lineBase)) {
-          continue;
-        }
-
-        const endClean = normalizeStopName(line.end_stop || '');
-        const startClean = normalizeStopName(line.start_stop || '');
-        if ((endClean && sClean === endClean) || (startClean && sClean === startClean)) {
-          return true;
-        }
-
-        if (line.via_stops && line.via_stops.length > 0) {
-          const first = line.via_stops[0];
-          const last = line.via_stops[line.via_stops.length - 1];
-          if ((last && normalizeStopName(last.name) === sClean) || (first && normalizeStopName(first.name) === sClean)) {
-            return true;
-          }
-        }
-      }
     }
 
     return false;
@@ -3901,7 +3938,21 @@ export default function App() {
   };
 
   const renderBusLine = (line: any, AMap: any, map: any, clear = true, showMarkers = true, shouldFitView = true) => {
+    roadLookupVersionRef.current++;
     const path = line.path.map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat]);
+    if (!line.isUserSubmitted) {
+      line = { ...line, city: (typeof line.city === 'string' && line.city.trim()) || currentCity, ...getOperatingHours(line) };
+      const cachedLine = { ...line, path, stops: [], scheduleFetched: true,
+        sourceQueries: [...new Set([...(fetchedLinesCache.current.get(line.name)?.sourceQueries || []), ...(line.sourceQueries || [])])] };
+      fetchedLinesCache.current.set(line.name, cachedLine);
+      if (enableLineCacheRef.current && line.city) {
+        void saveLinesToCache(line.city, [cachedLine], []).then(() => refreshLineCacheStats());
+      }
+      cachedLinesVersionRef.current++;
+      setCacheUpdateTick(value => value + 1);
+    }
+    displayedLineNamesRef.current = clear ? [line.name] : Array.from(new Set([...displayedLineNamesRef.current, line.name]));
+    setTimelineAvailable(true);
     let polylineObj: any = null;
     
     let displayPaths = [path];
@@ -4366,10 +4417,24 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       return Math.pow(p1[0] - p2[0], 2) + Math.pow(p1[1] - p2[1], 2);
     };
 
+    if (sharedMapDataRef.current) {
+      const normalized = (value: string) => value.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').trim();
+      const lines = [...fetchedLinesCache.current.values()].filter(line => !isLineNameBlockedRef(line.name)
+        && line.via_stops?.some(stop => normalized(stop.name || '') === normalized(name)
+          && getDistSq(getLatLng(stop.location), location) < 0.0000005)).map(line => line.name);
+      if (lines.length) return { name, address: '', lines, isBusStop: true };
+    }
+    const stationSupplement = discoverStationLines(AMap, city || currentCity,
+      [{ name, location: { lng: location[0], lat: location[1] } }], () => false);
     return new Promise((resolve) => {
       const timer = setTimeout(() => resolve(null), 15000);
-      const safeResolve = (val: any) => {
+      const safeResolve = async (val: any) => {
         clearTimeout(timer);
+        const stationLines = await stationSupplement;
+        if (stationLines.length) {
+          val = { name, address: '', isBusStop: true, ...val,
+            lines: [...new Set([...(val?.lines || []), ...stationLines])] };
+        }
         if (val && val.lines) {
           const cleanStopName = name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').replace(/\s*-\s*\d+$/, '').trim();
           const matchUserLines = showUserSubmittedData
@@ -4461,7 +4526,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         matchedPois.forEach(poi => {
           const addressStr = poi.address || '';
           if (addressStr) aggregatedAddresses.add(addressStr);
-          const shortLines = addressStr.split(';').map((s: string) => s.trim()).filter((s: string) => 
+          const shortLines = addressStr.split(/[;；]/).map((s: string) => s.trim()).filter((s: string) =>
             s.length > 0 && !isLineNameBlockedRef(s)
           );
           shortLines.forEach((l: string) => aggregatedShortLines.add(l));
@@ -4529,6 +4594,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const onStopClick = async (item: any) => {
+    roadLookupVersionRef.current++;
     const map = mapRef.current;
     if (!map) return;
     const AMap = (window as any).AMap;
@@ -4556,7 +4622,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       setSelectedStop({
         name: item.name,
         address: item.address,
-        lines: (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
+        lines: (item.address || '').split(/[;；]/).map((s: string) => s.trim()).filter((s: string) =>
           s.length > 0 && !isLineNameBlockedRef(s)
         ).filter(isValidBusLineName),
         city: currentCity
@@ -5451,25 +5517,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
   }, [drawnPoints, isDrawingMode, selectedPointIdx, mapInstance]);
 
-  const toggleCityWideSearch = () => {
-    if (!enableCityWideSearch) {
-      setShowCityWideConfirm(true);
-    } else {
-      setEnableCityWideSearch(false);
-      localStorage.setItem('app_experimental_citywide', 'false');
-    }
-  };
-
-  const confirmCityWideSearch = () => {
-    setEnableCityWideSearch(true);
-    localStorage.setItem('app_experimental_citywide', 'true');
-    setShowCityWideConfirm(false);
-  };
-
-  const cancelCityWideSearch = () => {
-    setShowCityWideConfirm(false);
-  };
-
   const handleClearLineCache = async () => {
     await clearAllLineCache();
     queriedLineNamesRef.current.clear();
@@ -5496,6 +5543,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleManualSearch = async (item: any) => {
+    dismissSearchSuggestions();
+    setShowTimeline(false);
+    setTimelineAvailable(false);
     const map = mapRef.current;
     if (!map) return;
     isClearedRef.current = false;
@@ -5593,7 +5643,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         let lines: string[] = [];
         
         if (isTransitPOI) {
-           lines = (item.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
+           lines = (item.address || '').split(/[;；]/).map((s: string) => s.trim()).filter((s: string) =>
              s.length > 0 && !isLineNameBlockedRef(s)
            ).filter(isValidBusLineName);
         }
@@ -5620,21 +5670,27 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
   };
 
-  const searchIdRef = useRef(0);
 
   const onSearchInputChange = (val: string) => {
+    const currentSearchId = ++searchIdRef.current;
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setSearchQuery(val);
-    if (!val || val.length < 1) {
+    if (searchComposingRef.current) return;
+    searchActiveRef.current = true;
+    setSuggestionsLoading(!!val.trim());
+    setShowSuggestions(!!val.trim());
+    setSuggestions([]);
+    if (!val.trim()) {
       setSuggestions([]);
       setShowSuggestions(false);
       return;
     }
 
     const AMap = (window as any).AMap;
-    if (!AMap || !AMap.AutoComplete) return;
+    if (!AMap || !AMap.AutoComplete) { setSuggestionsLoading(false); return; }
 
-    const currentSearchId = ++searchIdRef.current;
-
+    searchDebounceRef.current = setTimeout(() => {
+    if (currentSearchId !== searchIdRef.current || !searchActiveRef.current) return;
     if (!autoCompleteRef.current) {
       autoCompleteRef.current = new AMap.AutoComplete({
         city: currentCity || '全国',
@@ -5644,7 +5700,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     
     // Parallel search for better results
     const fetchTips = new Promise<any[]>((resolve) => {
+      const timeout = setTimeout(() => resolve([]), 8000);
       autoCompleteRef.current.search(val, (status: string, result: any) => {
+        clearTimeout(timeout);
         if (status === 'complete' && result.tips) {
           resolve(result.tips);
         } else {
@@ -5662,11 +5720,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         pageSize: 10,
         extensions: 'all'
       });
+      const timeout = setTimeout(() => resolve([]), 8000);
       lineSearch.search(val, (status: string, result: any) => {
-        if (result.lineInfo) {
+        clearTimeout(timeout);
+        if (result?.lineInfo) {
           result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
         }
-        if (status === 'complete' && result.lineInfo) {
+        if (status === 'complete' && result?.lineInfo) {
           resolve(result.lineInfo.map((l: any) => ({
             name: l.name,
             district: l.city || currentCity,
@@ -5681,7 +5741,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }) : Promise.resolve([]);
 
     Promise.all([fetchTips, fetchLines]).then(([tips, lines]) => {
-      if (currentSearchId !== searchIdRef.current) return;
+      if (currentSearchId !== searchIdRef.current || !searchActiveRef.current) return;
  
       // Prioritize exact line matches, then other lines, then POIs with locations
       const combined = [...lines];
@@ -5691,10 +5751,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       
       tips.forEach((tip: any) => {
         // High fidelity station detection
-        const isStation = tip.typecode === '150700' || 
-                         tip.name.includes('站') || 
-                         tip.name.includes('口') || 
-                         tip.name.includes('枢纽');
+        const isStation = getSuggestionKind(tip) === 'station';
                          
         const isLine = !isStation && checkIsLineQuery(tip.name);
         
@@ -5707,7 +5764,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
            if (!stationGroups.has(cleanName)) {
              stationGroups.set(cleanName, []);
            }
-           stationGroups.get(cleanName)!.push(tip);
+           stationGroups.get(cleanName)!.push({ ...tip, type: 'busstop' });
         } else if (tip.location) {
            otherTips.push(tip);
         }
@@ -5763,12 +5820,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         });
       }
 
-      setSuggestions(combined.slice(0, 12));
+      setSuggestions(rankSearchSuggestions(combined, val).slice(0, 12));
+      setSuggestionsLoading(false);
       setShowSuggestions(true);
+    }).catch(() => {
+      if (currentSearchId === searchIdRef.current && searchActiveRef.current) setSuggestionsLoading(false);
     });
+    }, 220);
   };
 
   const performFullSearch = async (query: string) => {
+    dismissSearchSuggestions();
     if (!query) return;
     isClearedRef.current = false;
     searchVersionRef.current++;
@@ -5918,7 +5980,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     AMapLoader.load({
       key: AMAP_KEY,
       version: '2.0',
-      plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.DistrictSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking'],
+      plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.DistrictSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking', 'AMap.Transfer'],
     }).then((AMap) => {
       if (watchdogTimer) clearTimeout(watchdogTimer);
       const savedCenter = localStorage.getItem('map_center');
@@ -5950,7 +6012,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       
       map.getCity((res: any) => {
         if (res.city || res.province) {
-          setCurrentCity(res.city || res.province);
+          const detectedCity = resolveSearchCity(res);
+          if (detectedCity) setCurrentCity(detectedCity);
         }
       });
       // Initialize groups for high performance clearing/adding
@@ -5971,7 +6034,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       map.on('moveend', () => {
         map.getCity((res: any) => {
           if (res.city || res.province) {
-            setCurrentCity(res.city || res.province);
+            const detectedCity = resolveSearchCity(res);
+          if (detectedCity) setCurrentCity(detectedCity);
           }
         });
         saveMapState();
@@ -6020,7 +6084,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               setSelectedSegmentName(null);
               setSelectedSegmentLines(null);
               
-              const initialLines = (busStop.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => 
+              const initialLines = (busStop.address || '').split(/[;；]/).map((s: string) => s.trim()).filter((s: string) =>
                 s.length > 0 && !isLineNameBlockedRef(s)
               ).filter(isValidBusLineName);
 
@@ -6185,7 +6249,14 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
   }, [showBaseMap, useSatelliteMap, mapInstance]);
 
-  const handleSearch = async () => {
+  const handleSearch = async (forceRefresh = false, sharedOverride?: CityDataset) => {
+    setCityDataNotice(null);
+    const filtersAtStart = filterIntervalBusRef.current || filterAirportBusRef.current || blockedKeywordsRef.current.length > 0;
+    const filterVersionAtStart = searchFilterVersionRef.current;
+    sharedMapDataRef.current = false;
+    roadLookupVersionRef.current++;
+    setShowTimeline(false);
+    setTimelineAvailable(false);
     const map = mapRef.current;
     if (!map) return;
 
@@ -6202,34 +6273,45 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       return;
     }
 
-    setShowLargeAreaWarning(false);
     setAIRegionContext(null);
     setShowEmptySearchNotice(false);
     const searchStartedAt = performance.now();
 
     setIsSearching(true);
+    setSharedCityStatus(sharedCityDataEnabled ? '正在检查共享城市线路…' : '');
+    let refreshLeaseToken = '';
+    let refreshLeaseCity = '';
+    let saveHandedOff = false;
     try {
       const AMap = (window as any).AMap;
       
       const center = map.getCenter();
-      let currentCity = '北京';
+      let currentCity = sharedOverride?.city || '';
       
       try {
+        if (!currentCity) {
         const geocoder = new AMap.Geocoder();
         const addressResult: any = await new Promise((resolve) => {
+          const timer = setTimeout(() => resolve(null), 8000);
           geocoder.getAddress(center, (status: string, result: any) => {
+            clearTimeout(timer);
             resolve(status === 'complete' ? result : null);
           });
         });
-        if (addressResult && addressResult.regeocode.addressComponent.city) {
-          currentCity = addressResult.regeocode.addressComponent.city;
-        } else if (addressResult && addressResult.regeocode.addressComponent.province) {
-          currentCity = addressResult.regeocode.addressComponent.province;
+        if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
+        currentCity = resolveSearchCity(addressResult?.regeocode?.addressComponent);
         }
       } catch (e) {
         console.warn('City detection failed', e);
       }
 
+      if (!currentCity) {
+        setIsSearching(false);
+        alert('无法确认地图中心所属城市，请稍后重试。');
+        return;
+      }
+
+      setCurrentCity(currentCity);
       const bounds = map.getBounds();
       const sw = bounds.getSouthWest();
       const ne = bounds.getNorthEast();
@@ -6263,6 +6345,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       let allPois: any[] = [];
       let usedRegionCache = false;
       let wasTruncated = false;
+      let usedSharedCity = false;
+      let refreshLineData = forceRefresh;
 
       if (enableLineCacheRef.current) {
         const cityCache = await getCityCacheData(currentCity);
@@ -6289,7 +6373,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           queriedLineNamesRef.current.add(`${currentCity}::${qn}`);
         });
 
-        if (cityCache.regions.length > 0 && isSearchScopeCached(cityCache.regions, targetSearchBox, enableCityWideSearch)) {
+        if (!forceRefresh && cityCache.regions.length > 0 && isSearchScopeCached(cityCache.regions, targetSearchBox, enableCityWideSearch)) {
           const matchedStops = enableCityWideSearch
             ? cityCache.stops
             : cityCache.stops.filter((s) =>
@@ -6306,10 +6390,77 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
       }
 
+      const sharedDataset = sharedOverride || await loadSharedCity(currentCity);
+      if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
+      if (sharedDataset) {
+        if (!forceRefresh && citySnapshotFresh(sharedDataset)) {
+          for (const [name, line] of fetchedLinesCache.current) if (!line.isUserSubmitted) fetchedLinesCache.current.delete(name);
+        }
+        sharedDataset.lines.forEach(line => {
+          if (!isLineNameBlockedRef(line.name) && (!filterIntervalBusRef.current || !line.name.includes('区间'))) fetchedLinesCache.current.set(line.name, line);
+        });
+        cachedLinesVersionRef.current++;
+        updateTerminalNamesCache();
+        if (!forceRefresh && citySnapshotFresh(sharedDataset)) {
+          allPois = sharedDataset.stops;
+          usedRegionCache = true;
+          usedSharedCity = true;
+          sharedMapDataRef.current = true;
+          setLastCityDataset(sharedDataset);
+          setSharedCityStatus(`已读取共享线路 · ${new Date(sharedDataset.capturedAt).toLocaleDateString('zh-CN')}`);
+        } else {
+          // Stale snapshots can seed line data, but must not suppress live POI discovery.
+          usedRegionCache = false;
+          refreshLineData = true;
+          setSharedCityStatus('共享线路需要更新，正在重新检索。');
+        }
+      } else if (sharedCityDataEnabled) {
+        setSharedCityStatus('暂无可用共享线路，正在检索。');
+      }
+
+      if (actionsCityUpdatesEnabled && !usedSharedCity) {
+        cityJobWatchRef.current?.abort();
+        setCityUpdateJob(null);
+        try {
+          const job = await cityUpdateJobs.start(currentCity);
+          if (searchVersionRef.current !== thisSearchVer || isClearedRef.current) return;
+          cityAutoChecksRef.current.set(currentCity.replace(/市$/, ''), Date.now());
+          setCityDataNotice(null);
+          setSharedCityStatus(job.message);
+          void watchCityActionJob(job);
+        } catch (error: any) {
+          if (searchVersionRef.current !== thisSearchVer || isClearedRef.current) return;
+          const message = error.message || '暂时无法提交城市更新。';
+          setSharedCityStatus(message);
+          setCityUpdateJob({ city: currentCity, state: 'failed', message });
+        }
+        setIsSearching(false);
+        return;
+      }
+
+      if (sharedCityDataEnabled && !usedSharedCity) {
+        try {
+          refreshLeaseToken = (await acquireCityRefresh(currentCity)).token;
+          refreshLeaseCity = currentCity;
+          if (searchVersionRef.current !== thisSearchVer || isClearedRef.current) return;
+          // An update must use current station data, not silently republish browser-cache results.
+          usedRegionCache = false;
+          refreshLineData = true;
+        } catch (error: any) {
+          if (error.status === 409) {
+            setCityDataNotice({ city: currentCity, kind: 'busy' });
+            setSharedCityStatus(error.message);
+            setIsSearching(false);
+            return;
+          }
+          setSharedCityStatus('共享更新服务暂时不可用，本次检索仅可导出 JSON。');
+        }
+      }
+
       if (!usedRegionCache) {
         const placeSearch = new AMap.PlaceSearch({
           type: '公交车站',
-          pageSize: 100, 
+          pageSize: 50,
           city: currentCity,
           pageIndex: 1,
           extensions: 'all',
@@ -6317,18 +6468,24 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
         let pageIndex = 1;
         const MAX_PAGES = enableCityWideSearch ? 100 : 30; // Increased when city wide
+        let actualFetchedCount = 0;
         const fetchPage = async (page: number): Promise<boolean> => {
           return new Promise((resolve) => {
-            const timeout = setTimeout(() => resolve(false), 10000);
+            let finished = false;
+            const timeout = setTimeout(() => { finished = true; wasTruncated = true; resolve(false); }, 10000);
             placeSearch.setPageIndex(page);
             
             const callback = (status: string, result: any) => {
+              if (finished) return;
+              finished = true;
               clearTimeout(timeout);
+              if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) { resolve(false); return; }
               checkAmapQuotaError(status, result);
               if (status === 'complete' && result.poiList && result.poiList.pois.length > 0) {
                 allPois.push(...result.poiList.pois);
                 const totalCount = result.poiList.count || 0;
-                const fetchedCount = page * 100;
+                actualFetchedCount += result.poiList.pois.length;
+                const fetchedCount = actualFetchedCount;
                 if (fetchedCount < totalCount && page < MAX_PAGES) {
                   resolve(true); 
                 } else {
@@ -6338,6 +6495,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   resolve(false);
                 }
               } else {
+                if (status !== 'no_data') wasTruncated = true;
                 resolve(false);
               }
             };
@@ -6351,7 +6509,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         };
 
         let hasMore = true;
-        while (hasMore) {
+        while (hasMore && searchVersionRef.current === thisSearchVer && !isClearedRef.current && !isMinigameActiveRef.current) {
           hasMore = await fetchPage(pageIndex);
           if (hasMore) pageIndex++;
         }
@@ -6378,7 +6536,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
         const markers: any[] = [];
         pois.forEach((poi: any) => {
-          const linesAr = (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
+          const linesAr = (poi.address || '').split(/[;；]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
           const key = `${poi.location.lng},${poi.location.lat}`;
           allMapStopsRef.current.set(key, {
             name: poi.name,
@@ -6410,7 +6568,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             setTopCard('stop');
             setSelectedSegmentLines(null);
             setSelectedSegmentName(null);
-            const initialLines = (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
+            const initialLines = (poi.address || '').split(/[;；]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
             setSelectedStop({
               name: poi.name,
               address: poi.address,
@@ -6443,11 +6601,35 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         const lineNamesSet = new Set<string>();
         pois.forEach((poi: any) => {
           const linesString = poi.address || '';
-          const lines = linesString.split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
+          const lines = linesString.split(/[;；]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
           lines.forEach((l: string) => lineNamesSet.add(l));
         });
 
-        await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity);
+        if (!usedSharedCity && enableCityWideSearch && map.getZoom() >= 13) {
+          // Cross-check the visible area against transit stations, even when
+          // the city POIs came from cache. Keep requests bounded near the user.
+          const visibleStops = pois.filter((poi: any) => poi.location && bounds.contains(poi.location))
+            .sort((a: any, b: any) =>
+              (a.location.lng - center.lng) ** 2 + (a.location.lat - center.lat) ** 2
+              - (b.location.lng - center.lng) ** 2 - (b.location.lat - center.lat) ** 2).slice(0, 60);
+          const extraNames = await discoverStationLines(AMap, currentCity, visibleStops,
+            () => searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current);
+          extraNames.filter(name => !isLineNameBlockedRef(name)).forEach(name => lineNamesSet.add(name));
+        }
+        if (enableCityWideSearch) {
+          for (const line of fetchedLinesCache.current.values()) {
+            if (typeof line.city === 'string' && line.city.replace(/市$/, '') === currentCity.replace(/市$/, '') && !line.isUserSubmitted && !isLineNameBlockedRef(line.name)) {
+              lineNamesSet.add(line.name);
+            }
+          }
+        }
+        if (usedSharedCity) {
+          await aggregateAndVisualize(sharedDataset!.lines.filter(line => !isLineNameBlockedRef(line.name)
+            && (!filterIntervalBusRef.current || !line.name.includes('区间'))).map(line => line.name), map, AMap);
+        } else {
+          const linesComplete = await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity, () => false, refreshLineData);
+          if (!linesComplete) wasTruncated = true;
+        }
         if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
           setIsSearching(false);
           return;
@@ -6456,39 +6638,47 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         if (!usedRegionCache && performance.now() - searchStartedAt < 3000) {
           const hasMatchingLines = Array.from(fetchedLinesCache.current.values()).some((line: BusLine) =>
             !line.isUserSubmitted && (!line.city || line.city === currentCity) &&
-            Array.from(lineNamesSet).some(name => line.name === name || line.name.startsWith(`${name}(`) || line.name.startsWith(`${name}#`))
+            Array.from(lineNamesSet).some(name => matchesReturnedLine(name, line))
           );
           if (!hasMatchingLines) setShowEmptySearchNotice(true);
         }
 
         // Fetch all exact physical platforms from the fetched bus lines
         const trueStopsMap = new Map<string, any>();
+        const platformsByName = new Map<string, Set<string>>();
+        const platformName = (name: string = '') => name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '');
+        const rememberPlatform = (key: string, value: any) => {
+          const previous = trueStopsMap.get(key);
+          if (previous) platformsByName.get(platformName(previous.name))?.delete(key);
+          trueStopsMap.set(key, value);
+          const name = platformName(value.name);
+          if (!platformsByName.has(name)) platformsByName.set(name, new Set());
+          platformsByName.get(name)!.add(key);
+        };
+        const findPlatform = (stop: any): string | undefined => {
+          for (const key of platformsByName.get(platformName(stop.name)) || []) {
+            const existing = trueStopsMap.get(key);
+            const dx = existing.location.lng - stop.location.lng;
+            const dy = existing.location.lat - stop.location.lat;
+            if (dx * dx + dy * dy < 0.000000002) return key;
+          }
+        };
         
         Array.from(lineNamesSet).forEach(lineName => {
-          const cacheKeys = Array.from(fetchedLinesCache.current.keys()).filter((k: any) => k === lineName || k.startsWith(`${lineName}(`) || k.startsWith(`${lineName}#`));
+          const cacheKeys = Array.from(fetchedLinesCache.current.keys()).filter((k: any) => matchesReturnedLine(lineName, fetchedLinesCache.current.get(k)!));
 
           cacheKeys.forEach((k: any) => {
             const line = fetchedLinesCache.current.get(k);
             if (line && line.via_stops) {
               line.via_stops.forEach((stop: any) => {
-                if (expandedBounds.contains([stop.location.lng, stop.location.lat])) {
-                  let foundKey = null;
-                  for (const [existingKey, existingStop] of trueStopsMap.entries()) {
-                    if (existingStop.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '') === stop.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '')) {
-                      const dx = existingStop.location.lng - stop.location.lng;
-                      const dy = existingStop.location.lat - stop.location.lat;
-                      if (dx*dx + dy*dy < 0.000000002) { // Same platform radius (approx 4m)
-                        foundKey = existingKey;
-                        break;
-                      }
-                    }
-                  }
+                if (enableCityWideSearch || expandedBounds.contains([stop.location.lng, stop.location.lat])) {
+                  const foundKey = findPlatform(stop);
 
                   if (foundKey) {
                     trueStopsMap.get(foundKey).lines.add(k);
                   } else {
                     const key = `${stop.location.lng},${stop.location.lat}`;
-                    trueStopsMap.set(key, { ...stop, lines: new Set([k]) });
+                    rememberPlatform(key, { ...stop, lines: new Set([k]) });
                   }
                 }
               });
@@ -6500,20 +6690,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         pois.forEach((poi: any) => {
           const key = `${poi.location.lng},${poi.location.lat}`;
           if (!trueStopsMap.has(key)) {
-            let addIt = true;
-            for (const [k, v] of trueStopsMap.entries()) {
-              if (v.name && poi.name && v.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '') === poi.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '')) {
-                 const dx = v.location.lng - poi.location.lng;
-                 const dy = v.location.lat - poi.location.lat;
-                 if (dx*dx + dy*dy < 0.000000002) {
-                   addIt = false; 
-                   break; 
-                 }
-              }
-            }
+            const addIt = !findPlatform(poi);
             if (addIt) {
-              const lines = (poi.address || '').split(';').map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
-              trueStopsMap.set(key, { ...poi, lines: new Set(lines) });
+              const lines = (poi.address || '').split(/[;；]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0 && (!filterIntervalBusRef.current || !s.includes('区间')));
+              rememberPlatform(key, { ...poi, lines: new Set(lines) });
             }
           }
         });
@@ -6600,6 +6780,34 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             }).map(stop => stop.name) }));
         if (areaLines.length) setAIRegionContext({ city: currentCity, bounds: { ...aiBox }, lines: areaLines });
 
+        if (!usedSharedCity) {
+          try {
+          const dataset = normalizeCityDataset({ schemaVersion: 1, city: currentCity, scope: 'city',
+            coverage: 'observed', capturedAt: new Date().toISOString(), retrievalComplete: !wasTruncated,
+            filtered: filtersAtStart || filterVersionAtStart !== searchFilterVersionRef.current
+              || filterIntervalBusRef.current || filterAirportBusRef.current || blockedKeywordsRef.current.length > 0,
+            stops: pois,
+            lines: [...fetchedLinesCache.current.values()].filter(line => !line.isUserSubmitted && line.city === currentCity),
+          });
+          setLastCityDataset(dataset);
+          if (sharedCityDataEnabled && refreshLeaseToken && !dataset.filtered && !usedRegionCache) {
+            setSharedCityStatus('检索完成，正在保存城市历史快照…');
+            // Saving is independent of map rendering; a repository outage must not fail a search.
+            saveHandedOff = true;
+            void saveSharedCity(dataset, refreshLeaseToken).then(result => {
+              if (searchVersionRef.current !== thisSearchVer || isClearedRef.current) return;
+              setSharedCityStatus(result.unchanged ? '线路数据未变化，保留现有快照。'
+                : result.promoted ? '已保存并发布城市线路快照。' : '已保留历史快照，最新共享版本保持不变。');
+            }).catch(error => {
+              void releaseCityRefresh(dataset.city, refreshLeaseToken);
+              if (searchVersionRef.current === thisSearchVer && !isClearedRef.current) setSharedCityStatus(`地图已生成；快照未保存：${error.message}`);
+            });
+          } else if (dataset.filtered) setSharedCityStatus('本次开启了线路过滤，仅可导出，不发布为全市共享数据。');
+          else if (!sharedCityDataEnabled) setSharedCityStatus('本次城市数据可导出 JSON；共享仓库尚未启用。');
+          else setSharedCityStatus('本次城市数据可导出 JSON；共享快照暂未保存。');
+          } catch { setSharedCityStatus('地图已生成，本次数据未通过快照校验。'); }
+        }
+
         if (enableLineCacheRef.current && !usedRegionCache) {
           const linesToSave: BusLine[] = [];
           for (const lineVal of fetchedLinesCache.current.values()) {
@@ -6630,20 +6838,61 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     } catch (error) {
       console.error('Search error:', error);
       setIsSearching(false);
+    } finally {
+      if (refreshLeaseToken && !saveHandedOff) void releaseCityRefresh(refreshLeaseCity, refreshLeaseToken);
     }
   };
 
-  const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string) => {
+  const watchCityActionJob = async (initial: CityUpdateJob) => {
+    cityJobWatchRef.current?.abort();
+    const controller = new AbortController();
+    cityJobWatchRef.current = controller;
+    try {
+      const result = await cityUpdateJobs.watch(initial, job => {
+        if (!controller.signal.aborted) { setCityUpdateJob(job); setSharedCityStatus(job.message); }
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      if (result.state === 'ready' || result.state === 'completed') {
+        const data = await loadSharedCity(result.city, result.id || crypto.randomUUID());
+        if (controller.signal.aborted) return;
+        if (data && citySnapshotFresh(data)) {
+          setLastCityDataset(data);
+          const map = mapRef.current;
+          if (map && !isMinigameActiveRef.current) {
+            map.getCity((address: any) => {
+              const city = resolveSearchCity(address);
+              if (!controller.signal.aborted && city.replace(/市$/, '') === data.city.replace(/市$/, '')) void handleSearch(false, data);
+            });
+          }
+        } else setSharedCityStatus('任务已结束，共享文件仍在同步，可稍后重新进入该城市查看。');
+      }
+    } catch (error: any) {
+      if (!controller.signal.aborted) {
+        setSharedCityStatus(error.message || '无法读取更新状态，可稍后回来查看。');
+        setCityUpdateJob(previous => previous ? { ...previous, message: error.message, state: 'failed' } : null);
+      }
+    }
+  };
+
+  const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string, shouldCancel: () => boolean = () => false, forceRefresh = false) => {
     const startSearchVer = searchVersionRef.current;
+    let complete = true;
     const existingCacheKeys = Array.from(fetchedLinesCache.current.keys()) as string[];
+    const seenQueries = new Set<string>();
     const linesToFetch = lineNames.filter(name => {
-      if (fetchedLinesCache.current.has(name)) return false;
+      const key = lineBaseIdentity(name);
+      if (seenQueries.has(key)) return false;
+      seenQueries.add(key);
+      if (forceRefresh) return true;
+      if (fetchedLinesCache.current.get(name)?.scheduleDataVersion === SCHEDULE_DATA_VERSION
+        && fetchedLinesCache.current.get(name)?.sourceQueries?.some(query => matchesLineQuery(query, name))) return false;
       if (enableLineCacheRef.current) {
-        if (queriedLineNamesRef.current.has(`${city}::${name}`)) return false;
-        const matchedKey = existingCacheKeys.find(k => k === name || k.startsWith(`${name}(`) || k.startsWith(`${name}#`));
+        const matchedKey = existingCacheKeys.find(k => matchesReturnedLine(name, fetchedLinesCache.current.get(k)!));
         if (matchedKey) {
           const matchedLine = fetchedLinesCache.current.get(matchedKey);
-          if (matchedLine && (!matchedLine.city || matchedLine.city === city)) {
+          if (matchedLine?.scheduleDataVersion === SCHEDULE_DATA_VERSION
+            && matchedLine.sourceQueries?.some(query => matchesLineQuery(query, name))
+            && (!matchedLine.city || matchedLine.city === city)) {
             return false;
           }
         }
@@ -6652,26 +6901,26 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     });
     
     if (linesToFetch.length > 0) {
-      const lineSearch = new AMap.LineSearch({
-        pageIndex: 1,
-        city: city || '全国',
-        pageSize: 100,
-        extensions: 'all'
-      });
-
       const newlyFetchedLines: BusLine[] = [];
       const newlyQueriedNames: string[] = [];
       const batchSize = 5;
       for (let i = 0; i < linesToFetch.length; i += batchSize) {
-        if (searchVersionRef.current !== startSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
-          return;
+        if (searchVersionRef.current !== startSearchVer || isClearedRef.current || isMinigameActiveRef.current || shouldCancel()) {
+          return false;
         }
         const batch = linesToFetch.slice(i, i + batchSize);
         await Promise.all(batch.map(name => new Promise<void>((resolve) => {
-          const timeout = setTimeout(() => resolve(), 8000);
-          lineSearch.search(name, (status: string, result: any) => {
+          let finished = false;
+          const timeout = setTimeout(() => { finished = true; complete = false; resolve(); }, 8000);
+          const query = new AMap.LineSearch({ pageIndex: 1, city: city || '全国', pageSize: 100, extensions: 'all' });
+          query.search(name.replace(/[（(].*$/, '').replace(/#\d+$/, ''), (status: string, result: any) => {
             clearTimeout(timeout);
-            if (status === 'complete' || status === 'no_data') {
+            if (finished || searchVersionRef.current !== startSearchVer || isClearedRef.current || isMinigameActiveRef.current || shouldCancel()) { resolve(); return; }
+            finished = true;
+            checkAmapQuotaError(status, result);
+            result = result || {};
+            if (status !== 'complete' || !result.lineInfo?.length) complete = false;
+            if (status === 'complete' && result?.lineInfo?.length) {
               queriedLineNamesRef.current.add(`${city}::${name}`);
               newlyQueriedNames.push(name);
             }
@@ -6684,8 +6933,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 const lineObj: BusLine = {
                   id: info.id,
                   name: uniqueName,
+                  sourceQueries: [...new Set([...(fetchedLinesCache.current.get(uniqueName)?.sourceQueries || []), name])],
                   city,
                   path: info.path.map((p: any) => [p.lng, p.lat]),
+                  ...getOperatingHours(info),
                   start_stop: info.start_stop,
                   end_stop: info.end_stop,
                   stops: [],
@@ -6706,13 +6957,27 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
     }
 
-    if (searchVersionRef.current !== startSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
+    if (searchVersionRef.current !== startSearchVer || isClearedRef.current || isMinigameActiveRef.current || shouldCancel()) {
       return;
     }
-    aggregateAndVisualize(lineNames, map, AMap);
+    await aggregateAndVisualize(lineNames, map, AMap);
+    return complete;
   };
 
   const handleClear = () => {
+    cityJobWatchRef.current?.abort();
+    setCityUpdateJob(null);
+    setCityDataNotice(null);
+    sharedMapDataRef.current = false;
+    setLastCityDataset(null);
+    setSharedCityStatus('');
+    roadLookupVersionRef.current++;
+    dismissSearchSuggestions();
+    if (plannerOverlaysRef.current.length && mapRef.current) mapRef.current.remove(plannerOverlaysRef.current);
+    plannerOverlaysRef.current = [];
+    setShowTimeline(false);
+    setTimelineAvailable(false);
+    displayedLineNamesRef.current = [];
     setAIRegionContext(null);
     setShowEmptySearchNotice(false);
     isClearedRef.current = true;
@@ -6788,7 +7053,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setSelectionPos(null);
     setSelectedSegmentName(null);
     setSelectedSegmentAddress(null);
-    setShowLargeAreaWarning(false);
     setIsSearching(false);
     roadOverlaysRef.current = [];
     roadStopMarkersRef.current = [];
@@ -6825,7 +7089,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               checkAmapQuotaError(status, result);
               const found = status === 'complete' ? (result?.lineInfo || []).filter((line: any) => normalize(line.name || '') === normalize(name) && line.path?.length > 1) : [];
               finish(found.map((line: any) => ({ id: line.id, name: line.name, city, path: line.path.map((point: any) => getLatLng(point)),
-                start_stop: line.start_stop, end_stop: line.end_stop, via_stops: line.via_stops || [], stops: [] })));
+                ...getOperatingHours(line), start_stop: line.start_stop, end_stop: line.end_stop, via_stops: line.via_stops || [], stops: [] })));
             });
           } catch { finish([]); }
         });
@@ -6850,12 +7114,23 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     } finally { setAISearchProgress(''); if (searchVersionRef.current === version) setIsSearching(false); }
   };
 
-  const aggregateAndVisualize = (activeLineSet: string[], map: any, AMap: any) => {
+  const aggregateAndVisualize = async (activeLineSet: string[], map: any, AMap: any) => {
+    const renderVersion = ++aggregateVersionRef.current;
+    const searchVersion = searchVersionRef.current;
+    const cancelled = () => renderVersion !== aggregateVersionRef.current || searchVersion !== searchVersionRef.current || isClearedRef.current || isMinigameActiveRef.current;
+    let sliceStarted = performance.now();
+    const yieldToUI = async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      sliceStarted = performance.now();
+      return cancelled();
+    };
+    if (await yieldToUI()) return;
+    const cityWideRendering = true;
     const expandedLineNames: string[] = [];
     const cacheKeys = Array.from(fetchedLinesCache.current.keys()) as string[];
     
     activeLineSet.forEach(name => {
-      const matches = cacheKeys.filter(key => key === name || key.startsWith(`${name}(`) || key.startsWith(`${name}#`));
+      const matches = cacheKeys.filter(key => matchesReturnedLine(name, fetchedLinesCache.current.get(key)!));
       if (matches.length > 0) {
         expandedLineNames.push(...matches);
       }
@@ -6901,11 +7176,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
     }
 
+    expandedLineNames.splice(0, expandedLineNames.length, ...new Set(expandedLineNames));
+    displayedLineNamesRef.current = [...expandedLineNames];
+    setTimelineAvailable(expandedLineNames.length > 0);
+
     const pointsGrid = new Map<string, [number, number][]>();
+    const indexedPointKeys = new Set<string>();
     const getGridKey = (lng: number, lat: number) => 
       `${(lng * 1000) | 0},${(lat * 1000) | 0}`; 
 
-    expandedLineNames.forEach(name => {
+    for (const name of expandedLineNames) {
+      if (performance.now() - sliceStarted > 8 && await yieldToUI()) return;
       const line = fetchedLinesCache.current.get(name);
       if (line) {
         const cleanedPath: [number, number][] = [];
@@ -6934,6 +7215,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           }
           cleanedPath.push(p);
           
+          if (cityWideRendering) continue;
+          const exactPointKey = `${p[0]},${p[1]}`;
+          if (indexedPointKeys.has(exactPointKey)) continue;
+          indexedPointKeys.add(exactPointKey);
           const key = getGridKey(p[0], p[1]);
           let cell = pointsGrid.get(key);
           if (!cell) {
@@ -6944,23 +7229,26 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
         line.path = cleanedPath;
       }
-    });
+    }
 
     const processedLinesPaths = new Map<string, [number, number][]>();
     const offsetLinesPaths = new Map<string, [number, number][]>();
     
     const OFFSET_VAL = 0.000035; 
 
-    expandedLineNames.forEach(name => {
+    for (const name of expandedLineNames) {
+      if (performance.now() - sliceStarted > 8 && await yieldToUI()) return;
       const line = fetchedLinesCache.current.get(name);
-      if (!line || line.path.length < 2) return;
+      if (!line || line.path.length < 2) continue;
       
       const splitPath: [number, number][] = [];
       for (let i = 0; i < line.path.length - 1; i++) {
+        if (i % 128 === 0 && performance.now() - sliceStarted > 8 && await yieldToUI()) return;
         const start = line.path[i];
         const end = line.path[i+1];
         splitPath.push(start);
         
+        if (cityWideRendering) continue;
         const mids: { p: [number, number], dist: number }[] = [];
         const minGX = Math.floor(Math.min(start[0], end[0]) * 1000);
         const maxGX = Math.floor(Math.max(start[0], end[0]) * 1000);
@@ -7047,14 +7335,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
       }
       offsetLinesPaths.set(name, smoothedOffsetPath);
-    });
+    }
 
     const segmentCounts = new Map<string, { start: [number, number], end: [number, number], offsetStart: [number, number], offsetEnd: [number, number], lines: Set<string> }>();
     
-    expandedLineNames.forEach(name => {
+    for (const name of expandedLineNames) {
+      if (performance.now() - sliceStarted > 8 && await yieldToUI()) return;
       const path = processedLinesPaths.get(name);
       const oPath = offsetLinesPaths.get(name);
-      if (!path || !oPath) return;
+      if (!path || !oPath) continue;
 
       for (let i = 0; i < path.length - 1; i++) {
         const p1 = path[i];
@@ -7080,21 +7369,21 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
         seg.lines.add(name);
       }
-    });
+    }
 
     const finalSegments: { start: [number, number], end: [number, number], offsetStart: [number, number], offsetEnd: [number, number], lines: Set<string> }[] = [];
     const handledKeys = new Set<string>();
     
     const segmentGrid = new Map<string, string[]>();
     const GRID_SIZE = 1000; 
-    const getSegGridKey = (lng: number, lat: number) => `${(lng * GRID_SIZE) | 0},${(lat * GRID_SIZE) | 0}`;
 
     const allKeys = Array.from(segmentCounts.keys());
     allKeys.forEach(key => {
       const s = segmentCounts.get(key)!;
-      const gKey = getSegGridKey((s.start[0] + s.end[0]) * 0.5, (s.start[1] + s.end[1]) * 0.5);
-      if (!segmentGrid.has(gKey)) segmentGrid.set(gKey, []);
-      segmentGrid.get(gKey)!.push(key);
+      for (const gKey of segmentGridKeys(s.offsetStart, s.offsetEnd, GRID_SIZE)) {
+        if (!segmentGrid.has(gKey)) segmentGrid.set(gKey, []);
+        segmentGrid.get(gKey)!.push(key);
+      }
     });
     
     const DIST_MERGE_THRESHOLD_SQ = 0.0000000009; 
@@ -7102,12 +7391,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const getBaseName = (fullName: string) => fullName.split('(')[0];
 
     for (let i = 0; i < allKeys.length; i++) {
+      if (i % 128 === 0 && performance.now() - sliceStarted > 8 && await yieldToUI()) return;
       const key1 = allKeys[i];
       if (handledKeys.has(key1)) continue;
       
       const s1 = segmentCounts.get(key1)!;
       handledKeys.add(key1);
-      
+      if (cityWideRendering) continue;
       const mid1x = (s1.start[0] + s1.end[0]) * 0.5;
       const mid1y = (s1.start[1] + s1.end[1]) * 0.5;
       const v1x = s1.end[0] - s1.start[0];
@@ -7164,12 +7454,23 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       finalSegments.push({ ...s1, lines: mergedLines });
     }
 
-    setStats(prev => ({ ...prev, lines: activeLineSet.length }));
+    setStats(prev => ({ ...prev, lines: new Set(expandedLineNames.map(lineBaseIdentity)).size }));
 
     const colorGroups = new Map<string, Array<[number, number][]>>();
     
-    const isCityWide = localStorage.getItem('app_experimental_citywide') === 'true';
+    const isCityWide = true;
     
+    if (cityWideRendering) {
+      // Whole-city colors do not depend on overlap counts. Keep continuous
+      // route paths rather than allocating and rejoining every tiny segment.
+      for (const name of expandedLineNames) {
+        const path = offsetLinesPaths.get(name);
+        if (!path || path.length < 2) continue;
+        const color = fetchedLinesCache.current.get(name)?.isUserSubmitted ? '#9C7A97' : '#52796F';
+        if (!colorGroups.has(color)) colorGroups.set(color, []);
+        colorGroups.get(color)!.push(path);
+      }
+    }
     finalSegments.forEach((data) => {
       // Helper to check if a line name is user-submitted
       const isLineUserSubmitted = (lineName: string) => {
@@ -7201,58 +7502,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
     });
 
-    const joinSegments = (paths: Array<[number, number][]>) => {
-      if (paths.length === 0) return [];
-      const result: Array<[number, number][]> = [];
-      const remaining = new Set<number>();
-      for (let i = 0; i < paths.length; i++) remaining.add(i);
-      
-      while (remaining.size > 0) {
-        let firstIdx = -1;
-        for (const idx of remaining) { firstIdx = idx; break; }
-        remaining.delete(firstIdx);
-        const currentPath = [...paths[firstIdx]];
-        
-        let found = true;
-        while (found) {
-          found = false;
-          const start = currentPath[0];
-          const end = currentPath[currentPath.length - 1];
-          
-          for (const idx of remaining) {
-            const p = paths[idx];
-            const pStart = p[0];
-            const pEnd = p[p.length - 1];
-            
-            const epsilon = 1e-7;
-            if (Math.abs(pEnd[0] - start[0]) < epsilon && Math.abs(pEnd[1] - start[1]) < epsilon) {
-              currentPath.unshift(...p.slice(0, -1));
-              remaining.delete(idx);
-              found = true;
-              break;
-            } else if (Math.abs(pStart[0] - end[0]) < epsilon && Math.abs(pStart[1] - end[1]) < epsilon) {
-              currentPath.push(...p.slice(1));
-              remaining.delete(idx);
-              found = true;
-              break;
-            } else if (Math.abs(pStart[0] - start[0]) < epsilon && Math.abs(pStart[1] - start[1]) < epsilon) {
-              currentPath.unshift(...[...p].reverse().slice(0, -1));
-              remaining.delete(idx);
-              found = true;
-              break;
-            } else if (Math.abs(pEnd[0] - end[0]) < epsilon && Math.abs(pEnd[1] - end[1]) < epsilon) {
-              currentPath.push(...[...p].reverse().slice(1));
-              remaining.delete(idx);
-              found = true;
-              break;
-            }
-          }
-        }
-        result.push(currentPath);
-      }
-      return result;
-    };
-
     const allOverlays: any[] = [];
     let box: any = referenceBoxRef.current;
     if (showReferenceAreaRef.current) {
@@ -7266,7 +7515,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
 
     colorGroups.forEach((paths, color) => {
-      let joinedPaths = joinSegments(paths);
+      let joinedPaths = cityWideRendering ? paths : joinLineSegments(paths);
       if (showReferenceAreaRef.current && box) {
         const clippedJoined: Array<[number, number][]> = [];
         joinedPaths.forEach(singlePath => {
@@ -7294,6 +7543,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
     });
 
+    if (cancelled()) return;
     lineGroupRef.current.clearOverlays();
     lineGroupRef.current.addOverlays(allOverlays);
     roadOverlaysRef.current = allOverlays;
@@ -7317,6 +7567,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const gX = (clickLngLat[0] * GRID_SIZE) | 0;
       const gY = (clickLngLat[1] * GRID_SIZE) | 0;
       
+      const visitedSegments = new Set<string>();
       const foundSegments: { dist: number; lines: Set<string>; data: any }[] = [];
       const currentZoom = map.getZoom();
       const zoomFactor = Math.max(1, Math.pow(2, 16 - currentZoom));
@@ -7329,6 +7580,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           if (!neighborKeys) continue;
           
           neighborKeys.forEach(key => {
+            if (visitedSegments.has(key)) return;
+            visitedSegments.add(key);
             const data = segmentCounts.get(key)!;
             const dist = distToSegment(clickLngLat, data.offsetStart, data.offsetEnd);
             if (dist < SEARCH_DIST) {
@@ -7372,6 +7625,49 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           setSelectedStop(null);
           setSelectedSegmentName("正在获取路段信息...");
           setSelectedSegmentLines(Array.from(linesSet));
+          const lookupVersion = ++roadLookupVersionRef.current;
+          const lookupSearchVersion = searchVersionRef.current;
+          const lookupCancelled = () => lookupVersion !== roadLookupVersionRef.current
+            || lookupSearchVersion !== searchVersionRef.current || isClearedRef.current || isMinigameActiveRef.current;
+          // Nearby station labels may contain routes absent from city POI
+          // address strings. Verify each candidate's geometry before selection.
+          if (!sharedMapDataRef.current) void (async () => {
+            const nearby: any[] = await new Promise(resolve => {
+              const timer = setTimeout(() => resolve([]), 6000);
+              try {
+                new AMap.PlaceSearch({ city: currentCity, type: '公交车站', pageSize: 20, extensions: 'all' })
+                  .searchNearBy('', closestSegmentProjectedTrue, 400, (status: string, result: any) => {
+                    clearTimeout(timer);
+                    resolve(status === 'complete' ? result?.poiList?.pois || [] : []);
+                  });
+              } catch { clearTimeout(timer); resolve([]); }
+            });
+            if (lookupCancelled()) return;
+            const candidates = new Set<string>();
+            nearby.forEach(poi => String(poi.address || '').split(/[;；]/).map(name => name.trim()).filter(Boolean).forEach(name => candidates.add(name)));
+            const stationLines = await discoverStationLines(AMap, currentCity, nearby.slice(0, 8), lookupCancelled);
+            stationLines.forEach(name => candidates.add(name));
+            const names = [...candidates].filter(name => !isLineNameBlockedRef(name));
+            if (lookupCancelled() || !names.length) return;
+            const activeNames = [...new Set([...displayedLineNamesRef.current, ...names])];
+            await fetchAndDrawLines(activeNames, map, AMap, currentCity, lookupCancelled);
+            if (lookupCancelled()) return;
+            const verifiedLines = new Set(linesSet);
+            const directionLength = Math.hypot(v1x, v1y);
+            for (const name of displayedLineNamesRef.current) {
+              const path = fetchedLinesCache.current.get(name)?.path || [];
+              for (let i = 0; i < path.length - 1; i++) {
+                const dx = path[i + 1][0] - path[i][0], dy = path[i + 1][1] - path[i][1];
+                const length = Math.hypot(dx, dy);
+                if (!length || !directionLength || (dx * v1x + dy * v1y) / (length * directionLength) < 0.85) continue;
+                if (distToSegment(closestSegmentProjectedTrue, path[i], path[i + 1]) <= 0.00012) {
+                  verifiedLines.add(name);
+                  break;
+                }
+              }
+            }
+            if (!lookupCancelled()) setSelectedSegmentLines([...verifiedLines]);
+          })().catch(error => console.warn('Road coverage cross-check failed', error));
           
           if (geocoderRef.current) {
             // Shift the query point 30 meters along the line segment to avoid crossroad intersections
@@ -7391,6 +7687,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             }
 
             geocoderRef.current.getAddress(queryLngLat, (status: string, result: any) => {
+              if (lookupCancelled()) return;
               if (status === 'complete' && result.regeocode) {
                 const comp = result.regeocode.addressComponent;
                 const preciseLocation = [
@@ -7418,6 +7715,97 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     map.on('click', onMapClick);
     mapClickHandlerRef.current = onMapClick;
     drawReferenceArea(map, AMap);
+  };
+
+  useEffect(() => {
+    if (!sharedCityDataEnabled || !mapInstance || isSearching || showMinigameModal || onboardingStep !== 0
+      || activeBusLine || zoomLevel < 11 || !currentCity || currentCity === '全国') return;
+    const key = currentCity.replace(/市$/, '');
+    if (sharedMapDataRef.current && lastCityDataset?.city.replace(/市$/, '') === key) return;
+    if (cityUpdateJob && ['queued', 'running'].includes(cityUpdateJob.state) && cityUpdateJob.city.replace(/市$/, '') === key) return;
+    if (Date.now() - (cityAutoChecksRef.current.get(key) || 0) < 60000) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      const {data, status} = await inspectSharedCity(currentCity);
+      if (cancelled || isMinigameActiveRef.current) return;
+      cityAutoChecksRef.current.set(key, Date.now());
+      if (data && citySnapshotFresh(data)) {
+        setCityDataNotice(null);
+        void handleSearch(false, data);
+      } else {
+        // Do not show the previous city's map as if it belonged to this city.
+        if (sharedMapDataRef.current || (lastCityDataset && lastCityDataset.city.replace(/市$/, '') !== key)) handleClear();
+        if (data) setLastCityDataset(data);
+        setCityDataNotice({ city: currentCity, kind: data ? 'expired' : status === 'unavailable' ? 'unavailable' : 'missing' });
+      }
+    }, 700);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [mapInstance, currentCity, zoomLevel, isSearching, showMinigameModal, onboardingStep, activeBusLine, cityUpdateJob?.id, cityUpdateJob?.state]);
+
+  useEffect(() => {
+    if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
+    const map = mapRef.current;
+    const AMap = (window as any).AMap;
+    lineGroupRef.current?.hide();
+    markerGroupRef.current?.hide();
+    const oldClick = mapClickHandlerRef.current;
+    if (oldClick) map.off('click', oldClick);
+    return () => {
+      lineGroupRef.current?.show();
+      markerGroupRef.current?.show();
+      if (oldClick) map.on('click', oldClick);
+    };
+  }, [showTimeline]);
+
+  useEffect(() => {
+    if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
+    const map = mapRef.current;
+    const AMap = (window as any).AMap;
+    const overlays: any[] = [];
+    const entries: TimelineOverlayEntry[] = [];
+    const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
+    // Build each direction once. Dragging changes visibility without clearing geometry.
+    timelineLines.forEach(line => {
+      const path = (line.path || []).map((point: any) => getLatLng(point));
+      const paths = box ? clipPathToBox(path, box.minLng, box.maxLng, box.minLat, box.maxLat) : [path];
+      if (!paths.some(part => part.length > 1)) return;
+      const polyline = new AMap.Polyline({ path: paths, strokeColor: '#52796F', strokeWeight: lineThickness === 'thin' ? 3 : 6,
+        strokeOpacity: 0.85, lineJoin: 'round', lineCap: 'round', zIndex: 70, bubble: false });
+      polyline.on('click', () => { setSelectedSegmentLines([line.name]); setSelectedStop(null); setSelectedSegmentName(line.name); });
+      overlays.push(polyline);
+      entries.push({ line, overlay: polyline, visible: true });
+    });
+    map.add(overlays);
+    timelineOverlaysRef.current = entries;
+    updateTimelineVisibility(entries, timelineMinuteRef.current);
+    return () => {
+      if (overlays.length) map.remove(overlays);
+      if (timelineOverlaysRef.current === entries) timelineOverlaysRef.current = [];
+    };
+  }, [showTimeline, timelineLines]);
+
+  useEffect(() => {
+    if (showTimeline) updateTimelineVisibility(timelineOverlaysRef.current, timelineMinute);
+  }, [showTimeline, timelineMinute, timelineLines]);
+
+  useEffect(() => {
+    if (!showTimeline) return;
+    timelineOverlaysRef.current.forEach(entry => (entry.overlay as any).setOptions({ strokeWeight: lineThickness === 'thin' ? 3 : 6 }));
+  }, [showTimeline, timelineLines, lineThickness]);
+
+  const drawBusPlan = (plan: BusPlan) => {
+    const map = mapRef.current, AMap = (window as any).AMap;
+    if (!map || !AMap || isMinigameActiveRef.current || plannerSearchVersionRef.current !== searchVersionRef.current) throw new Error('地图状态已改变，请重新规划。');
+    if (plannerOverlaysRef.current.length) map.remove(plannerOverlaysRef.current);
+    const overlays: any[] = [];
+    plan.steps.forEach(step => {
+      if (step.path.length < 2) return;
+      overlays.push(new AMap.Polyline({ path: step.path, strokeColor: step.mode === 'WALK' ? '#B58A52' : '#52796F',
+        strokeWeight: step.mode === 'WALK' ? 4 : 6, strokeStyle: step.mode === 'WALK' ? 'dashed' : 'solid', strokeOpacity: 0.95, zIndex: 80, lineJoin: 'round', lineCap: 'round' }));
+    });
+    plannerOverlaysRef.current = overlays;
+    map.add(overlays);
+    if (overlays.length) map.setFitView(overlays, false, [100, 50, 120, window.innerWidth >= 640 ? 440 : 50]);
   };
 
   const handleScreenshot = async () => {
@@ -7522,10 +7910,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
   // Background fetch for missing line directions
   useEffect(() => {
-    if (selectedStop && selectedStop.lines && selectedStop.lines.length > 0) {
-      const missingLines = selectedStop.lines.filter(l => {
+    const visibleLines = selectedStop?.lines || selectedSegmentLines || [];
+    if (visibleLines.length > 0) {
+      const missingLines = visibleLines.filter((l: string) => {
         const parsed = parseLineInfo(l);
-        return parsed.start === '-' || parsed.end === '-';
+        const cached = fetchedLinesCache.current.get(l);
+        return parsed.start === '-' || parsed.end === '-' || (cached?.scheduleDataVersion !== SCHEDULE_DATA_VERSION && !cached?.isUserSubmitted);
       });
 
       if (missingLines.length > 0 && (window as any).AMap) {
@@ -7545,11 +7935,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
               result.lineInfo.forEach((info: any, index: number) => {
                 const uniqueName = info.name || `${shortName}#${index}`;
-                if (!fetchedLinesCache.current.has(uniqueName)) {
+                if (fetchedLinesCache.current.get(uniqueName)?.scheduleDataVersion !== SCHEDULE_DATA_VERSION) {
                   fetchedLinesCache.current.set(uniqueName, {
                     id: info.id,
                     name: uniqueName,
                     path: info.path.map((p: any) => [p.lng, p.lat]),
+                    ...getOperatingHours(info),
                     start_stop: info.start_stop,
                     end_stop: info.end_stop,
                     via_stops: info.via_stops || [],
@@ -7560,13 +7951,14 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               });
             }
             if (checked === missingLines.length && updated) {
+              cachedLinesVersionRef.current++;
               setCacheUpdateTick(v => v + 1);
             }
           });
         });
       }
     }
-  }, [selectedStop, currentCity]);
+  }, [selectedStop, selectedSegmentLines, currentCity]);
 
   // Background fetch for stop line counts when a bus line is active
   useEffect(() => {
@@ -7590,11 +7982,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     });
 
     let currentUpdateTick = 0;
+    let cancelled = false;
     
     const runBatch = async () => {
       for (let i = 0; i < activeBusLine.via_stops.length; i++) {
         // Stop if map changes or we deactivate the line early
-        if (!stationLineStatsRef.current || !mapRef.current) break;
+        if (cancelled || !stationLineStatsRef.current || !mapRef.current) break;
         
         const stop = activeBusLine.via_stops[i];
         const key = `${stop.location.lng},${stop.location.lat}`;
@@ -7646,6 +8039,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
            }
         });
 
+        if (cancelled) return;
         // Directly update map marker colors for performance without triggering heavy React re-renders
         if (currentUpdateTick > 0 && (i % 4 === 0 || i === activeBusLine.via_stops.length - 1)) {
            currentUpdateTick = 0;
@@ -7665,11 +8059,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
            }
         }
       }
-      setCacheUpdateTick(v => v + 1);
+      if (!cancelled) setCacheUpdateTick(v => v + 1);
     };
     
     runBatch();
-    
+    return () => { cancelled = true; };
   }, [activeBusLine, currentCity]);
 
   return (
@@ -7718,6 +8112,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       </AnimatePresence>
 
       <AnimatePresence>
+        {showBusPlanner && <BusPlanner onClose={() => { setShowBusPlanner(false); if (plannerOverlaysRef.current.length) mapRef.current?.remove(plannerOverlaysRef.current); plannerOverlaysRef.current = []; }}
+          disabled={isSearching || loading || showMinigameModal || isDrawingMode}
+          onClear={() => { handleClear(); plannerSearchVersionRef.current = searchVersionRef.current; }} onDraw={drawBusPlan} />}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {showBuslineAI && <BuslineAI onClose={() => setShowBuslineAI(false)} context={aiRegionContext}
           disabled={isSearching || (showMinigameModal && gameState !== 'menu')} searchProgress={aiSearchProgress} onApply={applyAILines} />}
       </AnimatePresence>
@@ -7726,7 +8126,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         {!isDrawingMode && (
           <div className="flex items-start justify-between gap-4 w-full h-[46px]">
             {/* Pure Material 3 Search Bar (without logo, slightly narrower) */}
-            <div className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative w-[180px] sm:w-[240px] md:w-[280px] rounded-full'}`}>
+            <div ref={searchContainerRef} className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative w-[180px] sm:w-[240px] md:w-[280px] rounded-full'}`}>
               
               {/* Search Lead Icon */}
               <div className="flex items-center justify-center pl-4 pr-1.5 shrink-0 text-m3-primary">
@@ -7741,9 +8141,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   className="bg-transparent border-none outline-none text-xs sm:text-sm font-medium text-slate-800 w-full placeholder:text-[#7A8E83] h-full"
                   value={searchQuery}
                   onChange={(e) => onSearchInputChange(e.target.value)}
-                  onFocus={() => searchQuery && suggestions.length > 0 && setShowSuggestions(true)}
-                  onBlur={() => setTimeout(() => { setShowSuggestions(false); setIsMobileSearchOpen(false); }, 200)}
+                  role="combobox"
+                  aria-label="搜索线路或地点"
+                  aria-autocomplete="list"
+                  aria-expanded={showSuggestions}
+                  aria-controls="search-suggestions"
+                  onFocus={() => { searchActiveRef.current = true; if (searchQuery.trim()) onSearchInputChange(searchQuery); }}
+                  onCompositionStart={() => { searchComposingRef.current = true; searchIdRef.current++; if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); }}
+                  onCompositionEnd={e => { searchComposingRef.current = false; onSearchInputChange(e.currentTarget.value); }}
                   onKeyDown={(e) => {
+                    if (e.nativeEvent.isComposing || searchComposingRef.current || e.keyCode === 229) return;
+                    if (e.key === 'Escape') { dismissSearchSuggestions(); return; }
                     if (e.key === 'Enter') {
                       if (suggestions.length > 0 && showSuggestions) {
                         handleManualSearch(suggestions[0]);
@@ -7771,21 +8179,25 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
               {/* Suggestions Dropdown - Material 3 Floating Card */}
               <AnimatePresence>
-                {showSuggestions && suggestions.length > 0 && (
-                  <motion.div 
+                {showSuggestions && searchQuery.trim().length > 0 && (
+                  <motion.div
+                    id="search-suggestions" role="listbox" aria-busy={suggestionsLoading}
                     initial={{ opacity: 0, scale: 0.95, y: -10 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95, y: -10 }}
                     transition={{ type: 'spring', damping: 20, stiffness: 280 }}
                     className="absolute top-[calc(100%+8px)] left-0 right-0 bg-m3-surface/98 backdrop-blur-2xl border border-m3-outline-variant/40 rounded-3xl shadow-xl overflow-hidden py-2 z-50 pointer-events-auto"
                   >
+                    {suggestionsLoading && <p role="status" className="px-5 py-3 text-xs text-slate-500">正在查找…</p>}
+                    {!suggestionsLoading && suggestions.length === 0 && <p role="status" className="px-5 py-3 text-xs text-slate-500">暂无匹配结果，可按回车继续搜索</p>}
                     {suggestions.slice(0, 6).map((tip, idx) => (
                       <button
                         key={idx}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          handleManualSearch(tip);
-                        }}
+                        type="button"
+                        role="option"
+                        aria-selected={false}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => handleManualSearch(tip)}
                         className="w-full px-5 py-3.5 text-left hover:bg-m3-primary/8 transition-colors flex flex-col gap-0.5 relative border-b border-m3-outline-variant/15 last:border-0"
                       >
                         <div className="flex items-center gap-2">
@@ -7795,11 +8207,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                               汇总
                             </span>
                           )}
-                          {tip.type === 'busline' && (
-                            <span className="px-2 py-0.5 rounded-full bg-m3-secondary-container text-[8px] font-bold text-m3-on-secondary-container uppercase border border-m3-outline/10">
-                              {t('lineLabel')}
-                            </span>
-                          )}
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border border-m3-outline/10 whitespace-nowrap shrink-0 ${getSuggestionKind(tip) === 'station' ? 'bg-m3-primary-container text-m3-on-primary-container' : getSuggestionKind(tip) === 'line' ? 'bg-m3-secondary-container text-m3-on-secondary-container' : 'bg-m3-surface-container text-slate-500'}`}>
+                            {getSuggestionKind(tip) === 'station' ? '站点' : getSuggestionKind(tip) === 'line' ? '线路' : '地点'}
+                          </span>
                           {(tip.isUserSubmitted || tip.type === 'userLine') && (
                             <span className="px-2 py-0.5 rounded-full bg-m3-tertiary-container text-[8px] font-bold text-m3-on-tertiary-container border border-m3-outline/10 whitespace-nowrap">
                               用户
@@ -7890,8 +8300,20 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               </div>
 
               {/* Settings FAB */}
+              {timelineAvailable && !isSearching && !loading && !isDrawingMode && !showMinigameModal && (
+                <button type="button" aria-pressed={showTimeline} aria-label="时间轴" title="时间轴" onClick={() => {
+                  if (showTimeline) { setShowTimeline(false); return; }
+                  const currentLines = displayedLineNamesRef.current.map(name => fetchedLinesCache.current.get(name)).filter(Boolean) as BusLine[];
+                  setTimelineLines(currentLines.map(line => ({ ...line })));
+                  setSelectedStop(null); setSelectedSegmentLines(null); setActiveBusLine(null); setStationConnectivityCard(null);
+                  setShowTimeline(true);
+                }} className={`pointer-events-auto shrink-0 w-[42px] h-[42px] rounded-2xl border border-m3-outline-variant/40 shadow-sm flex items-center justify-center transition-all active:scale-95 ${showTimeline ? 'bg-m3-primary text-white' : 'bg-m3-surface/95 text-m3-primary'}`}>
+                  <Clock className="w-4.5 h-4.5" />
+                </button>
+              )}
+              {/* 公交路线规划入口暂时隐藏，保留实现以便后续恢复。 */}
               <div className="pointer-events-auto shrink-0">
-                <button onClick={() => setShowBuslineAI(prev => !prev)} title="Busline AI" aria-label="打开 Busline AI"
+                <button onClick={() => { setShowBuslineAI(prev => !prev); setShowBusPlanner(false); }} title="Busline AI" aria-label="打开 Busline AI"
                   className="backdrop-blur-md bg-m3-primary-container/95 text-m3-on-primary-container border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center hover:scale-105 transition-all duration-200 active:scale-95">
                   <Sparkles className="w-4.5 h-4.5" />
                 </button>
@@ -7912,24 +8334,18 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           </div>
         )}
 
-        <AnimatePresence>
-          {showLargeAreaWarning && isSearching && (
-            <motion.div 
-              initial={{ y: -10, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: -10, opacity: 0 }}
-              className="absolute top-24 left-1/2 -translate-x-1/2 z-20 pointer-events-none"
-            >
-              <div className="backdrop-blur-xl bg-amber-50/90 border border-amber-200 px-6 py-3 rounded-2xl shadow-xl flex items-center gap-3 border-b-4 border-b-amber-500/50">
-                <div className="w-8 h-8 bg-amber-100 rounded-full flex items-center justify-center shrink-0">
-                  <Loader2 className="w-4 h-4 text-amber-600 animate-spin" />
-                </div>
-                <h3 className="font-bold text-amber-800 text-[13px] whitespace-nowrap">{t('warning')}</h3>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+
       </header>
+
+      <CityUpdateStatus job={cityUpdateJob} onClose={() => { cityJobWatchRef.current?.abort(); setCityUpdateJob(null); }} />
+      {cityDataNotice && !cityUpdateJob && !isSearching && <div role="status" className="absolute top-24 left-4 sm:left-6 z-30 max-w-sm rounded-2xl bg-m3-surface/95 border border-m3-outline-variant/40 p-4 shadow-lg flex items-center gap-3">
+        <div className="text-xs text-slate-600"><p className="font-bold text-slate-800 mb-1">{cityDataNotice.city}</p>
+          {cityDataNotice.kind === 'expired' ? '共享线路已超过两个月或尚不完整，请全市检索更新。'
+            : cityDataNotice.kind === 'busy' ? '已有城市更新任务，请稍后再试。'
+            : cityDataNotice.kind === 'unavailable' ? '暂时无法读取共享线路，您仍可手动进行全市检索。' : '暂无可用的全市线路，请检索后共享给其他用户。'}</div>
+        <button type="button" aria-label="全市检索并保存" title="全市检索并保存" onClick={() => void handleSearch(true)} className="p-3 shrink-0 rounded-full bg-m3-primary text-m3-on-primary"><Search className="w-5 h-5" /></button>
+        <button type="button" aria-label="关闭城市数据提示" onClick={() => setCityDataNotice(null)} className="text-slate-400"><X className="w-4 h-4" /></button>
+      </div>}
 
       <main className="relative flex-1">
         <div className="relative w-full h-full">
@@ -8303,7 +8719,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
 
 
-        {!isDrawingMode && (
+        {showTimeline && <TimelineBar minute={timelineMinute} onChange={minute => { setTimelineMinute(minute); setSelectedSegmentLines(null); setSelectedStop(null); }} onClose={() => setShowTimeline(false)}
+          active={timelineActiveCount} total={timelineLines.length} unknown={timelineUnknownCount} />}
+
+        {!isDrawingMode && !showTimeline && (
           <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 pointer-events-auto flex flex-col items-center select-none ${onboardingStep >= 6 ? 'z-[130]' : 'z-30'}`}>
             {/* Modular Bottom Hub Bar in Morandi Green theme - Icon Only, Enlarged */}
             <div className="backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-[0_8px_32px_rgba(28,47,39,0.15)] rounded-full px-3 py-2 sm:px-3.5 sm:py-2.5 flex items-center gap-1.5 sm:gap-2">
@@ -8399,7 +8818,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       : isSearching 
                         ? 'bg-[#E0EBE4] border border-[#BFD3C6] text-[#334D43] cursor-wait' 
                         : enableCityWideSearch 
-                          ? 'bg-m3-error border border-m3-error text-m3-on-error shadow-m3-error/25 hover:bg-m3-error/90 cursor-pointer' 
+                          ? 'bg-m3-primary border border-m3-primary text-m3-on-primary shadow-m3-primary/30 hover:bg-[#466960] cursor-pointer'
                           : (zoomLevel < 12 ? 'bg-[#DEE5E1] text-[#8C9E95] border border-transparent cursor-not-allowed' : 
                             'bg-m3-primary border border-m3-primary text-m3-on-primary shadow-m3-primary/30 hover:bg-[#466960] cursor-pointer')
                 }`}
@@ -9607,9 +10026,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     )}
 
                     <div className="rounded-2xl border border-m3-outline-variant/40 bg-m3-primary-container/40 p-3 space-y-2">
-                      <p className="text-xs font-bold text-m3-on-primary-container">{initialAmapConfig.isCustom ? '当前使用自有高德API，不受每日3局限制。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局`}</p>
+                      <p className="text-xs font-bold text-m3-on-primary-container">{isAdminVerified ? '管理员模式已启用，不受每日3局限制。' : initialAmapConfig.isCustom ? '当前使用自有高德API，不受每日3局限制。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局`}</p>
                       <p className="text-[11px] leading-relaxed text-slate-500">为保障公共API使用，同一浏览器每天最多开始3局游戏，所有模式共用次数，按本地日期每日重置。开局即计1次，退出或重新挑战均不退还；复盘不消耗次数。填写自己的高德API并刷新生效后可不限局数游玩。</p>
-                      {!initialAmapConfig.isCustom && <button type="button" onClick={openGameApiSettings} className="text-xs font-black text-m3-primary underline">填写自己的高德API</button>}
+                      {!initialAmapConfig.isCustom && !isAdminVerified && <button type="button" onClick={openGameApiSettings} className="text-xs font-black text-m3-primary underline">填写自己的高德API</button>}
                     </div>
 
                     {/* Start & Review Buttons */}
@@ -9864,7 +10283,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       );
                     })()}
 
-                    {!initialAmapConfig.isCustom && <div className="w-full rounded-2xl bg-m3-primary-container/40 p-3 text-xs text-m3-on-primary-container leading-relaxed">
+                    {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式：不受每日3局限制</p>}
+                    {!initialAmapConfig.isCustom && !isAdminVerified && <div className="w-full rounded-2xl bg-m3-primary-container/40 p-3 text-xs text-m3-on-primary-container leading-relaxed">
                       <p>{publicGameLimitReached ? '本浏览器今日3局公共API游戏次数已用完。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局。`}</p>
                       <button type="button" onClick={openGameApiSettings} className="mt-2 font-black underline">填写自己的高德API，继续游玩</button>
                     </div>}
@@ -10115,12 +10535,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     >
                       {t('dataFilter')}
                     </button>
-                    <button 
-                      onClick={() => setSettingsTab('experimental')}
-                      className={`px-4 py-2.5 rounded-full text-left text-xs font-bold transition-all ${settingsTab === 'experimental' ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-600 hover:bg-m3-primary/5 hover:text-slate-800'}`}
-                    >
-                      {t('experimental')}
-                    </button>
+
                     <button 
                       onClick={() => setSettingsTab('about')}
                       className={`px-4 py-2.5 rounded-full text-left text-xs font-bold transition-all ${settingsTab === 'about' ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-600 hover:bg-m3-primary/5 hover:text-slate-800'}`}
@@ -10130,6 +10545,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   </div>
 
                   <div className="flex-1 p-8 overflow-y-auto relative bg-m3-surface">
+                    {settingsTab === 'general' && <div className="mb-6"><CityDataPanel data={lastCityDataset} status={sharedCityStatus} onRefresh={lastCityDataset && !citySnapshotFresh(lastCityDataset) ? () => { if (!isSearching) { setShowSettings(false); void handleSearch(true); } } : undefined} /></div>}
+
                     <button
                       type="button"
                       onClick={() => setShowSettings(false)}
@@ -10508,29 +10925,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                           )}
                         </div>
                       </div>
-                    ) : settingsTab === 'experimental' ? (
-                      <div className="space-y-6">
-                        <div className="space-y-4">
-                          {/* City Wide Search */}
-                          <div className="flex items-center justify-between p-1">
-                            <div className="flex flex-col">
-                              <span className="text-xs font-bold text-slate-755">{t('cityWideSearch')}</span>
-                              <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">实验性功能：可能导致设备极度卡顿</span>
-                            </div>
-                            <button 
-                              type="button"
-                              onClick={toggleCityWideSearch}
-                              className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 shrink-0 border-2 ${enableCityWideSearch ? 'bg-m3-error border-m3-error' : 'bg-m3-surface-container-highest border-m3-outline'}`}
-                            >
-                              <motion.div 
-                                animate={{ x: enableCityWideSearch ? 22 : 0 }}
-                                transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-                                className={`rounded-full shadow-sm transition-colors duration-200 ${enableCityWideSearch ? 'w-4.5 h-4.5 bg-m3-on-error' : 'w-3.5 h-3.5 bg-m3-outline'}`}
-                              />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
                     ) : (
                       <div className="flex flex-col items-center justify-center min-h-full py-2 gap-4 bg-m3-surface select-none">
                         <div className="w-18 h-18 bg-m3-surface-container border border-m3-outline-variant/35 rounded-3xl flex items-center justify-center shadow-lg mb-1 transition-all hover:scale-105 hover:rotate-2 duration-300">
@@ -10542,7 +10936,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         </div>
                         <h3 className="text-lg font-black text-slate-800 tracking-tight">{t('title')}</h3>
                         <div className="px-3 py-1 bg-m3-primary-container rounded-full border border-m3-outline/5 select-none font-sans">
-                           <span className="text-[9px] font-black text-m3-on-primary-container tracking-widest uppercase">busline 5.1</span>
+                           <span className="text-[9px] font-black text-m3-on-primary-container tracking-widest uppercase">busline 5.5</span>
                         </div>
                         <div className="flex flex-col items-center mt-2 gap-3">
                            <span 
@@ -10573,50 +10967,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       </div>
                     )}
                   </div>
-                </div>
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
-
-        {/* City Wide Search Warning Modal */}
-        <AnimatePresence>
-          {showCityWideConfirm && (
-            <>
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[110] bg-slate-900/40 backdrop-blur-sm pointer-events-auto"
-              />
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: 20 }}
-                className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[111] w-[340px] bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col pointer-events-auto border border-m3-error/20"
-              >
-                <div className="p-6 pb-2">
-                  <div className="w-12 h-12 rounded-2xl bg-m3-error-container text-m3-error flex items-center justify-center mb-4">
-                    <Info className="w-6 h-6" />
-                  </div>
-                  <h3 className="text-xl font-black text-slate-900 mb-2">{t('cityWideSearch')}</h3>
-                  <p className="text-sm font-medium text-slate-500 leading-relaxed">
-                    {t('cityWideSearchWarning')}
-                  </p>
-                </div>
-                <div className="p-4 flex gap-3 mt-2">
-                  <button
-                    onClick={cancelCityWideSearch}
-                    className="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-colors"
-                  >
-                    {t('cancel')}
-                  </button>
-                  <button
-                    onClick={confirmCityWideSearch}
-                    className="flex-1 py-3 px-4 rounded-xl text-sm font-bold text-white bg-m3-error hover:opacity-90 shadow-lg shadow-m3-error/20 transition-all hover:scale-105 active:scale-95"
-                  >
-                    {t('confirmEnable')}
-                  </button>
                 </div>
               </motion.div>
             </>
@@ -10886,7 +11236,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   )}
                 </div>
 
-                <div className="overflow-x-auto md:overflow-y-auto custom-scrollbar flex-1 pb-1 md:pb-0 px-1 -mx-1 md:mx-0 md:pr-2 gap-1.5 md:gap-2.5 flex md:flex-col items-center md:items-stretch h-[32px] md:h-auto snap-x snap-mandatory">
+                <div className="overflow-x-auto md:overflow-y-auto custom-scrollbar flex-1 pb-1 md:pb-0 px-1 -mx-1 md:mx-0 md:pr-2 gap-1.5 md:gap-2.5 flex md:flex-col items-center md:items-stretch h-[52px] md:h-auto snap-x snap-mandatory">
                   {Array.from(new Map(
                     (selectedStop ? selectedStop.lines : selectedSegmentLines || [])
                       .map((line: string) => {
@@ -10900,11 +11250,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     const { name, start, end } = info;
                     const isUserSub = fetchedLinesCache.current.get(line)?.isUserSubmitted || approvedUserLines.some(ul => ul.name === line);
                     const badgeText = name.replace('路', '');
+                    const schedule = fetchedLinesCache.current.get(line) || Array.from(fetchedLinesCache.current.values() as Iterable<BusLine>).find(candidate =>
+                      candidate.name.split(/[（(]/)[0].replace('路', '').trim() === name.replace('路', '').trim() && candidate.start_stop === start && candidate.end_stop === end);
                     return (
                       <div 
                         key={line + idx}
                         onClick={() => handleManualSearch({ name: line, type: 'busline' })}
-                        className="md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-3.5 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/30 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[140px] md:max-w-none md:w-auto md:h-[72px] border border-transparent shadow-xs"
+                        className="md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-3.5 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/30 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[220px] md:max-w-none md:w-auto md:h-[72px] border border-transparent shadow-xs"
                       >
                         <div className="hidden md:block absolute left-0 top-0 bottom-0 w-1 bg-m3-primary/0 md:group-hover:bg-m3-primary transition-all" />
                         
@@ -10949,6 +11301,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             )}
                           </div>
                         </div>
+                        <div className="shrink-0"><OperatingHours first={schedule?.stime} last={schedule?.etime} description={schedule?.scheduleDescription} /></div>
                       </div>
                     );
                   })}
@@ -11112,7 +11465,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
-                <div className="p-2.5 px-4 md:p-4 md:py-4 border-b border-m3-outline-variant/20 shrink-0 flex flex-col items-start gap-1">
+                <div className="relative p-2.5 px-4 pr-24 md:p-4 md:pr-24 md:py-4 border-b border-m3-outline-variant/20 shrink-0 flex flex-col items-start gap-1">
+                  <div className="absolute right-4 top-3"><OperatingHours first={activeBusLine.stime} last={activeBusLine.etime} description={activeBusLine.scheduleDescription} /></div>
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-black text-slate-800 text-sm md:text-lg whitespace-nowrap">
                       {parseLineInfo(activeBusLine.name).name.replace('路','')}
@@ -11195,6 +11549,24 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             <Navigation className="w-5 h-5 transition-transform group-hover:scale-110 text-m3-primary fill-current" />
           </button>
         )}
+
+        <AnimatePresence>
+          {showVersionUpdate && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm pointer-events-auto">
+              <motion.div role="dialog" aria-modal="true" aria-labelledby="version-update-title"
+                initial={{ opacity: 0, y: 16, scale: 0.94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.94 }}
+                transition={{ type: 'spring', damping: 24, stiffness: 240 }}
+                className="w-[360px] max-w-full bg-m3-surface border border-m3-outline-variant/40 rounded-[28px] shadow-2xl p-7 text-center">
+                <div className="mx-auto mb-4 w-14 h-14 rounded-2xl bg-m3-primary-container text-m3-primary flex items-center justify-center"><Check className="w-7 h-7" /></div>
+                <h2 id="version-update-title" className="text-lg font-black text-m3-on-primary-container">版本已更新至 {APP_VERSION}</h2>
+                <button type="button" autoFocus onClick={() => {
+                  localStorage.setItem(APP_LAST_VERSION_KEY, APP_VERSION);
+                  setShowVersionUpdate(false);
+                }} className="w-full mt-6 py-3 rounded-full bg-m3-primary text-white text-sm font-bold hover:opacity-95 active:scale-95 transition-all">进入主页</button>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
         <OnboardingGuide
           step={onboardingStep}

@@ -6,6 +6,10 @@ export interface BusLine {
   start_stop?: string;
   end_stop?: string;
   via_stops?: any[];
+  scheduleFetched?: boolean;
+  scheduleDataVersion?: number;
+  scheduleDescription?: string;
+  sourceQueries?: string[];
   stime?: string;
   etime?: string;
   isUserSubmitted?: boolean;

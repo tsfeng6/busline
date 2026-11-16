@@ -1,3 +1,4 @@
+import { handleCityDataRequest } from './src/server/cityData';
 import { runBuslineAI } from './src/server/buslineAI';
 import fs from 'fs';
 import path from 'path';
@@ -139,6 +140,12 @@ export function viteApiPlugin() {
         };
 
         try {
+          if (pathname.startsWith('/api/city-data/')) {
+            const result = await handleCityDataRequest(method, pathname, method === 'POST' ? await parseBody() : undefined, String(req.headers['x-admin-password'] || ''), String(req.headers['x-city-refresh-token'] || ''));
+            res.statusCode = result.status;
+            res.end(JSON.stringify(result.body));
+            return;
+          }
           if (pathname === '/api/ai/chat' && method === 'POST') {
             try { res.end(JSON.stringify(await runBuslineAI(await parseBody()))); }
             catch (error: any) { res.statusCode = 400; res.end(JSON.stringify({ error: error.message || 'Busline AI 暂时不可用。' })); }

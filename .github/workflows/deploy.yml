@@ -2,6 +2,11 @@ name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
+permissions:
+  contents: write
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -9,13 +14,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install and Build
-        run: |
-          npm install
-          npm run build
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build:vite
         env:
           VITE_AMAP_KEY: ${{ secrets.VITE_AMAP_KEY }}
           VITE_AMAP_SECURITY_CODE: ${{ secrets.VITE_AMAP_SECURITY_CODE }}
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+          VITE_CITY_DATA_ENABLED: ${{ vars.VITE_CITY_DATA_ENABLED }}
+          VITE_CITY_UPDATE_MODE: ${{ vars.VITE_CITY_UPDATE_MODE }}
+          VITE_CITY_UPDATE_GATEWAY_URL: ${{ vars.VITE_CITY_UPDATE_GATEWAY_URL }}
+          VITE_CITY_DATA_READ_BASE_URL: ${{ vars.VITE_CITY_DATA_READ_BASE_URL }}
+
+      - name: Verify production styles
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, existsSync } from 'node:fs';
+          import { resolve } from 'node:path';
+          const html = readFileSync('dist/index.html', 'utf8');
+          const href = html.match(/<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"/)?.[1];
+          if (!href) throw new Error('Missing production stylesheet');
+          const file = resolve('dist', href);
+          if (!existsSync(file)) throw new Error('Stylesheet asset is missing');
+          const css = readFileSync(file, 'utf8');
+          for (const selector of ['.flex{', '.fixed{', '.h-screen{', '.rounded-2xl{']) {
+            if (!css.includes(selector)) throw new Error(`Missing layout utility: ${selector}`);
+          }
+          console.log('Production stylesheet and layout utilities verified');
+          JS
+          touch dist/.nojekyll
+          if [ -f public/CNAME ]; then cp public/CNAME dist/CNAME; fi
 
       - name: Deploy
         uses: JamesIves/github-pages-deploy-action@v4

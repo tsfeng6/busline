@@ -1,3 +1,4 @@
+import { DaxingMapPreview } from './DaxingMapPreview';
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -30,252 +31,6 @@ interface OnboardingGuideProps {
   onFinishOnboarding: () => void;
   barButtonRefs: React.MutableRefObject<(HTMLElement | null)[]>;
 }
-
-const AbstractDaxingBusMapPreview: React.FC<{ thickness?: 'thick' | 'thin' }> = ({
-  thickness = 'thick',
-}) => {
-  const innerW = thickness === 'thin' ? 2.8 : 6.2;
-  const outerW = thickness === 'thin' ? 4.8 : 9.2;
-
-  const greenPaths = [
-    'M 96 0 L 136 270',
-    'M 58 84 L 188 70 L 194 164 L 130 164',
-    'M 192 122 L 228 118',
-    'M 198 238 L 226 238',
-    'M 294 0 L 302 32 L 298 78',
-    'M 300 78 L 366 78 L 366 154',
-    'M 324 78 L 324 98 L 344 98 L 344 128',
-    'M 344 108 L 480 108',
-    'M 342 182 L 394 270',
-    'M 380 232 L 408 220',
-    'M 392 252 L 420 246 L 420 230',
-    'M 424 244 L 444 240',
-    'M 464 226 L 480 226',
-  ];
-
-  const ochrePaths = [
-    'M 194 122 L 194 270',
-    'M 194 164 L 396 164',
-    'M 298 36 L 298 92 L 304 104 L 330 104',
-    'M 338 114 L 338 134 L 396 134 L 460 134',
-    'M 346 0 L 346 32',
-    'M 396 20 L 396 226 L 426 260 L 460 260',
-    'M 396 68 L 480 62',
-    'M 396 18 L 480 10',
-    'M 396 204 L 450 204',
-    'M 382 222 L 426 206',
-  ];
-
-  const terracottaPaths = [
-    'M 314 34 L 394 30',
-    'M 398 164 L 458 172 L 480 172',
-    'M 460 0 L 460 270',
-  ];
-
-  return (
-    <div className="relative w-full h-[184px] sm:h-[208px] rounded-2xl overflow-hidden border border-m3-outline-variant/35 bg-[#ECEFED] shadow-inner select-none">
-      <svg
-        viewBox="0 0 480 270"
-        className="w-full h-full object-cover"
-        preserveAspectRatio="xMidYMid slice"
-      >
-        {/* Map base land blocks */}
-        <rect x="0" y="0" width="480" height="270" fill="#ECEFED" />
-        <rect x="10" y="185" width="76" height="58" rx="8" fill="#DCE8DC" />
-        <rect x="134" y="82" width="54" height="106" rx="4" fill="#D9DCDD" />
-        <rect x="242" y="14" width="48" height="72" rx="6" fill="#E3E8E4" />
-        <rect x="330" y="44" width="60" height="52" rx="6" fill="#E3E8E4" />
-
-        {/* Secondary grey local roads */}
-        <path
-          d="M 196 254 L 240 250 L 240 270"
-          fill="none"
-          stroke="#C9CECC"
-          strokeWidth="5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M 196 254 L 240 250 L 240 270"
-          fill="none"
-          stroke="#FFFFFF"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-
-        {/* Diagonal railway / metro tracks */}
-        <path
-          d="M 284 0 C 266 70, 272 150, 326 270"
-          fill="none"
-          stroke="#B9C0BD"
-          strokeWidth="2.5"
-          strokeDasharray="7 5"
-        />
-        <path
-          d="M 294 0 C 276 74, 286 154, 342 270"
-          fill="none"
-          stroke="#C8CECC"
-          strokeWidth="2"
-          strokeDasharray="6 5"
-        />
-
-        {/* White outlines for all bus corridors */}
-        <g fill="none" stroke="#FFFFFF" strokeLinecap="round" strokeLinejoin="round">
-          {greenPaths.map((d, i) => (
-            <path
-              key={`gw-${i}`}
-              d={d}
-              strokeWidth={outerW}
-              style={{ transition: 'stroke-width 0.22s ease' }}
-            />
-          ))}
-          {ochrePaths.map((d, i) => (
-            <path
-              key={`ow-${i}`}
-              d={d}
-              strokeWidth={outerW}
-              style={{ transition: 'stroke-width 0.22s ease' }}
-            />
-          ))}
-          {terracottaPaths.map((d, i) => (
-            <path
-              key={`tw-${i}`}
-              d={d}
-              strokeWidth={outerW}
-              style={{ transition: 'stroke-width 0.22s ease' }}
-            />
-          ))}
-        </g>
-
-        {/* Morandi Green routes (low density) */}
-        <g fill="none" stroke="#5E8271" strokeLinecap="round" strokeLinejoin="round">
-          {greenPaths.map((d, i) => (
-            <path
-              key={`g-${i}`}
-              d={d}
-              strokeWidth={innerW}
-              style={{ transition: 'stroke-width 0.22s ease' }}
-            />
-          ))}
-        </g>
-
-        {/* Morandi Warm Ochre routes (medium density) */}
-        <g fill="none" stroke="#C29B63" strokeLinecap="round" strokeLinejoin="round">
-          {ochrePaths.map((d, i) => (
-            <path
-              key={`o-${i}`}
-              d={d}
-              strokeWidth={innerW}
-              style={{ transition: 'stroke-width 0.22s ease' }}
-            />
-          ))}
-        </g>
-
-        {/* Morandi Dusty Terracotta routes (high density) */}
-        <g fill="none" stroke="#B56666" strokeLinecap="round" strokeLinejoin="round">
-          {terracottaPaths.map((d, i) => (
-            <path
-              key={`t-${i}`}
-              d={d}
-              strokeWidth={innerW}
-              style={{ transition: 'stroke-width 0.22s ease' }}
-            />
-          ))}
-        </g>
-
-        {/* Landmark POI icons & crisp labels */}
-        <g>
-          <circle cx="164" cy="112" r="5.5" fill="#4B89DC" stroke="#FFFFFF" strokeWidth="1.5" />
-          <text
-            x="173"
-            y="110"
-            fontSize="9.5"
-            fontWeight="700"
-            fill="#334155"
-            stroke="#FFFFFF"
-            strokeWidth="2.5"
-            paintOrder="stroke"
-          >
-            北京建筑大学
-          </text>
-          <text
-            x="173"
-            y="121"
-            fontSize="9.5"
-            fontWeight="700"
-            fill="#334155"
-            stroke="#FFFFFF"
-            strokeWidth="2.5"
-            paintOrder="stroke"
-          >
-            大兴校区
-          </text>
-        </g>
-
-        <g>
-          <circle cx="24" cy="216" r="4.5" fill="#52B765" stroke="#FFFFFF" strokeWidth="1.4" />
-          <text
-            x="32"
-            y="219"
-            fontSize="8.5"
-            fontWeight="700"
-            fill="#3F5E48"
-            stroke="#FFFFFF"
-            strokeWidth="2.4"
-            paintOrder="stroke"
-          >
-            黄村城市森林公园
-          </text>
-        </g>
-
-        <g>
-          <circle cx="218" cy="222" r="4.5" fill="#4B89DC" stroke="#FFFFFF" strokeWidth="1.4" />
-          <text
-            x="226"
-            y="220"
-            fontSize="8.5"
-            fontWeight="700"
-            fill="#475569"
-            stroke="#FFFFFF"
-            strokeWidth="2.4"
-            paintOrder="stroke"
-          >
-            大兴第一中学
-          </text>
-          <text
-            x="226"
-            y="230"
-            fontSize="8.5"
-            fontWeight="700"
-            fill="#475569"
-            stroke="#FFFFFF"
-            strokeWidth="2.4"
-            paintOrder="stroke"
-          >
-            西校区
-          </text>
-        </g>
-      </svg>
-
-      {/* Subtle corner density legend pill */}
-      <div className="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-full bg-white/85 backdrop-blur-sm border border-m3-outline-variant/30 shadow-xs flex items-center gap-2 text-[10px] font-bold text-slate-600">
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#5E8271]" />
-          低
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#C29B63]" />
-          中
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full bg-[#B56666]" />
-          高
-        </span>
-      </div>
-    </div>
-  );
-};
 
 interface TourStepInfo {
   title: string;
@@ -328,6 +83,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
   barButtonRefs,
 }) => {
   const [confirmSkipAll, setConfirmSkipAll] = useState(false);
+  const [previewReplay, setPreviewReplay] = useState(0);
   const [apiErrorHint, setApiErrorHint] = useState('');
   const [bubblePos, setBubblePos] = useState<{
     left: number;
@@ -471,15 +227,15 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
     <div className="fixed inset-0 z-[130] bg-slate-900/45 backdrop-blur-sm flex items-center justify-center p-4 pointer-events-auto">
       <AnimatePresence mode="wait">
         <motion.div
-          key={step}
+          key="onboarding-card"
           initial={{ opacity: 0, scale: 0.94, y: 14 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.94, y: -10 }}
           transition={{ type: 'spring', damping: 24, stiffness: 240 }}
-          className="w-[460px] max-w-[94vw] bg-m3-surface border border-m3-outline-variant/40 rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
+          className="w-[520px] max-w-[94vw] max-h-[92dvh] bg-m3-surface border border-m3-outline-variant/40 rounded-[28px] shadow-2xl overflow-hidden flex flex-col"
         >
           {/* Top progress bar */}
-          <div className="px-6 pt-5 pb-1 flex items-center justify-between">
+          <div className="px-6 pt-5 pb-1 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-1.5">
               {[1, 2, 3, 4, 5].map((n) => (
                 <div
@@ -500,14 +256,18 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
           </div>
 
           {/* Step Content */}
-          <div className="px-6 py-4 flex flex-col gap-4">
+          <div className="px-6 pt-4 pb-1 shrink-0">
+            <DaxingMapPreview thickness={lineThickness} searchMode={step === 3 ? (enableLineCache ? 'fast' : 'realtime') : 'static'}
+              replay={previewReplay} showCampusArrow={step >= 4 && !useCustomApiKey} />
+          </div>
+          <div className="px-6 py-4 flex flex-col gap-4 min-h-0 overflow-y-auto custom-scrollbar">
             {step === 1 && (
               <>
-                <AbstractDaxingBusMapPreview thickness="thick" />
+
                 <div className="space-y-1.5 pt-1">
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[10px] font-black">
                     <Sparkles className="w-3 h-3" />
-                    busline 5.1
+                    busline 5.5
                   </div>
                   <h2 className="text-xl font-black text-slate-900 tracking-tight">
                     欢迎使用巴士线路图
@@ -521,7 +281,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
 
             {step === 2 && (
               <>
-                <AbstractDaxingBusMapPreview thickness={lineThickness} />
+
                 <div className="space-y-2.5">
                   <h2 className="text-lg font-black text-slate-900 tracking-tight">
                     您愿意选择何种粗细的线路？
@@ -574,7 +334,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
                 <div className="space-y-2.5">
                   <button
                     type="button"
-                    onClick={() => onSelectLineCache(true)}
+                    onClick={() => { onSelectLineCache(true); setPreviewReplay(value => value + 1); }}
                     className={`w-full p-3.5 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-start gap-3 ${
                       enableLineCache
                         ? 'bg-m3-primary-container/50 border-m3-primary shadow-sm'
@@ -601,7 +361,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => onSelectLineCache(false)}
+                    onClick={() => { onSelectLineCache(false); setPreviewReplay(value => value + 1); }}
                     className={`w-full p-3.5 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-start gap-3 ${
                       !enableLineCache
                         ? 'bg-m3-primary-container/50 border-m3-primary shadow-sm'
@@ -729,7 +489,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
           </div>
 
           {/* Footer Action Bar */}
-          <div className="px-6 pb-5 pt-2 flex items-center justify-between gap-3">
+          <div className="px-6 pb-5 pt-2 flex items-center justify-between gap-3 shrink-0">
             {/* Left button: Skip on step 1 (with confirmation) or step 5 */}
             <div>
               {step === 1 && !confirmSkipAll && (

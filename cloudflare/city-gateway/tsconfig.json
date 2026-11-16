@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "target": "ES2022", "module": "ESNext", "moduleResolution": "bundler", "lib": ["ES2022", "DOM"], "strict": true, "skipLibCheck": true, "noEmit": true },
+  "include": ["worker.ts", "../../src/utils/cityDataset.ts", "../../src/types.ts"]
+}

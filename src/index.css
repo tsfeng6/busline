@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Keep production class detection anchored to the application sources. */
+@source "./App.tsx";
+@source "./components";
+
 @theme {
   --color-m3-primary: #52796F;
   --color-m3-on-primary: #FFFFFF;

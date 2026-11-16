@@ -12,7 +12,10 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "scf:zip": "node -e \"const { execSync } = require('child_process'); try { execSync('rm -f deploy.zip && mkdir -p dist-scf && cp -r dist/* dist-scf/ && cp scf_bootstrap dist-scf/ && cp package.json dist-scf/ && cd dist-scf && npx -y bestzip ../deploy.zip * && cd .. && rm -rf dist-scf', { stdio: 'inherit' }); console.log('Successfully created deploy.zip'); } catch(e) { console.error('Zip failed', e); }\"",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "city-data:update": "tsx scripts/update-city-data.ts",
+    "lint:gateway": "tsc -p cloudflare/city-gateway/tsconfig.json",
+    "test:city-data": "node --import tsx --test tests/cityData.test.ts tests/sharedCityFlow.test.ts tests/cityActions.test.ts"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",

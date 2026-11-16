@@ -1,3 +1,4 @@
+import { handleCityDataRequest } from './src/server/cityData';
 import { runBuslineAI } from './src/server/buslineAI';
 import express from 'express';
 import cors from 'cors';
@@ -26,6 +27,11 @@ async function startServer() {
 
   // Middleware
   app.use(cors());
+  app.use('/api/city-data', express.json({ limit: '40mb' }), async (req, res) => {
+    const result = await handleCityDataRequest(req.method, '/api/city-data' + req.path, req.body, String(req.headers['x-admin-password'] || ''), String(req.headers['x-city-refresh-token'] || ''));
+    res.status(result.status).json(result.body);
+  });
+
   app.use(express.json({ limit: '10mb' })); // Increase limit for Base64 image payload
 
   const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'buslineadmin';
