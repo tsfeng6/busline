@@ -1,3 +1,6 @@
+import { Readable } from 'node:stream';
+import { createGunzip } from 'node:zlib';
+import { MAX_CITY_BYTES, CITY_CHUNK_BYTES, CITY_UPLOAD_FORMAT, CITY_RECORD_FORMAT } from '../src/utils/cityTransfer';
 import { createHmac, createHash } from 'node:crypto';
 import { normalizeCityDataset, cityDataKey } from '../src/utils/cityDataset';
 export async function readCityUpload(endpoint:URL,id:string,city:string,secret:string,transport:typeof fetch=fetch){
@@ -8,16 +11,46 @@ export async function readCityUpload(endpoint:URL,id:string,city:string,secret:s
     return response;
   };
   const meta=await(await read()).json() as any;
-  if(cityDataKey(meta.city)!==cityDataKey(city)||!Number.isInteger(meta.bytes)||meta.bytes<2||meta.bytes>30*1024*1024||meta.parts!==Math.ceil(meta.bytes/(256*1024))||!/^[a-f0-9]{64}$/.test(meta.sha256))throw Error('上传数据清单无效。');
-  const parts:Buffer[]=[];let size=0;
+  if(cityDataKey(meta.city)!==cityDataKey(city)||!Number.isInteger(meta.bytes)||meta.bytes<2||meta.bytes>MAX_CITY_BYTES||meta.parts!==Math.ceil(meta.bytes/CITY_CHUNK_BYTES)||!/^[a-f0-9]{64}$/.test(meta.sha256))throw Error('上传数据清单无效。');
+  const compressed=meta.format===CITY_UPLOAD_FORMAT;
+  const records = compressed || meta.format === CITY_RECORD_FORMAT;
+  if(meta.format && meta.format !== 'json' && !records) throw Error('上传格式无效。');
+  const parts:Buffer[]=[];let size=0, pending='';
+  const hash=createHash('sha256'), decoder=new TextDecoder();
+  let dataset:any=null;
+  const consume=(record:string)=>{
+    if(!record)return;
+    const item=JSON.parse(record);
+    if(item.header){if(dataset)throw Error('快照头重复。');dataset={...item.header,lines:[],stops:[]};}
+    else if(!dataset)throw Error('缺少快照头。');
+    else if(item.line)dataset.lines.push(item.line);
+    else if(item.stop)dataset.stops.push(item.stop);
+    else throw Error('无效快照记录。');
+  };
+  async function* download(){
   for(let index=0;index<meta.parts;index++){
     const part=Buffer.from(await(await read(index)).arrayBuffer());size+=part.length;
-    if(size>meta.bytes||part.length>(256*1024))throw Error('上传数据大小异常。');
-    parts.push(part);
+    if(size>meta.bytes||part.length!==(index===meta.parts-1?meta.bytes-index*CITY_CHUNK_BYTES:CITY_CHUNK_BYTES))throw Error('上传数据大小异常。');
+    hash.update(records?createHash('sha256').update(part).digest():part);
+    yield part;
   }
-  const bytes=Buffer.concat(parts);
-  if(bytes.length!==meta.bytes||createHash('sha256').update(bytes).digest('hex')!==meta.sha256)throw Error('上传数据完整性校验失败。');
-  const data=normalizeCityDataset(JSON.parse(bytes.toString('utf8')));
+  }
+  let expandedBytes=0;
+  const source=Readable.from(download()),inflate=createGunzip();
+  if(compressed)source.on('error',error=>inflate.destroy(error));
+  const stream=compressed?source.pipe(inflate):source;
+  try { for await(const part of stream){
+    expandedBytes+=part.length;if(expandedBytes>MAX_CITY_BYTES)throw Error('解压数据超过1GB。');
+    if(records){
+      pending+=decoder.decode(part,{stream:true});
+      let end:number;while((end=pending.indexOf('\n'))>=0){consume(pending.slice(0,end));pending=pending.slice(end+1);}
+      if(pending.length>16*1024*1024)throw Error('单条线路数据过大。');
+    }else parts.push(part);
+  }
+  } finally { source.destroy();inflate.destroy(); }
+  if(size!==meta.bytes||hash.digest('hex')!==meta.sha256)throw Error('上传数据完整性校验失败。');
+  if(records){pending+=decoder.decode();if(pending)consume(pending);}
+  const data=normalizeCityDataset(records?dataset:JSON.parse(Buffer.concat(parts).toString('utf8')));
   if(cityDataKey(data.city)!==cityDataKey(city)||data.filtered)throw Error('不能将其他城市或已过滤结果发布为全市数据。');
   return data;
 }

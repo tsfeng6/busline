@@ -1,3 +1,6 @@
+import { lazyTimelineRoute } from './utils/lazyTimelineRoute';
+import { lazyStopMarker, viewportStopMarkers, syncLazyMarkers, clearStopMarkerGroup } from './utils/lazyStopMarker';
+import { RouteRenderIndex, offsetRoutePath, type RenderRoute } from './utils/routeRenderIndex';
 import { CityUploadDialog } from './components/CityUploadDialog';
 import { uploadCitySnapshot } from './utils/cityUploadClient';
 import { CityUpdateStatus } from './components/CityUpdateStatus';
@@ -283,6 +286,7 @@ export default function App() {
 
   // Search results preservation refs
   const roadOverlaysRef = useRef<any[]>([]);
+  const roadViewportCleanupRef = useRef<(() => void) | null>(null);
   const roadStopMarkersRef = useRef<any[]>([]);
   const activeRawMarkersRef = useRef<any[]>([]);
   const roadStopsDataRef = useRef<Map<string, any>>(new Map());
@@ -574,7 +578,7 @@ export default function App() {
       prevMapModeBeforeGameRef.current = null;
     }
     if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
-    if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
+    if (markerGroupRef.current) clearStopMarkerGroup(markerGroupRef.current);
   };
 
   const clearMapStateForMinigame = () => {
@@ -853,11 +857,13 @@ export default function App() {
     setSelectionPos(null);
     activeRawMarkersRef.current = [];
     roadStopMarkersRef.current = [];
+    roadViewportCleanupRef.current?.();
+    roadViewportCleanupRef.current = null;
     roadOverlaysRef.current = [];
     allMapStopsRef.current.clear();
     roadStopsDataRef.current.clear();
     if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
-    if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
+    if (markerGroupRef.current) clearStopMarkerGroup(markerGroupRef.current);
 
     const shuffleArr = <T,>(arr: T[]): T[] => {
       const copy = [...arr];
@@ -2215,9 +2221,11 @@ export default function App() {
     setStationConnectivityCard(null);
     setReviewHoveredStop(null);
     activeBusLinePolylineRef.current = null;
+    roadViewportCleanupRef.current?.();
+    roadViewportCleanupRef.current = null;
     roadOverlaysRef.current = [];
     if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
-    if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
+    if (markerGroupRef.current) clearStopMarkerGroup(markerGroupRef.current);
 
     if (item.mode === 'line' && item.lineInfos && item.lineInfos.length > 0) {
       const chosenLine = item.lineInfos[0];
@@ -3673,16 +3681,14 @@ export default function App() {
     return false;
   }, [normalizeStopName, updateTerminalNamesCache]);
 
+  const syncVisibleStopsRef = useRef<() => void>(() => {});
+  syncVisibleStopsRef.current = () => { if (mapRef.current && (window as any).AMap) syncStopMarkersToMap(mapRef.current, (window as any).AMap); };
+
   function syncStopMarkersToMap(map: any, AMap: any) {
     if (!markerGroupRef.current || isMinigameActiveRef.current) return;
     
-    try {
-      markerGroupRef.current.clearOverlays();
-    } catch (e) {
-      console.warn('Failed to clear overlays', e);
-    }
-    
     if (!showStations) {
+      syncLazyMarkers(markerGroupRef.current, []);
       setStats((prev: any) => ({ ...prev, stops: 0 }));
       return;
     }
@@ -3715,6 +3721,40 @@ export default function App() {
         return false;
       });
 
+    }
+
+    const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
+    if (showReferenceAreaRef.current && box) {
+      visibleMarkers = visibleMarkers.filter((marker: any) => {
+        let latlng: [number, number] | null = null;
+        const ext = marker.getExtData ? marker.getExtData() : null;
+        if (ext && ext.key) {
+          const parts = ext.key.split(',').map(Number);
+          if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            latlng = [parts[0], parts[1]];
+          }
+        }
+        if (!latlng) {
+          if (typeof marker.getCenter === 'function') {
+            const center = marker.getCenter();
+            if (center) latlng = [center.getLng(), center.getLat()];
+          } else if (typeof marker.getPosition === 'function') {
+            const pos = marker.getPosition();
+            if (pos) latlng = [pos.getLng(), pos.getLat()];
+          }
+        }
+        
+        if (latlng) {
+          const [lng, lat] = latlng;
+          return (lng >= box.minLng && lng <= box.maxLng && lat >= box.minLat && lat <= box.maxLat);
+        }
+        return true;
+      });
+    }
+    
+    const eligibleCount = visibleMarkers.length;
+    visibleMarkers = viewportStopMarkers(visibleMarkers, map);
+    if (isTerminalMode) {
       // Style every terminal station marker with an obvious gray circle
       visibleMarkers.forEach((marker: any) => {
         try {
@@ -3745,44 +3785,9 @@ export default function App() {
       });
     }
     
-    const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
-    if (showReferenceAreaRef.current && box) {
-      visibleMarkers = visibleMarkers.filter((marker: any) => {
-        let latlng: [number, number] | null = null;
-        const ext = marker.getExtData ? marker.getExtData() : null;
-        if (ext && ext.key) {
-          const parts = ext.key.split(',').map(Number);
-          if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-            latlng = [parts[0], parts[1]];
-          }
-        }
-        if (!latlng) {
-          if (typeof marker.getCenter === 'function') {
-            const center = marker.getCenter();
-            if (center) latlng = [center.getLng(), center.getLat()];
-          } else if (typeof marker.getPosition === 'function') {
-            const pos = marker.getPosition();
-            if (pos) latlng = [pos.getLng(), pos.getLat()];
-          }
-        }
-        
-        if (latlng) {
-          const [lng, lat] = latlng;
-          return (lng >= box.minLng && lng <= box.maxLng && lat >= box.minLat && lat <= box.maxLat);
-        }
-        return true;
-      });
-    }
-    
-    try {
-      if (visibleMarkers.length > 0) {
-        markerGroupRef.current.addOverlays(visibleMarkers);
-      }
-    } catch (e) {
-      console.warn('Failed to add overlays', e);
-    }
-    
-    setStats((prev: any) => ({ ...prev, stops: visibleMarkers.length }));
+    syncLazyMarkers(markerGroupRef.current, visibleMarkers);
+    setStats((prev: any) => ({ ...prev, stops: eligibleCount }));
+
   }
 
   const toggleTerminalFilter = useCallback(() => {
@@ -4164,7 +4169,7 @@ export default function App() {
           city: currentCity
         });
 
-        const marker = new AMap.CircleMarker({
+        const marker = lazyStopMarker(AMap, {
           center: [stop.location.lng, stop.location.lat],
           radius: 6,
           fillColor: getStopColor(count, '#3b82f6'),
@@ -4216,7 +4221,7 @@ export default function App() {
     
     setIsSearching(true);
     lineGroupRef.current.clearOverlays();
-    markerGroupRef.current.clearOverlays();
+    clearStopMarkerGroup(markerGroupRef.current);
     setStats(prev => ({ ...prev, lines: stopLines.length }));
     
     const AMap = (window as any).AMap;
@@ -4304,7 +4309,7 @@ export default function App() {
     setConnectivityToast('正在初始化检索...');
     
     lineGroupRef.current.clearOverlays();
-    markerGroupRef.current.clearOverlays();
+    clearStopMarkerGroup(markerGroupRef.current);
 
     const AMap = (window as any).AMap;
     const lineSearch = new AMap.LineSearch({
@@ -6044,6 +6049,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       };
 
       map.on('moveend', () => {
+        syncVisibleStopsRef.current();
         map.getCity((res: any) => {
           if (res.city || res.province) {
             const detectedCity = resolveSearchCity(res);
@@ -6054,6 +6060,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       });
 
       map.on('zoomend', () => {
+        syncVisibleStopsRef.current();
         const newZoom = map.getZoom();
         setZoomLevel((prevZoom) => {
           return newZoom;
@@ -6171,6 +6178,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           roadNetLayerRef.current = null;
         }
         if (mapClickHandlerRef.current) map.off('click', mapClickHandlerRef.current);
+        roadViewportCleanupRef.current?.();
+        timelineOverlaysRef.current.forEach(entry => (entry.overlay as any).destroy?.());
+        timelineOverlaysRef.current = [];
         map.destroy();
       }
     };
@@ -6520,7 +6530,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         setStats(prev => ({ ...prev, stops: pois.length }));
         
         // High performance clear
-        markerGroupRef.current.clearOverlays();
+        clearStopMarkerGroup(markerGroupRef.current);
         allMapStopsRef.current.clear();
 
         const markers: any[] = [];
@@ -6536,7 +6546,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           stopCountCacheRef.current.set(key, linesAr.length);
           
           const origColor = getStopColor(linesAr.length, '#3b82f6');
-          const marker = new AMap.CircleMarker({
+          const marker = lazyStopMarker(AMap, {
             center: [poi.location.lng, poi.location.lat],
             radius: 8,
             fillColor: origColor,
@@ -6693,7 +6703,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           return;
         }
         if (trueStopsMap.size > 0) {
-          markerGroupRef.current.clearOverlays();
+          clearStopMarkerGroup(markerGroupRef.current);
           allMapStopsRef.current.clear();
           const trueMarkers: any[] = [];
           trueStopsMap.forEach((poi: any, key: string) => {
@@ -6706,7 +6716,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             });
             stopCountCacheRef.current.set(key, linesArray.length);
             const origColor = getStopColor(linesArray.length, '#3b82f6');
-            const marker = new AMap.CircleMarker({
+            const marker = lazyStopMarker(AMap, {
               center: [poi.location.lng, poi.location.lat],
               radius: 8,
               fillColor: origColor,
@@ -6986,7 +6996,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       mapClickHandlerRef.current = defaultMapClickHandlerRef.current;
     }
 
-    if (markerGroupRef.current) markerGroupRef.current.clearOverlays();
+    if (markerGroupRef.current) clearStopMarkerGroup(markerGroupRef.current);
     if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
     
     if (referenceAreaOverlayRef.current) {
@@ -7049,6 +7059,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setSelectedSegmentName(null);
     setSelectedSegmentAddress(null);
     setIsSearching(false);
+    roadViewportCleanupRef.current?.();
+    roadViewportCleanupRef.current = null;
     roadOverlaysRef.current = [];
     roadStopMarkersRef.current = [];
     activeRawMarkersRef.current = [];
@@ -7110,6 +7122,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const aggregateAndVisualize = async (activeLineSet: string[], map: any, AMap: any) => {
+    roadViewportCleanupRef.current?.();
+    roadViewportCleanupRef.current = null;
     const renderVersion = ++aggregateVersionRef.current;
     const searchVersion = searchVersionRef.current;
     const cancelled = () => renderVersion !== aggregateVersionRef.current || searchVersion !== searchVersionRef.current || isClearedRef.current || isMinigameActiveRef.current;
@@ -7125,7 +7139,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const cacheKeys = Array.from(fetchedLinesCache.current.keys()) as string[];
     
     activeLineSet.forEach(name => {
-      const matches = cacheKeys.filter(key => matchesReturnedLine(name, fetchedLinesCache.current.get(key)!));
+      const matches = fetchedLinesCache.current.has(name) ? [name] : cacheKeys.filter(key => matchesReturnedLine(name, fetchedLinesCache.current.get(key)!));
       if (matches.length > 0) {
         expandedLineNames.push(...matches);
       }
@@ -7175,327 +7189,21 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     displayedLineNamesRef.current = [...expandedLineNames];
     setTimelineAvailable(expandedLineNames.length > 0);
 
-    const pointsGrid = new Map<string, [number, number][]>();
-    const indexedPointKeys = new Set<string>();
-    const getGridKey = (lng: number, lat: number) => 
-      `${(lng * 1000) | 0},${(lat * 1000) | 0}`; 
-
-    for (const name of expandedLineNames) {
-      if (performance.now() - sliceStarted > 8 && await yieldToUI()) return;
-      const line = fetchedLinesCache.current.get(name);
-      if (line) {
-        const cleanedPath: [number, number][] = [];
-        const pathLen = line.path.length;
-        for (let i = 0; i < pathLen; i++) {
-          const p = line.path[i];
-          if (cleanedPath.length > 0) {
-            const last = cleanedPath[cleanedPath.length - 1];
-            const dx = p[0] - last[0];
-            const dy = p[1] - last[1];
-            const distSq = dx*dx + dy*dy;
-            if (distSq < 1e-10) continue; 
-
-            if (i < pathLen - 1) {
-              const next = line.path[i + 1];
-              const nx = next[0] - p[0];
-              const ny = next[1] - p[1];
-              const d2Sq = nx*nx + ny*ny;
-              
-              const tx = next[0] - last[0];
-              const ty = next[1] - last[1];
-              const d3Sq = tx*tx + ty*ty;
-              
-              if (distSq > 1e-6 && d2Sq > 1e-6 && d3Sq < 1e-8) continue; 
-            }
-          }
-          cleanedPath.push(p);
-          
-          if (cityWideRendering) continue;
-          const exactPointKey = `${p[0]},${p[1]}`;
-          if (indexedPointKeys.has(exactPointKey)) continue;
-          indexedPointKeys.add(exactPointKey);
-          const key = getGridKey(p[0], p[1]);
-          let cell = pointsGrid.get(key);
-          if (!cell) {
-            cell = [];
-            pointsGrid.set(key, cell);
-          }
-          cell.push(p);
-        }
-        line.path = cleanedPath;
-      }
-    }
-
-    const processedLinesPaths = new Map<string, [number, number][]>();
-    const offsetLinesPaths = new Map<string, [number, number][]>();
-    
-    const OFFSET_VAL = 0.000035; 
-
+    // Retain whole paths and small bounding blocks. No per-edge objects/Sets or mutated source geometry.
+    const renderRoutes: RenderRoute[] = [];
+    const colorGroups = new Map<string, Array<[number, number][]>>();
     for (const name of expandedLineNames) {
       if (performance.now() - sliceStarted > 8 && await yieldToUI()) return;
       const line = fetchedLinesCache.current.get(name);
       if (!line || line.path.length < 2) continue;
-      
-      const splitPath: [number, number][] = [];
-      for (let i = 0; i < line.path.length - 1; i++) {
-        if (i % 128 === 0 && performance.now() - sliceStarted > 8 && await yieldToUI()) return;
-        const start = line.path[i];
-        const end = line.path[i+1];
-        splitPath.push(start);
-        
-        if (cityWideRendering) continue;
-        const mids: { p: [number, number], dist: number }[] = [];
-        const minGX = Math.floor(Math.min(start[0], end[0]) * 1000);
-        const maxGX = Math.floor(Math.max(start[0], end[0]) * 1000);
-        const minGY = Math.floor(Math.min(start[1], end[1]) * 1000);
-        const maxGY = Math.floor(Math.max(start[1], end[1]) * 1000);
-
-        for (let gx = minGX - 1; gx <= maxGX + 1; gx++) {
-          for (let gy = minGY - 1; gy <= maxGY + 1; gy++) {
-            const cellPoints = pointsGrid.get(`${gx},${gy}`);
-            if (!cellPoints) continue;
-
-            cellPoints.forEach(p => {
-              if ((Math.abs(p[0] - start[0]) < 0.00001 && Math.abs(p[1] - start[1]) < 0.00001) || 
-                  (Math.abs(p[0] - end[0]) < 0.00001 && Math.abs(p[1] - end[1]) < 0.00001)) return;
-              
-              const dist = distToSegment(p, start, end);
-              if (dist < 0.00008) { 
-                const projected = getProjection(p, start, end);
-                mids.push({ p: projected, dist: getDistSq(projected, start) });
-              }
-            });
-          }
-        }
-        
-        mids.sort((a, b) => a.dist - b.dist);
-        mids.forEach(m => {
-          const last = splitPath[splitPath.length - 1];
-          if (getDistSq(last, m.p) > 1e-10) { 
-            splitPath.push(m.p);
-          }
-        });
-      }
-      splitPath.push(line.path[line.path.length - 1]);
-      processedLinesPaths.set(name, splitPath);
-
-      const smoothedOffsetPath: [number, number][] = [];
-      const segmentNormals: [number, number][] = [];
-      
-      for (let i = 0; i < splitPath.length - 1; i++) {
-        const p1 = splitPath[i];
-        const p2 = splitPath[i+1];
-        const dx = p2[0] - p1[0];
-        const dy = p2[1] - p1[1];
-        const len = Math.sqrt(dx*dx + dy*dy);
-        if (len > 0) {
-          segmentNormals.push([dy / len, -dx / len]);
-        } else {
-          segmentNormals.push(segmentNormals[segmentNormals.length-1] || [0, 0]);
-        }
-      }
-
-      for (let i = 0; i < splitPath.length; i++) {
-        const p = splitPath[i];
-        let nx = 0, ny = 0;
-        const windowSize = 2;
-        const startIdx = Math.max(0, i - windowSize);
-        const endIdx = Math.min(segmentNormals.length - 1, i + windowSize);
-        let count = 0;
-        for (let j = startIdx; j <= endIdx; j++) {
-           nx += segmentNormals[j][0];
-           ny += segmentNormals[j][1];
-           count++;
-        }
-        nx /= count;
-        ny /= count;
-        
-        let nLen = Math.sqrt(nx*nx + ny*ny);
-        if (nLen > 0.0001) {
-          nx /= nLen;
-          ny /= nLen;
-          
-          const dot = nx * (i < segmentNormals.length ? segmentNormals[i][0] : segmentNormals[segmentNormals.length-1][0]) + 
-                      ny * (i < segmentNormals.length ? segmentNormals[i][1] : segmentNormals[segmentNormals.length-1][1]);
-          let miterFactor = dot > 0.5 ? 1 / dot : 1.3; 
-          if (miterFactor > 1.3) miterFactor = 1.3; 
-          
-          smoothedOffsetPath.push([
-            p[0] + nx * OFFSET_VAL * miterFactor,
-            p[1] + ny * OFFSET_VAL * miterFactor
-          ]);
-        } else {
-          smoothedOffsetPath.push([p[0] + segmentNormals[Math.min(i, segmentNormals.length-1)][0] * OFFSET_VAL, 
-                                   p[1] + segmentNormals[Math.min(i, segmentNormals.length-1)][1] * OFFSET_VAL]);
-        }
-      }
-      offsetLinesPaths.set(name, smoothedOffsetPath);
+      const displayPath = offsetRoutePath(line.path);
+      renderRoutes.push({ name, path: line.path, displayPath });
+      const color = line.isUserSubmitted ? '#9C7A97' : '#52796F';
+      if (!colorGroups.has(color)) colorGroups.set(color, []);
+      colorGroups.get(color)!.push(displayPath);
     }
-
-    const segmentCounts = new Map<string, { start: [number, number], end: [number, number], offsetStart: [number, number], offsetEnd: [number, number], lines: Set<string> }>();
-    
-    for (const name of expandedLineNames) {
-      if (performance.now() - sliceStarted > 8 && await yieldToUI()) return;
-      const path = processedLinesPaths.get(name);
-      const oPath = offsetLinesPaths.get(name);
-      if (!path || !oPath) continue;
-
-      for (let i = 0; i < path.length - 1; i++) {
-        const p1 = path[i];
-        const p2 = path[i+1];
-        const op1 = oPath[i];
-        const op2 = oPath[i+1];
-        if (p1[0] === p2[0] && p1[1] === p2[1]) continue;
-
-        const x1 = (p1[0] * 100000) | 0;
-        const y1 = (p1[1] * 100000) | 0;
-        const x2 = (p2[0] * 100000) | 0;
-        const y2 = (p2[1] * 100000) | 0;
-        const coordKey = `${x1}${y1}${x2}${y2}`;
-
-        let seg = segmentCounts.get(coordKey);
-        if (!seg) {
-          seg = { 
-            start: p1, end: p2, 
-            offsetStart: op1, offsetEnd: op2,
-            lines: new Set() 
-          };
-          segmentCounts.set(coordKey, seg);
-        }
-        seg.lines.add(name);
-      }
-    }
-
-    const finalSegments: { start: [number, number], end: [number, number], offsetStart: [number, number], offsetEnd: [number, number], lines: Set<string> }[] = [];
-    const handledKeys = new Set<string>();
-    
-    const segmentGrid = new Map<string, string[]>();
-    const GRID_SIZE = 1000; 
-
-    const allKeys = Array.from(segmentCounts.keys());
-    allKeys.forEach(key => {
-      const s = segmentCounts.get(key)!;
-      for (const gKey of segmentGridKeys(s.offsetStart, s.offsetEnd, GRID_SIZE)) {
-        if (!segmentGrid.has(gKey)) segmentGrid.set(gKey, []);
-        segmentGrid.get(gKey)!.push(key);
-      }
-    });
-    
-    const DIST_MERGE_THRESHOLD_SQ = 0.0000000009; 
-    const PARALLEL_THRESHOLD = 0.995; 
-    const getBaseName = (fullName: string) => fullName.split('(')[0];
-
-    for (let i = 0; i < allKeys.length; i++) {
-      if (i % 128 === 0 && performance.now() - sliceStarted > 8 && await yieldToUI()) return;
-      const key1 = allKeys[i];
-      if (handledKeys.has(key1)) continue;
-      
-      const s1 = segmentCounts.get(key1)!;
-      handledKeys.add(key1);
-      if (cityWideRendering) continue;
-      const mid1x = (s1.start[0] + s1.end[0]) * 0.5;
-      const mid1y = (s1.start[1] + s1.end[1]) * 0.5;
-      const v1x = s1.end[0] - s1.start[0];
-      const v1y = s1.end[1] - s1.start[1];
-      const l1 = Math.sqrt(v1x * v1x + v1y * v1y);
-      
-      const mergedLines = new Set(s1.lines);
-      const currentBaseNames = new Set<string>();
-      mergedLines.forEach(l => currentBaseNames.add(getBaseName(l)));
-      
-      const gX = (mid1x * GRID_SIZE) | 0;
-      const gY = (mid1y * GRID_SIZE) | 0;
-      
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-          const neighborKeys = segmentGrid.get(`${gX + dx},${gY + dy}`);
-          if (!neighborKeys) continue;
-          
-          for (let k = 0; k < neighborKeys.length; k++) {
-            const key2 = neighborKeys[k];
-            if (handledKeys.has(key2)) continue;
-            
-            const s2 = segmentCounts.get(key2)!;
-            const mid2x = (s2.start[0] + s2.end[0]) * 0.5;
-            const mid2y = (s2.start[1] + s2.end[1]) * 0.5;
-            
-            const diffX = mid1x - mid2x;
-            const diffY = mid1y - mid2y;
-            if (diffX * diffX + diffY * diffY < DIST_MERGE_THRESHOLD_SQ) {
-              const v2x = s2.end[0] - s2.start[0];
-              const v2y = s2.end[1] - s2.start[1];
-              const l2 = Math.sqrt(v2x * v2x + v2y * v2y);
-              if (l1 > 0 && l2 > 0 && Math.abs((v1x * v2x + v1y * v2y) / (l1 * l2)) > PARALLEL_THRESHOLD) {
-                let hasCommonBus = false;
-                for (const line of s2.lines) {
-                  if (currentBaseNames.has(getBaseName(line))) {
-                    hasCommonBus = true;
-                    break;
-                  }
-                }
-                
-                if (!hasCommonBus) {
-                  s2.lines.forEach(l => {
-                    mergedLines.add(l);
-                    currentBaseNames.add(getBaseName(l));
-                  });
-                  handledKeys.add(key2);
-                }
-              }
-            }
-          }
-        }
-      }
-      finalSegments.push({ ...s1, lines: mergedLines });
-    }
-
+    const hitIndex = new RouteRenderIndex(renderRoutes);
     setStats(prev => ({ ...prev, lines: new Set(expandedLineNames.map(lineBaseIdentity)).size }));
-
-    const colorGroups = new Map<string, Array<[number, number][]>>();
-    
-    const isCityWide = true;
-    
-    if (cityWideRendering) {
-      // Whole-city colors do not depend on overlap counts. Keep continuous
-      // route paths rather than allocating and rejoining every tiny segment.
-      for (const name of expandedLineNames) {
-        const path = offsetLinesPaths.get(name);
-        if (!path || path.length < 2) continue;
-        const color = fetchedLinesCache.current.get(name)?.isUserSubmitted ? '#9C7A97' : '#52796F';
-        if (!colorGroups.has(color)) colorGroups.set(color, []);
-        colorGroups.get(color)!.push(path);
-      }
-    }
-    finalSegments.forEach((data) => {
-      // Helper to check if a line name is user-submitted
-      const isLineUserSubmitted = (lineName: string) => {
-        const cached = fetchedLinesCache.current.get(lineName);
-        return cached?.isUserSubmitted === true;
-      };
-
-      const regularLines = Array.from(data.lines).filter(l => !isLineUserSubmitted(l));
-      const regularCount = regularLines.length;
-
-      let color = '';
-      if (regularCount > 0) {
-        if (isCityWide) {
-          color = '#52796F'; // Morandi Primary Green
-        } else {
-          if (regularCount < 4) color = '#5E8271'; // Morandi Sage Green
-          else if (regularCount >= 4 && regularCount <= 9) color = '#C29B63'; // Morandi Warm Ochre
-          else color = '#B56666'; // Morandi Dusty Terracotta
-        }
-      } else if (data.lines.size > 0) {
-        // Only user-submitted lines pass through here!
-        color = '#9C7A97'; // Morandi Dusty Mauve
-      }
-
-      if (color) {
-        const displayPath: [number, number][] = [data.offsetStart, data.offsetEnd];
-        if (!colorGroups.has(color)) colorGroups.set(color, []);
-        colorGroups.get(color)!.push(displayPath);
-      }
-    });
 
     const allOverlays: any[] = [];
     let box: any = referenceBoxRef.current;
@@ -7509,18 +7217,28 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
     }
 
-    colorGroups.forEach((paths, color) => {
-      let joinedPaths = cityWideRendering ? paths : joinLineSegments(paths);
-      if (showReferenceAreaRef.current && box) {
-        const clippedJoined: Array<[number, number][]> = [];
-        joinedPaths.forEach(singlePath => {
-          const clipped = clipPathToBox(singlePath, box.minLng, box.maxLng, box.minLat, box.maxLat);
-          clippedJoined.push(...clipped);
-        });
-        joinedPaths = clippedJoined;
+    const networkLayers: { color: string; overlay: any }[] = [];
+    const visibleGroups = () => {
+      const bounds = map.getBounds(), sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
+      const padX = (ne.lng - sw.lng) * .15, padY = (ne.lat - sw.lat) * .15;
+      const visible = hitIndex.visiblePaths({minLng:sw.lng-padX,maxLng:ne.lng+padX,minLat:sw.lat-padY,maxLat:ne.lat+padY});
+      const groups = new Map<string, [number,number][][]>();
+      for (const [name, paths] of visible) {
+        const color = fetchedLinesCache.current.get(name)?.isUserSubmitted ? '#9C7A97' : '#52796F';
+        if (!groups.has(color)) groups.set(color, []);
+        for (const path of paths) {
+          const clipped = showReferenceAreaRef.current && box ? clipPathToBox(path, box.minLng, box.maxLng, box.minLat, box.maxLat) : [path];
+          groups.get(color)!.push(...clipped);
+        }
       }
+      return groups;
+    };
+    const initialGroups = visibleGroups();
+    colorGroups.forEach((_paths, color) => {
+      const paths = initialGroups.get(color) || [];
+      const joinedPaths = paths;
 
-      if (joinedPaths.length > 0) {
+      {
         const polyline = new AMap.Polyline({
           path: joinedPaths,
           strokeColor: color,
@@ -7535,6 +7253,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           zIndex: color === '#B56666' ? 15 : (color === '#C29B63' ? 12 : 10)
         });
         allOverlays.push(polyline);
+        networkLayers.push({color,overlay:polyline});
       }
     });
 
@@ -7542,6 +7261,16 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     lineGroupRef.current.clearOverlays();
     lineGroupRef.current.addOverlays(allOverlays);
     roadOverlaysRef.current = allOverlays;
+    const updateViewport = () => {
+      if (cancelled()) return;
+      const attached = lineGroupRef.current?.getOverlays() || [];
+      if (!networkLayers.every(layer => attached.includes(layer.overlay))) return;
+      const groups = visibleGroups();
+      for (const {color,overlay} of networkLayers) overlay.setPath(groups.get(color) || []);
+    };
+    map.on('moveend', updateViewport);
+    map.on('zoomend', updateViewport);
+    roadViewportCleanupRef.current = () => { map.off('moveend', updateViewport); map.off('zoomend', updateViewport); };
     activeBusLinePolylineRef.current = null;
     drawReferenceArea(map, AMap);
 
@@ -7559,32 +7288,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       if (isPosOutsideReferenceArea(clickLngLat[0], clickLngLat[1])) {
         return;
       }
-      const gX = (clickLngLat[0] * GRID_SIZE) | 0;
-      const gY = (clickLngLat[1] * GRID_SIZE) | 0;
-      
-      const visitedSegments = new Set<string>();
-      const foundSegments: { dist: number; lines: Set<string>; data: any }[] = [];
       const currentZoom = map.getZoom();
       const zoomFactor = Math.max(1, Math.pow(2, 16 - currentZoom));
-      const SEARCH_DIST = 0.00018 * zoomFactor; 
-      const gridRadius = Math.max(1, Math.ceil(SEARCH_DIST * GRID_SIZE));
-
-      for (let dx = -gridRadius; dx <= gridRadius; dx++) {
-        for (let dy = -gridRadius; dy <= gridRadius; dy++) {
-          const neighborKeys = segmentGrid.get(`${gX + dx},${gY + dy}`);
-          if (!neighborKeys) continue;
-          
-          neighborKeys.forEach(key => {
-            if (visitedSegments.has(key)) return;
-            visitedSegments.add(key);
-            const data = segmentCounts.get(key)!;
-            const dist = distToSegment(clickLngLat, data.offsetStart, data.offsetEnd);
-            if (dist < SEARCH_DIST) {
-              foundSegments.push({ dist, lines: data.lines, data });
-            }
-          });
-        }
-      }
+      const SEARCH_DIST = 0.00018 * zoomFactor;
+      const foundSegments = hitIndex.query(clickLngLat, SEARCH_DIST);
 
       if (foundSegments.length > 0) {
         foundSegments.sort((a, b) => a.dist - b.dist);
@@ -7759,26 +7466,33 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
     const map = mapRef.current;
     const AMap = (window as any).AMap;
-    const overlays: any[] = [];
     const entries: TimelineOverlayEntry[] = [];
     const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
-    // Build each direction once. Dragging changes visibility without clearing geometry.
-    timelineLines.forEach(line => {
-      const path = (line.path || []).map((point: any) => getLatLng(point));
-      const paths = box ? clipPathToBox(path, box.minLng, box.maxLng, box.minLat, box.maxLat) : [path];
-      if (!paths.some(part => part.length > 1)) return;
-      const polyline = new AMap.Polyline({ path: paths, strokeColor: '#52796F', strokeWeight: lineThickness === 'thin' ? 3 : 6,
-        strokeOpacity: 0.85, lineJoin: 'round', lineCap: 'round', zIndex: 70, bubble: false });
-      polyline.on('click', () => { setSelectedSegmentLines([line.name]); setSelectedStop(null); setSelectedSegmentName(line.name); });
-      overlays.push(polyline);
-      entries.push({ line, overlay: polyline, visible: true });
-    });
-    map.add(overlays);
-    timelineOverlaysRef.current = entries;
-    updateTimelineVisibility(entries, timelineMinuteRef.current);
-    return () => {
-      if (overlays.length) map.remove(overlays);
-      if (timelineOverlaysRef.current === entries) timelineOverlaysRef.current = [];
+    const routes: RenderRoute[] = timelineLines.filter(line=>line.path?.length>1).map(line=>({name:line.name,path:line.path,displayPath:line.path}));
+    const index = new RouteRenderIndex(routes);
+    const overlays = new Map<string, ReturnType<typeof lazyTimelineRoute>>();
+    for (const line of timelineLines) {
+      const overlay=lazyTimelineRoute(map,AMap,{strokeColor:'#52796F',strokeWeight:lineThickness==='thin'?3:6,
+        strokeOpacity:.85,lineJoin:'round',lineCap:'round',zIndex:70,bubble:false},
+        ()=>{setSelectedSegmentLines([line.name]);setSelectedStop(null);setSelectedSegmentName(line.name);});
+      overlays.set(line.name,overlay);entries.push({line,overlay,visible:true});
+    }
+    const updateViewport=()=>{
+      const bounds=map.getBounds(),sw=bounds.getSouthWest(),ne=bounds.getNorthEast();
+      const dx=(ne.lng-sw.lng)*.15,dy=(ne.lat-sw.lat)*.15;
+      const visible=index.visiblePaths({minLng:sw.lng-dx,maxLng:ne.lng+dx,minLat:sw.lat-dy,maxLat:ne.lat+dy});
+      for(const [name,overlay] of overlays){
+        const paths=visible.get(name)||[];
+        overlay.setPaths(box?paths.flatMap(path=>clipPathToBox(path,box.minLng,box.maxLng,box.minLat,box.maxLat)):paths);
+      }
+    };
+    timelineOverlaysRef.current=entries;
+    updateTimelineVisibility(entries,timelineMinuteRef.current);
+    updateViewport();map.on('moveend',updateViewport);map.on('zoomend',updateViewport);
+    return ()=>{
+      map.off('moveend',updateViewport);map.off('zoomend',updateViewport);
+      for(const overlay of overlays.values())overlay.destroy();
+      if(timelineOverlaysRef.current===entries)timelineOverlaysRef.current=[];
     };
   }, [showTimeline, timelineLines]);
 

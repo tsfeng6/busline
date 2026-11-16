@@ -15,7 +15,7 @@
     "lint": "tsc --noEmit",
     "city-data:update": "tsx scripts/update-city-data.ts",
     "lint:gateway": "tsc -p cloudflare/city-gateway/tsconfig.json",
-    "test:city-data": "node --import tsx --test tests/cityData.test.ts tests/sharedCityFlow.test.ts tests/cityActions.test.ts tests/staticCityData.test.ts"
+    "test:city-data": "node --import tsx --test tests/cityData.test.ts tests/sharedCityFlow.test.ts tests/cityActions.test.ts tests/staticCityData.test.ts tests/mapMemory.test.ts"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",

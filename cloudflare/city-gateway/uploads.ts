@@ -1,6 +1,7 @@
+import { MAX_CITY_BYTES, CITY_CHUNK_BYTES, CITY_UPLOAD_FORMAT, CITY_RECORD_FORMAT } from '../../src/utils/cityTransfer';
 import { cityDataKey } from '../../src/utils/cityDataset';
 import type { Env } from './worker';
-const MAX=30*1024*1024,CHUNK=256*1024;
+const MAX=MAX_CITY_BYTES,CHUNK=CITY_CHUNK_BYTES;
 const fail=(status:number,message:string)=>Object.assign(Error(message),{status});
 const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});
 const init=new WeakMap<object,Promise<void>>();
@@ -8,6 +9,7 @@ export async function uploadSchema(env:Env){
   let promise=init.get(env.JOBS);
   if(!promise){promise=(async()=>{
     await env.JOBS.prepare(`CREATE TABLE IF NOT EXISTS city_uploads(id TEXT PRIMARY KEY,city TEXT NOT NULL,token_hash TEXT NOT NULL,bytes INTEGER NOT NULL,parts INTEGER NOT NULL,sha256 TEXT NOT NULL,state TEXT NOT NULL,expires_at INTEGER NOT NULL)`).run();
+    try { await env.JOBS.prepare("ALTER TABLE city_uploads ADD COLUMN format TEXT NOT NULL DEFAULT 'json'").run(); } catch (error) { if (!/duplicate column/i.test(String(error))) throw error; }
     await env.JOBS.prepare(`CREATE TABLE IF NOT EXISTS city_upload_parts(upload_id TEXT NOT NULL,part INTEGER NOT NULL,body BLOB NOT NULL,bytes INTEGER NOT NULL,PRIMARY KEY(upload_id,part))`).run();
   })();init.set(env.JOBS,promise);}
   await promise;
@@ -33,17 +35,18 @@ export async function handleCityUploads(request:Request,env:Env,transport:typeof
     if(!env.GITHUB_DISPATCH_TOKEN||!env.CALLBACK_SECRET||env.CALLBACK_SECRET.length<32)throw fail(503,'上传入口尚未配置完成，地图仍可正常使用。');
     const input=JSON.parse(new TextDecoder().decode(await limitedBytes(request,1024)));
     const key=cityDataKey(input.city),size=Number(input.bytes),parts=Number(input.parts);
-    if(!Number.isInteger(size)||size<2||size>MAX||parts!==Math.ceil(size/CHUNK)||!/^[a-f0-9]{64}$/.test(input.sha256||''))throw fail(400,'上传信息无效或超过30MiB。');
+    if(!Number.isInteger(size)||size<2||size>MAX||parts!==Math.ceil(size/CHUNK)||!/^[a-f0-9]{64}$/.test(input.sha256||''))throw fail(400,'上传信息无效或超过1GB（1GiB）。');
+    if(input.format!==undefined&&input.format!==CITY_UPLOAD_FORMAT&&input.format!==CITY_RECORD_FORMAT)throw fail(400,'上传格式无效。');
     const now=Date.now();
     await env.JOBS.prepare('DELETE FROM city_upload_parts WHERE upload_id IN (SELECT id FROM city_uploads WHERE expires_at<=?)').bind(now).run();
     await env.JOBS.prepare('DELETE FROM city_uploads WHERE expires_at<=?').bind(now).run();
     const id=crypto.randomUUID(),token=crypto.randomUUID()+crypto.randomUUID();
     const claimed=await env.JOBS.prepare(`INSERT INTO city_jobs(city_key,id,city,state,message,created_at,updated_at,expires_at) VALUES(?,?,?,'queued','正在接收本地检索结果。',?,?,?)
       ON CONFLICT(city_key) DO UPDATE SET id=excluded.id,city=excluded.city,state=excluded.state,message=excluded.message,created_at=excluded.created_at,updated_at=excluded.updated_at,expires_at=excluded.expires_at,result_json=NULL
-      WHERE city_jobs.expires_at<=? OR city_jobs.state NOT IN ('queued','running') RETURNING id`).bind(key,id,input.city,now,now,now+30*60000,now).first();
+      WHERE city_jobs.expires_at<=? OR city_jobs.state NOT IN ('queued','running') RETURNING id`).bind(key,id,input.city,now,now,now+120*60000,now).first();
     if(!claimed)throw fail(409,'该城市已有上传或保存任务，请稍后再提交。');
-    const inserted=await env.JOBS.prepare(`INSERT INTO city_uploads(id,city,token_hash,bytes,parts,sha256,state,expires_at) SELECT ?,?,?,?,?,?,'uploading',? WHERE (SELECT COUNT(*) FROM city_uploads)<8 RETURNING id`)
-      .bind(id,input.city,await digest(token),size,parts,input.sha256,now+30*60000).first();
+    const inserted=await env.JOBS.prepare(`INSERT INTO city_uploads(id,city,token_hash,bytes,parts,sha256,state,expires_at,format) SELECT ?,?,?,?,?,?,'uploading',?,? WHERE (SELECT COUNT(*) FROM city_uploads)<8 AND (SELECT COALESCE(SUM(bytes),0) FROM city_uploads)+?<=? RETURNING id`)
+      .bind(id,input.city,await digest(token),size,parts,input.sha256,now+120*60000,input.format||'json',size,MAX+MAX/2).first();
     if(!inserted){await env.JOBS.prepare('DELETE FROM city_jobs WHERE id=?').bind(id).run();throw fail(429,'上传任务繁忙，请稍后重试。');}
     return json({id,token,chunkSize:CHUNK});
   }
@@ -60,7 +63,7 @@ export async function handleCityUploads(request:Request,env:Env,transport:typeof
     const message=`${id}:${index===undefined?'manifest':index}:${at}`;
     if(!await crypto.subtle.verify('HMAC',key,Uint8Array.from(signature.match(/../g)!,s=>parseInt(s,16)),new TextEncoder().encode(message)))throw fail(401,'下载认证失败。');
     if(upload.state!=='queued')throw fail(409,'上传尚未完成。');
-    if(index===undefined)return json({id,city:upload.city,bytes:upload.bytes,parts:upload.parts,sha256:upload.sha256});
+    if(index===undefined)return json({id,city:upload.city,bytes:upload.bytes,parts:upload.parts,sha256:upload.sha256,format:upload.format});
     const part=await env.JOBS.prepare('SELECT body FROM city_upload_parts WHERE upload_id=? AND part=?').bind(id,Number(index)).first<any>();
     if(!part)throw fail(404,'上传片段不存在。');
     return new Response(new Uint8Array(part.body),{headers:{'Content-Type':'application/octet-stream','Cache-Control':'no-store'}});
@@ -85,9 +88,9 @@ export async function handleCityUploads(request:Request,env:Env,transport:typeof
     if(upload.state==='queued')return json(await env.JOBS.prepare('SELECT * FROM city_jobs WHERE id=?').bind(id).first(),202);
     const received=await env.JOBS.prepare('SELECT COUNT(*) AS parts,COALESCE(SUM(bytes),0) AS bytes FROM city_upload_parts WHERE upload_id=?').bind(id).first<any>();
     if(received.parts!==upload.parts||received.bytes!==upload.bytes)throw fail(409,'上传尚未完整，请重试。');
-    const claimed=await env.JOBS.prepare("UPDATE city_uploads SET state='queued',expires_at=? WHERE id=? AND state='uploading' RETURNING id").bind(Date.now()+45*60000,id).first();
+    const claimed=await env.JOBS.prepare("UPDATE city_uploads SET state='queued',expires_at=? WHERE id=? AND state='uploading' RETURNING id").bind(Date.now()+120*60000,id).first();
     if(!claimed)throw fail(409,'任务已提交，请等待保存。');
-    await env.JOBS.prepare("UPDATE city_jobs SET message='上传完成，等待校验并保存到远端。',expires_at=? WHERE id=?").bind(Date.now()+45*60000,id).run();
+    await env.JOBS.prepare("UPDATE city_jobs SET message='上传完成，等待校验并保存到远端。',expires_at=? WHERE id=?").bind(Date.now()+120*60000,id).run();
     let response:Response;
     try{response=await transport(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/update-city-data.yml/dispatches`,{method:'POST',headers:{Authorization:`Bearer ${env.GITHUB_DISPATCH_TOKEN}`,Accept:'application/vnd.github+json','User-Agent':'Busline-City-Gateway','Content-Type':'application/json'},body:JSON.stringify({ref:env.GITHUB_WORKFLOW_REF||'main',inputs:{city:upload.city,request_id:id,uploaded:true}}),signal:AbortSignal.timeout(15000)});}
     catch{response=new Response(null,{status:502});}

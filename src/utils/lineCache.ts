@@ -267,7 +267,7 @@ const serializeBusLine = (line: BusLine, city: string): BusLine => ({
   id: line.id || '',
   name: line.name,
   city: line.city || city,
-  path: (line.path || []).map((p: any) => {
+  path: (line.path || []).every((p:any)=>Array.isArray(p)&&p.length===2&&Number.isFinite(p[0])&&Number.isFinite(p[1])) ? line.path : (line.path || []).map((p: any) => {
     if (Array.isArray(p)) return [Number(p[0] || 0), Number(p[1] || 0)];
     const ll = toPlainLngLat(p);
     return [ll.lng, ll.lat];

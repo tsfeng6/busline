@@ -27,7 +27,7 @@ async function startServer() {
 
   // Middleware
   app.use(cors());
-  app.use('/api/city-data', express.json({ limit: '40mb' }), async (req, res) => {
+  app.use('/api/city-data', express.json({ limit: '1gb' }), async (req, res) => {
     const result = await handleCityDataRequest(req.method, '/api/city-data' + req.path, req.body, String(req.headers['x-admin-password'] || ''), String(req.headers['x-city-refresh-token'] || ''));
     res.status(result.status).json(result.body);
   });

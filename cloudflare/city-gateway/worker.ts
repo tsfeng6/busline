@@ -96,6 +96,7 @@ export async function handleGateway(request:Request,env:Env,transport:typeof fet
       let suffix='latest.json';
       if(parts.length===2&&parts[1]==='history')suffix='history.json';
       else if(parts.length===3&&parts[1]==='history'&&/^[\dTZ-]+-[a-f0-9]{12}$/.test(parts[2]))suffix=`history/${parts[2]}.json`;
+      else if(parts.length===4&&parts[1]==='parts'&&/^[\dTZ-]+-[a-f0-9]{12}$/.test(parts[2])&&/^\d+\.json$/.test(parts[3]))suffix=`parts/${parts[2]}/${parts[3]}`;
       else if(parts.length!==1)throw fail(404,'没有这个数据文件。');
       const version=url.searchParams.get('v');
       const upstream=await transport(rawUrl(env,`${key}/${suffix}`)+(/^[a-f0-9-]{36}$/.test(version||'')?`?v=${version}`:''),{signal:AbortSignal.timeout(15000)});

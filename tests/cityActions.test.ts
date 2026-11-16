@@ -228,7 +228,7 @@ test('browser JSON uploads in authenticated chunks and Actions reads the same da
   };
   const data=normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',filtered:false,retrievalComplete:true,capturedAt:new Date().toISOString(),
     stops:Array.from({length:1000},(_,i)=>({id:'s'+i,name:'中文站点'+i+'中'.repeat(100),address:'6路',location:{lng:116+i*.00001,lat:39}})),
-    lines:[{id:'l',name:'6路(甲--乙)',city:'北京市',sourceQueries:['6路'],path:Array.from({length:40000},(_,i)=>[116+(i%100)*.00001,39]),via_stops:[]}]});
+    lines:[{id:'l',name:'6路(甲--乙)',city:'北京市',sourceQueries:['6路'],path:Array.from({length:40000},(_,i)=>[116+Math.sin(i*12.9898)*.01,39+Math.cos(i*78.233)*.01]),via_stops:[]}]});
   assert.equal(externalCalls,0);
   const progress:number[]=[];const job=await uploadCitySnapshot(origin,data,n=>progress.push(n),transport);
   assert.equal(job.state,'queued');assert.equal(uploaded,true);assert.equal(externalCalls,1);
@@ -251,4 +251,14 @@ test('local search contains no automatic update or upload calls before the user 
   assert.ok(!search.includes('acquireCityRefresh('));
   assert.ok(search.includes('setPendingCityUpload(dataset)'));
   assert.ok(search.includes('new AMap.PlaceSearch('));
+});
+
+
+test('upload manifest accepts exactly 1GiB and rejects larger files without allocating the payload', async () => {
+  const x=setup();
+  const request=(bytes:number)=>new Request('https://gateway.example/uploads',{method:'POST',headers:{Origin:'https://busline.cc'},body:JSON.stringify({city:'北京市',bytes,parts:Math.ceil(bytes/(256*1024)),sha256:'a'.repeat(64),format:'city-records-gzip-v1'})});
+  assert.equal((await handleGateway(request(1024**3+1),x.env,x.transport)).status,400);
+  const accepted=await handleGateway(request(1024**3),x.env,x.transport);
+  assert.equal(accepted.status,200);
+  assert.equal(x.dispatches(),0);
 });

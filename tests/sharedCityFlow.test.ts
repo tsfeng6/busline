@@ -1,3 +1,4 @@
+import { lazyStopMarker, clearStopMarkerGroup } from '../src/utils/lazyStopMarker';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -41,7 +42,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
     manualResultCityRef:ref(''),pendingCityUploadRef:ref(null),pendingCityUpload:null,cityUploadBusy:false,mapRef:ref(map), roadLookupVersionRef:ref(0), sharedMapDataRef:ref(false), isClearedRef:ref(false),searchVersionRef:ref(0),
     referenceBoxRef:ref(null),filterTerminalOnlyRef:ref(false),lastSearchCityRef:ref(''),fetchedLinesCache:ref(new Map()),queriedLineNamesRef:ref(new Set()),
     enableLineCacheRef:ref(false),cachedLinesVersionRef:ref(0),isMinigameActiveRef:ref(false),
-    markerGroupRef:ref({clearOverlays(){}}),allMapStopsRef:ref(new Map()),stopCountCacheRef:ref(new Map()),
+    lazyStopMarker,clearStopMarkerGroup,markerGroupRef:ref({getOverlays(){return []},clearOverlays(){}}),allMapStopsRef:ref(new Map()),stopCountCacheRef:ref(new Map()),
     activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),roadStopsDataRef:ref(new Map()),
     filterIntervalBusRef:ref(false),filterAirportBusRef:ref(false),blockedKeywordsRef:ref([]),searchFilterVersionRef:ref(1),
     enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>snapshot,

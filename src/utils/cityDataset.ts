@@ -47,10 +47,12 @@ const location = (point: any): { lng: number; lat: number } => {
   const lng = Array.isArray(point) ? point[0] : point?.lng;
   const lat = Array.isArray(point) ? point[1] : point?.lat;
   if (!Number.isFinite(lng) || !Number.isFinite(lat) || Math.abs(lng) > 180 || Math.abs(lat) > 90) throw new Error('线路或站点坐标无效。');
-  return { lng: Math.round(lng * 1e6) / 1e6, lat: Math.round(lat * 1e6) / 1e6 };
+  return { lng, lat };
 };
+const normalizedDatasets = new WeakSet<object>();
 /** Whitelist transport fields: never serialize credentials, UI state or arbitrary properties. */
 export function normalizeCityDataset(input: any): CityDataset {
+  if (input && normalizedDatasets.has(input)) return input;
   if (input?.schemaVersion !== 1 || input.scope !== 'city' || input.coverage !== 'observed'
     || typeof input.filtered !== 'boolean' || typeof input.retrievalComplete !== 'boolean') throw new Error('城市快照格式无效。');
   cityDataKey(input.city);
@@ -71,7 +73,8 @@ export function normalizeCityDataset(input: any): CityDataset {
     const name = text(line.name);
     lines.set(text(line.id) || name, {
       id: text(line.id), name, city: input.city, stops: [],
-      path: line.path.map((point: any) => { const p = location(point); return [p.lng, p.lat]; }),
+      path: line.path.every((p: any) => Array.isArray(p) && p.length === 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]) && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 90)
+        ? line.path : line.path.map((point: any) => { const p = location(point); return [p.lng, p.lat]; }),
       via_stops: (Array.isArray(line.via_stops) ? line.via_stops : []).slice(0, 5000).map((stop: any) => ({ id: text(stop.id), name: text(stop.name), location: location(stop.location) })),
       start_stop: text(line.start_stop), end_stop: text(line.end_stop),
       stime: text(line.stime, 20), etime: text(line.etime, 20), scheduleDescription: text(line.scheduleDescription, 4000),
@@ -80,8 +83,10 @@ export function normalizeCityDataset(input: any): CityDataset {
     });
   }
   if (!lines.size || !stops.size) throw new Error('不能保存空城市快照。');
-  return { schemaVersion: 1, city: input.city.trim(), scope: 'city', capturedAt: new Date(input.capturedAt).toISOString(),
+  const result: CityDataset = { schemaVersion: 1, city: input.city.trim(), scope: 'city', capturedAt: new Date(input.capturedAt).toISOString(),
     coverage: 'observed', retrievalComplete: input.retrievalComplete === true, filtered: input.filtered === true,
     lines: [...lines.values()].sort((a, b) => a.name.localeCompare(b.name)),
     stops: [...stops.values()].sort((a, b) => `${a.name}:${a.location.lng},${a.location.lat}`.localeCompare(`${b.name}:${b.location.lng},${b.location.lat}`)) };
+  normalizedDatasets.add(result);
+  return result;
 }

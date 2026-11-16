@@ -1,3 +1,5 @@
+import { cityStorageFiles, cityContentHash, cityContentBytes } from '../../scripts/city-storage-files';
+import { resolveCityParts } from '../utils/cityStorage';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { cityDataKey, cityDatasetExpiresAt, normalizeCityDataset, usableCityDataset, type CityDataset, type CitySnapshotMeta } from '../utils/cityDataset';
 
@@ -30,7 +32,7 @@ export class GithubCityStore {
   }
   async latest(city: string): Promise<CityDataset | null> {
     const result = await this.file(`${routePath(city)}/latest.json`);
-    return result ? normalizeCityDataset(result) : null;
+    return result ? normalizeCityDataset(await resolveCityParts(result, part => this.file(`${routePath(city)}/${part}`))) : null;
   }
   async history(city: string): Promise<CitySnapshotMeta[]> {
     return (await this.file(`${routePath(city)}/history.json`)) || [];
@@ -38,7 +40,7 @@ export class GithubCityStore {
   async historical(city: string, id: string): Promise<CityDataset | null> {
     if (!/^[\dTZ-]+-[a-f0-9]{12}$/.test(id)) throw apiError(400, '快照版本无效。');
     const result = await this.file(`${routePath(city)}/history/${id}.json`);
-    return result ? normalizeCityDataset(result) : null;
+    return result ? normalizeCityDataset(await resolveCityParts(result, part => this.file(`${routePath(city)}/${part}`))) : null;
   }
   private async head(): Promise<any> {
     try { return await this.api(`/git/ref/heads/${encodePath(this.settings.branch)}`); }
@@ -54,23 +56,23 @@ export class GithubCityStore {
   async publish(input: unknown) {
     let data: CityDataset;
     try { data = normalizeCityDataset(input); } catch (error: any) { throw apiError(400, error.message); }
-    if (Buffer.byteLength(JSON.stringify(data),'utf8') > 30 * 1024 * 1024) throw apiError(413,'城市快照过大，请拆分地区。');
+    cityContentBytes(data);
     if (data.filtered) throw apiError(400, '开启线路过滤时不能发布全市共享快照。');
     if (Date.parse(data.capturedAt) > Date.now() + 300000 || Date.parse(data.capturedAt) < Date.now() - 86400000) throw apiError(400, '请提交最近完成的城市检索。');
-    const stable = { ...data, capturedAt: '' };
-    const hash = createHash('sha256').update(JSON.stringify(stable)).digest('hex');
+    const hash = cityContentHash(data);
     const id = `${data.capturedAt.replace(/[:.]/g, '-')}-${hash.slice(0, 12)}`;
     const prefix = routePath(data.city);
     for (let attempt = 0; attempt < 3; attempt++) {
       const head = await this.head();
       const commit = await this.api(`/git/commits/${head.object.sha}`);
       // Read all comparison files at the same immutable commit, never mixed revisions.
-      const [old, records] = await Promise.all([
+      const [oldFile, records] = await Promise.all([
         this.file(`${prefix}/latest.json`, head.object.sha), this.file(`${prefix}/history.json`, head.object.sha),
       ]);
+      const old = oldFile ? await resolveCityParts(oldFile, part => this.file(`${prefix}/${part}`, head.object.sha)) : null;
       const history: CitySnapshotMeta[] = Array.isArray(records) ? records : [];
       const oldStable = old ? { ...normalizeCityDataset(old), capturedAt: '' } : null;
-      const oldHash = oldStable ? createHash('sha256').update(JSON.stringify(oldStable)).digest('hex') : '';
+      const oldHash = oldStable ? cityContentHash(oldStable) : '';
       if (hash === oldHash && usableCityDataset(normalizeCityDataset(old))) return { saved: false, promoted: false, unchanged: true, id: history.find(item => item.hash === hash)?.id };
       if (hash === oldHash && !data.retrievalComplete) return { saved: false, promoted: false, unchanged: true };
       const promoted = !old || (data.retrievalComplete &&
@@ -80,17 +82,15 @@ export class GithubCityStore {
         lineDirections: data.lines.length, stops: data.stops.length, retrievalComplete: data.retrievalComplete, promoted };
       if (hash !== oldHash && history.some(item => item.hash === hash && item.promoted === promoted)) return { saved: false, promoted: false, unchanged: true };
       const files = [
-        { path: `${prefix}/history/${id}.json`, content: JSON.stringify(data) },
         { path: `${prefix}/history.json`, content: JSON.stringify([meta, ...history].slice(0, 100)) },
         ...(promoted ? [
-          { path: `${prefix}/latest.json`, content: JSON.stringify(data) },
           { path: `${prefix}/meta.json`, content: JSON.stringify({ schemaVersion: 1, city: data.city,
             capturedAt: data.capturedAt, expiresAt: cityDatasetExpiresAt(data), retrievalComplete: data.retrievalComplete,
             filtered: data.filtered, lineDirections: data.lines.length, stops: data.stops.length, snapshotId: id }) },
         ] : []),
       ];
       const treeEntries = [];
-      for (const file of files) {
+      for (const file of (function* () { yield* cityStorageFiles(data, prefix, id, promoted); yield* files; })()) {
         const blob = await this.api('/git/blobs', 'POST', { content: file.content, encoding: 'utf-8' });
         treeEntries.push({ path: file.path, mode: '100644', type: 'blob', sha: blob.sha });
       }
@@ -183,7 +183,7 @@ export async function handleCityDataRequest(method: string, pathname: string, bo
     if (!validLease && !authenticated(password)) return { status: 401, body: { error: '需要先取得该城市的检索更新凭据。' } };
     try { cityDataKey(body?.city); } catch { throw apiError(400, '城市快照无效。'); }
     if (cityDataKey(body?.city) !== cityDataKey(city)) throw apiError(400, '城市与快照不一致。');
-    if (Buffer.byteLength(JSON.stringify(body), 'utf8') > 30 * 1024 * 1024) throw apiError(413, '城市快照过大，请拆分地区。');
+    cityContentBytes(body);
     const key = `${settings.repo}:${settings.branch}:${cityDataKey(city)}`;
     if (activeWrites.has(key)) return { status: 409, body: { error: '该城市正在保存，请稍后再试。' } };
     const task = store.publish(body);

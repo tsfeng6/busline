@@ -187,3 +187,36 @@ test('partial snapshots can be previewed without being marked complete, but expi
   assert.equal(previewableCityDataset({...data,filtered:true}),false);
   assert.equal(previewableCityDataset({...data,capturedAt:'2020-01-01T00:00:00Z'}),false);
 });
+
+test('large city snapshots use lossless compressed files shared by latest and history', async () => {
+  const { cityStorageFiles } = await import('../scripts/city-storage-files');
+  const { resolveCityParts, isCityParts } = await import('../src/utils/cityStorage');
+  const data = normalizeCityDataset(fixture(40));
+  data.lines[0].path[0] = [116.123456789123, 39.987654321098];
+  const id = '2026-11-16T00-00-00-000Z-abcdef123456', prefix = 'city-data/v1/北京';
+  const files = new Map([...cityStorageFiles(data, prefix, id, true, 2048)].map(file => [file.path, JSON.parse(file.content)]));
+  const manifest = files.get(`${prefix}/latest.json`);
+  assert.ok(isCityParts(manifest));
+  assert.deepEqual(manifest, files.get(`${prefix}/history/${id}.json`));
+  assert.ok(manifest.parts.length > 1);
+  assert.ok(manifest.parts.every((part:string) => files.get(`${prefix}/${part}`).encoding === 'gzip-base64'));
+  const restored = normalizeCityDataset(await resolveCityParts(manifest, async part => files.get(`${prefix}/${part}`)));
+  assert.deepEqual(restored, data);
+  assert.equal(restored.lines[0].path[0][0], 116.123456789123);
+  await assert.rejects(resolveCityParts({...manifest,parts:['../secret']},async()=>({})),/路径/);
+});
+
+test('GitHub publication and subsequent reads round-trip a real snapshot larger than 8MiB', async () => {
+  const input=fixture(6);
+  for(let r=0;r<input.lines.length;r++)input.lines[r].path=Array.from({length:50000},(_,i)=>[116+Math.sin(i+r)*.01,39+Math.cos(i+r)*.01]);
+  const data=normalizeCityDataset(input),mock=githubMock();
+  assert.ok(Buffer.byteLength(JSON.stringify(data))>8*1024*1024);
+  const result=await mock.store.publish(data);
+  assert.equal(result.promoted,true);
+  const manifest=JSON.parse(mock.files().get('city-data/v1/北京/latest.json')!);
+  assert.equal(manifest.storage,'city-parts-v1');
+  assert.ok(manifest.parts.length>1);
+  assert.deepEqual(await mock.store.latest('北京'),data);
+  assert.deepEqual(await mock.store.historical('北京',result.id!),data);
+  assert.equal((await mock.store.publish(data)).unchanged,true);
+});
