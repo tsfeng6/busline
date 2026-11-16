@@ -15,10 +15,13 @@
     "lint": "tsc --noEmit",
     "city-data:update": "tsx scripts/update-city-data.ts",
     "lint:gateway": "tsc -p cloudflare/city-gateway/tsconfig.json",
-    "test:city-data": "node --import tsx --test tests/cityData.test.ts tests/sharedCityFlow.test.ts tests/cityActions.test.ts tests/staticCityData.test.ts tests/mapMemory.test.ts"
+    "test:city-data": "node --import tsx --test tests/cityData.test.ts tests/sharedCityFlow.test.ts tests/cityActions.test.ts tests/staticCityData.test.ts tests/mapMemory.test.ts",
+    "test:edgeone": "node --import tsx --test tests/edgeOneGateway.test.ts",
+    "lint:edgeone": "tsc -p edgeone/city-gateway/tsconfig.json"
   },
   "dependencies": {
     "@amap/amap-jsapi-loader": "^1.0.1",
+    "@edgeone/pages-blob": "^0.0.19",
     "@google/genai": "^1.29.0",
     "axios": "^1.21.0",
     "canvas-confetti": "^1.9.4",
