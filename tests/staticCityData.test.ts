@@ -85,3 +85,26 @@ test('static latest and indexed history resolve compressed parts without any gat
     assert.equal(readFileSync(join(dir,prefix,'latest.json'),'utf8'),archive);
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+
+test('production Vite relative base loads latest, history and parts instead of being rejected',async()=>{
+  const config=readFileSync('vite.config.ts','utf8');
+  const match=/\bbase:\s*['"]([^'"]*)['"]/.exec(config);assert.ok(match);
+  const base=match[1],id='2026-11-16T00-00-00-000Z-abcdef123456';
+  const expected=base==='./'?'./city-data/':base.replace(/\/$/,'')+'/city-data/';
+  const calls:string[]=[];
+  for(const suffix of ['', 'history/'+id]){
+    const url=sharedCityStaticURL('廊坊市',suffix,'',base);
+    assert.ok(url.startsWith(expected));
+    const data=await readCityJSON(url,async input=>{
+      const path=String(input);calls.push(path);assert.ok(path.startsWith(expected));
+      return Response.json(path.includes('/parts/')?{lines:[{name:'1路'}],stops:[{name:'车站'}]}:
+        {storage:'city-parts-v1',header:{city:'廊坊市'},parts:['parts/'+id+'/0.json']});
+    });
+    assert.equal(data.city,'廊坊市');assert.equal(data.lines.length,1);assert.equal(data.stops.length,1);
+  }
+  assert.equal(calls.length,4);
+  for(const invalid of ['//worker.example/data','https://worker.example/data','http://worker.example/data']){
+    await assert.rejects(readCityJSON(invalid,async()=>{throw Error('Unexpected fetch');}),/同源/);
+  }
+});
