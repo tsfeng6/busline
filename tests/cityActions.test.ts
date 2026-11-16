@@ -119,3 +119,16 @@ test('website job client submits only city names and tracks queued/running/compl
   const result=await client.watch(job,item=>states.push(item.state),new AbortController().signal,1,1000);
   assert.equal(result.state,'completed');assert.deepEqual(states,['queued','running','completed']);
 });
+
+
+test('default browser transport preserves the global fetch receiver required by Safari', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async function (this: unknown) {
+    assert.equal(this, globalThis);
+    return Response.json({ city: '北京', state: 'ready', message: 'ready' });
+  } as typeof fetch;
+  try {
+    const client = new CityUpdateJobClient('https://gateway.example');
+    assert.equal((await client.start('北京')).state, 'ready');
+  } finally { globalThis.fetch = original; }
+});

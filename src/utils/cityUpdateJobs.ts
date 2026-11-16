@@ -2,7 +2,7 @@ import { cityDataKey } from './cityDataset';
 export type CityUpdateJob = {id?:string;city:string;state:'ready'|'queued'|'running'|'completed'|'retained'|'failed';message:string;
   createdAt?:number;updatedAt?:number;result?:{promoted:boolean;lineDirections:number;stops:number;snapshotId?:string}};
 export class CityUpdateJobClient {
-  constructor(private base:string,private transport:typeof fetch=fetch) {
+  constructor(private base:string,private transport:typeof fetch=(input,init)=>globalThis.fetch(input,init)) {
     this.base=base.replace(/\/$/,'');
   }
   private async request(path:string,init:RequestInit={},signal?:AbortSignal):Promise<CityUpdateJob>{
