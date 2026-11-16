@@ -1,12 +1,20 @@
 # 城市线路 JSON 与 GitHub 历史快照
 
-## 推荐部署方式
+## 当前架构：读取与上传分离
 
-当前推荐使用 [Worker + GitHub Actions](city-actions-deployment.md)。用户只提交城市名称，Actions 负责查询和保存，浏览器不会重复全市检索。Worker 的 D1 小表仅用于任务状态与限流，公交 JSON 和历史仍存 GitHub。
+- 查看共享线路、历史索引和下载历史快照：只请求网站同源 `/city-data/v1/...` 静态 JSON，由 GitHub Pages 提供。
+- 最新快照、历史索引中列出的快照及所有引用分片，会在网站构建时从 `busline-data` 分支的同一提交复制到 `public/city-data/`，Vite 再将其复制到 `dist/`。
+- 旧的大份单文件在静态构建中转换为无损压缩分片，原仓库文件和历史版本不修改。当前发布总预算900MiB，超额会停止部署并保留线上旧版本。
+- 读取失败只重试同源文件；404提示未发布/仍在发布中，不再请求 Worker、`workers.dev`、`raw.githubusercontent.com` 或 GitHub REST API。浏览器HTTP缓存可复用未变更的数据，不保证离线首次访问。
+- 全市检索在浏览器中进行，完成后由用户确认是否上传。上传仍使用现有网关和 Actions，与静态读取没有调用依赖；EdgeOne 上传迁移完成前保留旧入口。
+- 上传网关暂不可达时，已有静态线路仍可查看；本地检索、导出也可使用。
+- `VITE_CITY_DATA_READ_BASE_URL` 已停用，旧值不会使网页回退到远端服务。`VITE_CITY_UPDATE_GATEWAY_URL` 仅供上传及任务状态使用。
 
-以下介绍原有 Express 接收快照模式，作为可选方案保留；其后端变量和更新凭据不适用于推荐的 Actions 模式。
+## 原有 Express 模式（历史实现说明）
 
-## 原有 Express 模式已实现
+以下接口保留给维护工具，不再是网页共享线路的读取入口。
+
+### 原有功能背景
 
 - 全市检索为固定默认模式，不再有实验性开关、性能警告或缩放级别门槛。
 - 放大到城市（缩放级别11及以上）并停留约700毫秒，检查该市共享数据。有效则直接加载；不存在、过期或不完整则显示全市检索提示。自动检查不会触发高德全市检索；网络故障会单独提示，避免误报为没有数据。
@@ -33,21 +41,15 @@ CITY_DATA_GITHUB_TOKEN=<仅在后端设置的凭据>
 
 GitHub 凭据须仅授权目标仓库的 Contents 读写权限。不要添加 `VITE_` 前缀，也不要提交到仓库。后端首次写入时自动从默认分支创建 `busline-data` 分支，不向 main 推送，也不会触发现有仅监听 main 的站点部署。
 
-前端环境变量（GitHub Actions 中作为 Variables 设置；修改后重新构建）：
+网页读取需要的构建变量：
 
 ```dotenv
 VITE_CITY_DATA_ENABLED=true
-VITE_API_BASE_URL=https://你的后端域名
-VITE_CITY_DATA_READ_BASE_URL=
 ```
 
-默认从后端读取。如果仓库和数据分支公开，也可设置以下只读地址，使前端直接读取 GitHub 静态文件：
+上传暂时继续配置 `VITE_CITY_UPDATE_MODE=actions` 与 `VITE_CITY_UPDATE_GATEWAY_URL`，Actions 的回调地址是 `CITY_UPDATE_GATEWAY_URL`；这些配置不参与静态线路读取。网站发布工作流可单独手动运行，不需要调用网关。
 
-```dotenv
-VITE_CITY_DATA_READ_BASE_URL=https://raw.githubusercontent.com/tsfeng6/busline/busline-data/city-data/v1
-```
-
-私有仓库不要配置公开读取地址，应通过后端读取。该读取地址在浏览器中必须可访问且支持跨域；读取失败会回退实时检索。GitHub Pages 本身不能执行自动写入后端，写入仍需托管 Express 或部署兼容接口。GitHub 读写凭据和管理员密码只放后端环境，不放 Actions 的前端构建变量。
+GitHub 读写凭据只用于后台维护或 Actions，不放入前端构建变量。
 
 ## 仓库中的文件
 

@@ -1,4 +1,4 @@
-import { readCityJSON } from './sharedCityRead';
+import { readCityJSON, sharedCityStaticURL } from './sharedCityRead';
 import { CityUpdateJobClient } from './cityUpdateJobs';
 import { cityDataKey, normalizeCityDataset, usableCityDataset, previewableCityDataset, type CityDataset, type CitySnapshotMeta } from './cityDataset';
 
@@ -6,22 +6,11 @@ const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 export const gatewayBase = (import.meta.env.VITE_CITY_UPDATE_GATEWAY_URL || '').replace(/\/$/, '');
 export const actionsCityUpdatesEnabled = import.meta.env.VITE_CITY_DATA_ENABLED === 'true' && import.meta.env.VITE_CITY_UPDATE_MODE === 'actions';
 export const cityUpdateJobs = new CityUpdateJobClient(gatewayBase);
-const readBase = (import.meta.env.VITE_CITY_DATA_READ_BASE_URL || '').replace(/\/$/, '');
 export const sharedCityDataEnabled = import.meta.env.VITE_CITY_DATA_ENABLED === 'true';
 export const citySnapshotFresh = usableCityDataset;
 export const citySnapshotPreviewable = previewableCityDataset;
-function readUrl(city: string, suffix = '') {
-  const key = encodeURIComponent(cityDataKey(city));
-  if (readBase) return `${readBase}/${key}/${suffix ? suffix + '.json' : 'latest.json'}`;
-  return `${actionsCityUpdatesEnabled ? gatewayBase : apiBase}/api/city-data/${encodeURIComponent(city)}${suffix ? '/' + suffix : ''}`;
-}
 async function read(city: string, suffix = '', version = '') {
-  const key = encodeURIComponent(cityDataKey(city));
-  const staticBase = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
-  const staticUrl = `${staticBase}/city-data/v1/${key}/${suffix ? suffix + '.json' : 'latest.json'}`;
-  const primary = readUrl(city, suffix);
-  const urls = readBase ? [primary, staticUrl] : [staticUrl, primary];
-  return readCityJSON(urls.map(url => version ? `${url}?v=${encodeURIComponent(version)}` : url));
+  return readCityJSON(sharedCityStaticURL(city, suffix, version, import.meta.env.BASE_URL || '/'));
 }
 type CityCheck = { data: CityDataset | null; status: 'ready' | 'missing' | 'unavailable' };
 const cityLoads = new Map<string, Promise<CityCheck>>();
