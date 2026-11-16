@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
-import { normalizeCityDataset } from '../src/utils/cityDataset';
+import { previewableCityDataset, normalizeCityDataset } from '../src/utils/cityDataset';
 import { resolveSearchCity } from '../src/utils/searchCity';
 import { matchesReturnedLine } from '../src/utils/lineIdentity';
 
@@ -45,7 +45,7 @@ test('fresh shared data draws directly and missing data queues Actions without b
     activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),roadStopsDataRef:ref(new Map()),
     filterIntervalBusRef:ref(false),filterAirportBusRef:ref(false),blockedKeywordsRef:ref([]),searchFilterVersionRef:ref(1),
     enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>snapshot,
-    citySnapshotFresh:()=>true,resolveSearchCity,normalizeCityDataset,matchesReturnedLine,
+    citySnapshotFresh:()=>true,citySnapshotPreviewable:previewableCityDataset,resolveSearchCity,normalizeCityDataset,matchesReturnedLine,
     updateTerminalNamesCache(){},syncStopMarkersToMap(){},getStopColor:()=> '#52796F',isLineNameBlockedRef:()=>false,
     aggregateAndVisualize:async(names:string[])=>{rendered=names;},
     fetchAndDrawLines:()=>{throw Error('Shared city must bypass live line discovery');},
@@ -63,6 +63,14 @@ test('fresh shared data draws directly and missing data queues Actions without b
   assert.deepEqual(rendered,['6路(甲--乙)']);
   assert.equal(apiRequests,0);
   assert.equal(scope.sharedMapDataRef.current,true);
+  rendered=[];
+  scope.actionsCityUpdatesEnabled=true;
+  scope.citySnapshotFresh=()=>false;
+  scope.loadSharedCity=async()=>({...snapshot,retrievalComplete:false});
+  await run();
+  assert.deepEqual(errors,[]);
+  assert.deepEqual(rendered,['6路(甲--乙)']);
+  assert.equal(apiRequests,0);
   rendered=[];
   scope.loadSharedCity=async()=>null;
   scope.actionsCityUpdatesEnabled=true;
@@ -94,7 +102,7 @@ test('city zoom checks load ready data, prompt for missing/expired data, and nev
     const scope:any={sharedCityDataEnabled:true,mapInstance:{},isSearching:false,showMinigameModal:false,onboardingStep:0,
       activeBusLine:null,cityUpdateJob:null,zoomLevel:scenario==='zoomed-out'?8:13,currentCity:'北京市',Date,
       sharedMapDataRef:{current:false},lastCityDataset:null,cityAutoChecksRef:{current:new Map()},isMinigameActiveRef:{current:false},
-      inspectSharedCity:async()=>scenario==='missing'?{data:null,status:'missing'}:scenario==='unavailable'?{data:null,status:'unavailable'}:{data:snapshot,status:'ready'},
+      citySnapshotPreviewable:previewableCityDataset,actionsCityUpdatesEnabled:false,inspectSharedCity:async()=>scenario==='missing'?{data:null,status:'missing'}:scenario==='unavailable'?{data:null,status:'unavailable'}:{data:snapshot,status:'ready'},
       citySnapshotFresh:(value:any)=>value.capturedAt===data.capturedAt,
       handleSearch:(...args:any[])=>rendered.push(args),setCityDataNotice:(notice:any)=>notices.push(notice),setLastCityDataset(){},handleClear(){},
       setTimeout:(job:()=>Promise<void>)=>{jobs.push(job);return 1;},clearTimeout(){},

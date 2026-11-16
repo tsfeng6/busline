@@ -1,5 +1,5 @@
 import { CityUpdateJobClient } from './cityUpdateJobs';
-import { cityDataKey, normalizeCityDataset, usableCityDataset, type CityDataset, type CitySnapshotMeta } from './cityDataset';
+import { cityDataKey, normalizeCityDataset, usableCityDataset, previewableCityDataset, type CityDataset, type CitySnapshotMeta } from './cityDataset';
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 const gatewayBase = (import.meta.env.VITE_CITY_UPDATE_GATEWAY_URL || '').replace(/\/$/, '');
@@ -8,6 +8,7 @@ export const cityUpdateJobs = new CityUpdateJobClient(gatewayBase);
 const readBase = (import.meta.env.VITE_CITY_DATA_READ_BASE_URL || '').replace(/\/$/, '');
 export const sharedCityDataEnabled = import.meta.env.VITE_CITY_DATA_ENABLED === 'true';
 export const citySnapshotFresh = usableCityDataset;
+export const citySnapshotPreviewable = previewableCityDataset;
 function readUrl(city: string, suffix = '') {
   const key = encodeURIComponent(cityDataKey(city));
   if (readBase) return `${readBase}/${key}/${suffix ? suffix + '.json' : 'latest.json'}`;

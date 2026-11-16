@@ -2,7 +2,7 @@ import { CityUpdateStatus } from './components/CityUpdateStatus';
 import type { CityUpdateJob } from './utils/cityUpdateJobs';
 import { CityDataPanel } from './components/CityDataPanel';
 import { normalizeCityDataset, type CityDataset } from './utils/cityDataset';
-import { actionsCityUpdatesEnabled, cityUpdateJobs, loadSharedCity, inspectSharedCity, saveSharedCity, acquireCityRefresh, releaseCityRefresh, citySnapshotFresh, sharedCityDataEnabled } from './utils/sharedCityClient';
+import { actionsCityUpdatesEnabled, cityUpdateJobs, loadSharedCity, inspectSharedCity, saveSharedCity, acquireCityRefresh, releaseCityRefresh, citySnapshotFresh, citySnapshotPreviewable, sharedCityDataEnabled } from './utils/sharedCityClient';
 import { lineBaseIdentity, matchesLineQuery, matchesReturnedLine } from './utils/lineIdentity';
 import { resolveSearchCity } from './utils/searchCity';
 import { discoverStationLines, segmentGridKeys } from './utils/stationCoverage';
@@ -6393,7 +6393,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const sharedDataset = sharedOverride || await loadSharedCity(currentCity);
       if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
       if (sharedDataset) {
-        if (!forceRefresh && citySnapshotFresh(sharedDataset)) {
+        if (!forceRefresh && (citySnapshotFresh(sharedDataset) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(sharedDataset)))) {
           for (const [name, line] of fetchedLinesCache.current) if (!line.isUserSubmitted) fetchedLinesCache.current.delete(name);
         }
         sharedDataset.lines.forEach(line => {
@@ -6401,13 +6401,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         });
         cachedLinesVersionRef.current++;
         updateTerminalNamesCache();
-        if (!forceRefresh && citySnapshotFresh(sharedDataset)) {
+        if (!forceRefresh && (citySnapshotFresh(sharedDataset) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(sharedDataset)))) {
           allPois = sharedDataset.stops;
           usedRegionCache = true;
           usedSharedCity = true;
           sharedMapDataRef.current = true;
           setLastCityDataset(sharedDataset);
-          setSharedCityStatus(`已读取共享线路 · ${new Date(sharedDataset.capturedAt).toLocaleDateString('zh-CN')}`);
+          const message = sharedDataset.retrievalComplete
+            ? `已读取共享线路 · ${new Date(sharedDataset.capturedAt).toLocaleDateString('zh-CN')}`
+            : `已显示已保存的 ${sharedDataset.lines.length} 个线路方向；采集尚未完整，请稍后补全。`;
+          setSharedCityStatus(message);
+          setCityUpdateJob(sharedDataset.retrievalComplete ? null : {city:sharedDataset.city,state:'retained',message});
         } else {
           // Stale snapshots can seed line data, but must not suppress live POI discovery.
           usedRegionCache = false;
@@ -6852,10 +6856,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         if (!controller.signal.aborted) { setCityUpdateJob(job); setSharedCityStatus(job.message); }
       }, controller.signal);
       if (controller.signal.aborted) return;
-      if (result.state === 'ready' || result.state === 'completed') {
+      if (result.state === 'ready' || result.state === 'completed' || result.state === 'retained') {
         const data = await loadSharedCity(result.city, result.id || crypto.randomUUID());
         if (controller.signal.aborted) return;
-        if (data && citySnapshotFresh(data)) {
+        if (data && (citySnapshotFresh(data) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(data)))) {
           setLastCityDataset(data);
           const map = mapRef.current;
           if (map && !isMinigameActiveRef.current) {
@@ -7729,7 +7733,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const {data, status} = await inspectSharedCity(currentCity);
       if (cancelled || isMinigameActiveRef.current) return;
       cityAutoChecksRef.current.set(key, Date.now());
-      if (data && citySnapshotFresh(data)) {
+      if (data && (citySnapshotFresh(data) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(data)))) {
         setCityDataNotice(null);
         void handleSearch(false, data);
       } else {

@@ -27,6 +27,11 @@ export function cityDatasetExpiresAt(data: Pick<CityDataset, 'capturedAt'>): num
   date.setUTCDate(Math.min(day, lastDay));
   return date.getTime() - chinaOffset;
 }
+/** Recent partial data can be previewed, but is never certified as a complete city. */
+export function previewableCityDataset(data: CityDataset, now = Date.now()): boolean {
+  return !data.filtered && data.lines.length > 0 && data.stops.length > 0
+    && Date.parse(data.capturedAt) <= now + 300000 && now < cityDatasetExpiresAt(data);
+}
 export function usableCityDataset(data: CityDataset, now = Date.now()): boolean {
   return data.retrievalComplete && !data.filtered && Date.parse(data.capturedAt) <= now + 300000
     && now < cityDatasetExpiresAt(data);

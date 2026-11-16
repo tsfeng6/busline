@@ -40,6 +40,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   const counts = { district: 0, poi: 0, line: 0 };
   let retrievalComplete = true;
   const failedQueries = new Set<string>();
+  const interruptions: {query:string;message:string}[] = [];
   const request = async (path: string, params: Record<string,string>, bucket: keyof typeof counts) => {
     await wait(); counts[bucket]++;
     const url = new URL(`https://restapi.amap.com${path}`);
@@ -72,7 +73,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   for (let page=1;page<=searchPages;page++) {
     let result: any;
     try { result = await request('/v3/place/text', {city:scope,citylimit:'true',types:'150700',keywords:'',offset:'25',page:String(page),extensions:'all'},'poi'); }
-    catch (error) { if (!stops.size) throw error; retrievalComplete=false; break; }
+    catch (error:any) { if (!stops.size) throw error; interruptions.push({query:'站点发现',message:error.message}); retrievalComplete=false; break; }
     const pois = array(result.pois);
     const total = Number(result.count);
     if (Number.isFinite(total) && total > 0) lastTotal = total;
@@ -95,7 +96,8 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   const queue = [...queries.values()];
   await options.onProgress?.(`发现${stops.size}个站点，正在查询${queue.length}个线路名称。`);
   lineLoop: for (let index=0;index<queue.length;index++) {
-    const query = queue[index].replace(/[（(].*$/,'');
+    const query = queue[index].replace(/[（(].*$/,'').trim();
+    if (!query) { failedQueries.add(queue[index]); continue; }
     let matched = false, received = 0, expected = Infinity;
     const seenPages = new Set<string>();
     for (let page=1;page<=10;page++) {
@@ -103,7 +105,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
       let result:any;
       try { result=await request('/v3/bus/linename',{city:scope,keywords:query,offset:'100',page:String(page),extensions:'all'},'line'); }
       catch (error:any) {
-        retrievalComplete=false;failedQueries.add(query);
+        retrievalComplete=false;failedQueries.add(query);interruptions.push({query,message:error.message});
         if(error.fatal){queue.slice(index+1).forEach(name=>failedQueries.add(name));break lineLoop;}
         break;
       }
@@ -138,5 +140,5 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   }
   const dataset=normalizeCityDataset({schemaVersion:1,city,scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),
     retrievalComplete,filtered:false,stops:[...stops.values()],lines:[...lines.values()]});
-  return { dataset, report:{counts,failedQueries:[...failedQueries],candidateNames:queue.length} };
+  return { dataset, report:{counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length} };
 }

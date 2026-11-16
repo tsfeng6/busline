@@ -132,3 +132,20 @@ test('default browser transport preserves the global fetch receiver required by 
     assert.equal((await client.start('北京')).state, 'ready');
   } finally { globalThis.fetch = original; }
 });
+
+test('partial collection records the provider interruption without leaking credentials', async () => {
+  let lines=0;
+  const fetcher:typeof fetch=async input=>{
+    const url=new URL(String(input));
+    if(url.pathname.includes('district'))return Response.json({status:'1',districts:[{name:'张家口市',level:'city',adcode:'130700'}]});
+    if(url.pathname.includes('/place/'))return Response.json({status:'1',count:'1',pois:[{...poi,address:'6路;7路'}]});
+    if(++lines===1)return Response.json({status:'1',count:'1',buslines:[route('a','6路(甲--乙)')]});
+    return Response.json({status:'0',infocode:'10003',info:'sensitive-provider-message'});
+  };
+  const result=await collectCityDataset('张家口市','private-key',{fetcher,wait:async()=>{}});
+  assert.equal(result.dataset.retrievalComplete,false);
+  assert.equal(result.report.interruptions.length,1);
+  assert.match(result.report.interruptions[0].message,/10003/);
+  assert.ok(!JSON.stringify(result.report).includes('private-key'));
+  assert.ok(!JSON.stringify(result.report).includes('sensitive-provider-message'));
+});

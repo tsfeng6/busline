@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { normalizeCityDataset, cityDataKey, cityDatasetExpiresAt, usableCityDataset } from '../src/utils/cityDataset';
+import { previewableCityDataset, normalizeCityDataset, cityDataKey, cityDatasetExpiresAt, usableCityDataset } from '../src/utils/cityDataset';
 import { GithubCityStore, handleCityDataRequest } from '../src/server/cityData';
 
 function fixture(count = 10, complete = true) {
@@ -177,4 +177,13 @@ test('ordinary visitors can obtain a city-scoped lease and publish without admin
     globalThis.fetch=previousFetch;
     for (const name of names) { if(saved[name]===undefined) delete process.env[name]; else process.env[name]=saved[name]; }
   }
+});
+
+
+test('partial snapshots can be previewed without being marked complete, but expired and filtered ones cannot', () => {
+  const data:any={capturedAt:new Date().toISOString(),retrievalComplete:false,filtered:false,lines:[{}],stops:[{}]};
+  assert.equal(previewableCityDataset(data),true);
+  assert.equal(usableCityDataset(data),false);
+  assert.equal(previewableCityDataset({...data,filtered:true}),false);
+  assert.equal(previewableCityDataset({...data,capturedAt:'2020-01-01T00:00:00Z'}),false);
 });
