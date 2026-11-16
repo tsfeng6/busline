@@ -1916,7 +1916,12 @@ export default function App() {
   const [showEmptySearchNotice, setShowEmptySearchNotice] = useState(false);
   const customApiSectionRef = useRef<HTMLDivElement>(null);
   const focusCustomApiRef = useRef(false);
-  const [pendingCityUpload, setPendingCityUpload] = useState<CityDataset | null>(null);
+  const [pendingCityUpload, setPendingCityUploadState] = useState<CityDataset | null>(null);
+  const pendingCityUploadRef = useRef<CityDataset | null>(null);
+  const setPendingCityUpload = (data: CityDataset | null) => {
+    pendingCityUploadRef.current = data;
+    setPendingCityUploadState(data);
+  };
   const [cityUploadBusy, setCityUploadBusy] = useState(false);
   const [cityUploadProgress, setCityUploadProgress] = useState(0);
   const [cityUploadError, setCityUploadError] = useState('');
@@ -1927,6 +1932,7 @@ export default function App() {
   useEffect(() => () => cityJobWatchRef.current?.abort(), []);
   const [cityDataNotice, setCityDataNotice] = useState<{city: string; kind: 'missing' | 'expired' | 'busy' | 'unavailable'} | null>(null);
   const cityAutoChecksRef = useRef(new Map<string, number>());
+  const manualResultCityRef = useRef('');
   const sharedMapDataRef = useRef(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
   const [cacheUpdateTick, setCacheUpdateTick] = useState(0);
@@ -6256,6 +6262,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   }, [showBaseMap, useSatelliteMap, mapInstance]);
 
   const handleSearch = async (forceRefresh = false, sharedOverride?: CityDataset) => {
+    // Shared loads are lower priority than a local result or its submission dialog.
+    if (sharedOverride) {
+      if (pendingCityUploadRef.current || cityUploadBusy || manualResultCityRef.current === sharedOverride.city.replace(/市$/, '')) return;
+      manualResultCityRef.current = '';
+    }
     setCityDataNotice(null);
     const filtersAtStart = filterIntervalBusRef.current || filterAirportBusRef.current || blockedKeywordsRef.current.length > 0;
     const filterVersionAtStart = searchFilterVersionRef.current;
@@ -6395,7 +6406,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
       }
 
-      const sharedDataset = sharedOverride || (!forceRefresh ? await loadSharedCity(currentCity) : null);
+      const sharedDataset = sharedOverride || (!forceRefresh && manualResultCityRef.current !== currentCity.replace(/市$/, '') ? await loadSharedCity(currentCity) : null);
       if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
       if (sharedDataset) {
         if (!forceRefresh && (citySnapshotFresh(sharedDataset) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(sharedDataset)))) {
@@ -6429,6 +6440,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       // Remote availability never gates a local search. No upload starts before explicit confirmation.
       if (!usedSharedCity) {
+        manualResultCityRef.current = currentCity.replace(/市$/, '');
         cityJobWatchRef.current?.abort();
         setCityUpdateJob(null);
         setCityDataNotice(null);
@@ -6946,6 +6958,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleClear = () => {
+    manualResultCityRef.current = '';
+    setPendingCityUpload(null);
     cityJobWatchRef.current?.abort();
     setCityUpdateJob(null);
     setCityDataNotice(null);
@@ -7700,15 +7714,18 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
   useEffect(() => {
     if (!sharedCityDataEnabled || !mapInstance || isSearching || showMinigameModal || onboardingStep !== 0
-      || activeBusLine || zoomLevel < 11 || !currentCity || currentCity === '全国') return;
+      || activeBusLine || pendingCityUpload || cityUploadBusy || zoomLevel < 11 || !currentCity || currentCity === '全国') return;
     const key = currentCity.replace(/市$/, '');
+    if (manualResultCityRef.current === key) return;
     if (sharedMapDataRef.current && lastCityDataset?.city.replace(/市$/, '') === key) return;
     if (cityUpdateJob && ['queued', 'running'].includes(cityUpdateJob.state) && cityUpdateJob.city.replace(/市$/, '') === key) return;
     if (Date.now() - (cityAutoChecksRef.current.get(key) || 0) < 60000) return;
     let cancelled = false;
+    const startedAtSearchVersion = searchVersionRef.current;
     const timer = setTimeout(async () => {
+      if (cancelled || pendingCityUploadRef.current || startedAtSearchVersion !== searchVersionRef.current || manualResultCityRef.current === key) return;
       const {data, status} = await inspectSharedCity(currentCity);
-      if (cancelled || isMinigameActiveRef.current) return;
+      if (cancelled || pendingCityUploadRef.current || isMinigameActiveRef.current || startedAtSearchVersion !== searchVersionRef.current || manualResultCityRef.current === key) return;
       cityAutoChecksRef.current.set(key, Date.now());
       if (data && (citySnapshotFresh(data) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(data)))) {
         setCityDataNotice(null);
@@ -7721,7 +7738,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
     }, 700);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [mapInstance, currentCity, zoomLevel, isSearching, showMinigameModal, onboardingStep, activeBusLine, cityUpdateJob?.id, cityUpdateJob?.state]);
+  }, [mapInstance, currentCity, zoomLevel, isSearching, showMinigameModal, onboardingStep, activeBusLine, pendingCityUpload, cityUploadBusy, cityUpdateJob?.id, cityUpdateJob?.state]);
 
   useEffect(() => {
     if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
