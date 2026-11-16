@@ -10,6 +10,11 @@ on:
         description: Gateway-issued task UUID
         required: true
         type: string
+      diagnostic:
+        description: Only make two small requests to diagnose provider quota and permissions
+        required: false
+        default: false
+        type: boolean
 permissions:
   contents: read
 concurrency:
@@ -34,6 +39,7 @@ jobs:
         run: npm run city-data:update
         env:
           CITY_UPDATE_CITY: ${{ inputs.city }}
+          CITY_UPDATE_DIAGNOSTIC_ONLY: ${{ inputs.diagnostic }}
           CITY_UPDATE_REQUEST_ID: ${{ inputs.request_id }}
           CITY_UPDATE_GATEWAY_URL: ${{ vars.CITY_UPDATE_GATEWAY_URL }}
           CITY_UPDATE_CALLBACK_SECRET: ${{ secrets.CITY_UPDATE_CALLBACK_SECRET }}
@@ -41,7 +47,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           CITY_DATA_GITHUB_BRANCH: busline-data
-          CITY_SEARCH_PAGE_LIMIT: '100'
+          CITY_SEARCH_PAGE_LIMIT: '400'
           CITY_LINE_QUERY_LIMIT: '1500'
       - name: Retain non-sensitive collection report
         if: always()

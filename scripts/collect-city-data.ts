@@ -1,3 +1,4 @@
+import { discoverCityStops } from './discover-city-stops';
 import { normalizeCityDataset, cityDataKey, type CityDataset } from '../src/utils/cityDataset';
 import { getOperatingHours } from '../src/utils/operatingHours';
 import { lineBaseIdentity } from '../src/utils/lineIdentity';
@@ -5,6 +6,7 @@ import type { BusLine } from '../src/types';
 
 type Options = {
   fetcher?: typeof fetch; wait?: () => Promise<void>; searchPages?: number; lineRequests?: number;
+  seed?: CityDataset;
   onProgress?: (message: string) => Promise<void>;
 };
 const array = (value: any): any[] => Array.isArray(value) ? value : [];
@@ -35,7 +37,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   if (!key) throw new Error('未配置 Web 服务类型的高德 Key。');
   const transport = options.fetcher || fetch;
   const wait = options.wait || (() => new Promise(resolve => setTimeout(resolve, 400)));
-  const searchPages = Math.max(1, Math.min(100, options.searchPages || 100));
+  const searchPages = Math.max(1, Math.min(1200, options.searchPages || 400));
   const maxLineRequests = Math.max(1, Math.min(3000, options.lineRequests || 1500));
   const counts = { district: 0, poi: 0, line: 0 };
   let retrievalComplete = true;
@@ -59,7 +61,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
     return result;
   };
   await options.onProgress?.('正在确认城市。');
-  const districts = await request('/v3/config/district', { keywords: requestedCity, subdistrict:'0', extensions:'base' }, 'district');
+  const districts = await request('/v3/config/district', { keywords: requestedCity, subdistrict:'0', extensions:'all' }, 'district');
   const district = array(districts.districts).find(item => text(item.name) && cityDataKey(item.name) === cityDataKey(requestedCity));
   const municipalities = new Set(['北京市','上海市','天津市','重庆市']);
   if (!district || !['city','district'].includes(district.level) && !municipalities.has(district.name)) throw new Error('无法确认该城市或地区，请检查名称。');
@@ -67,37 +69,46 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   const scope = text(district.adcode) || city;
   const stops = new Map<string, CityDataset['stops'][number]>();
   const queries = new Map<string,string>();
-  const seenPoiPages = new Set<string>();
-  let fetched = 0, lastTotal = Infinity;
-  await options.onProgress?.(`正在发现${city}公交站点。`);
-  for (let page=1;page<=searchPages;page++) {
-    let result: any;
-    try { result = await request('/v3/place/text', {city:scope,citylimit:'true',types:'150700',keywords:'',offset:'25',page:String(page),extensions:'all'},'poi'); }
-    catch (error:any) { if (!stops.size) throw error; interruptions.push({query:'站点发现',message:error.message}); retrievalComplete=false; break; }
-    const pois = array(result.pois);
-    const total = Number(result.count);
-    if (Number.isFinite(total) && total > 0) lastTotal = total;
-    if (!pois.length) { if (fetched < lastTotal && fetched) retrievalComplete=false; break; }
-    const signature = pois.map(poi => text(poi.id) || `${poi.name}:${poi.location}`).join('|');
-    if (seenPoiPages.has(signature)) { retrievalComplete=false; break; }
-    seenPoiPages.add(signature); fetched+=pois.length;
-    for (const poi of pois) {
-      const location = parseLocation(poi.location);
-      if (!location || !text(poi.name)) { retrievalComplete=false;continue; }
-      const address = text(poi.address);
+  let discoveryComplete=false;
+  await options.onProgress?.(`正在分区发现${city}公交站点（候选名称不是线路总数）。`);
+  try {
+    const discovered=await discoverCityStops(district,(path,params)=>request(path,params,'poi'),searchPages,options.onProgress);
+    discoveryComplete=discovered.complete;
+    if(!discovered.complete)retrievalComplete=false;
+    for(const message of discovered.issues)interruptions.push({query:'站点发现',message});
+    for(const poi of discovered.pois){
+      const location=parseLocation(poi.location);
+      if(!location||!text(poi.name)){retrievalComplete=false;continue;}
+      const address=text(poi.address);
       stops.set(`${poi.name}:${location.lng},${location.lat}`,{id:text(poi.id),name:poi.name,address,location});
-      for (const name of address.split(/[;；]/).map(part=>part.trim()).filter(Boolean)) queries.set(lineBaseIdentity(name),name);
+      for(const name of address.split(/[;；]/).map(part=>part.trim()).filter(Boolean)){
+        if(lineBaseIdentity(name))queries.set(lineBaseIdentity(name),name);
+      }
     }
-    if (fetched >= lastTotal || !Number.isFinite(lastTotal) && pois.length < 25) break;
-    if (page === searchPages) retrievalComplete=false;
-  }
-  if (!stops.size || !queries.size) throw new Error('没有取得可用的公交站点或线路，未发布空快照。');
+  }catch(error:any){throw Object.assign(new Error(`站点发现失败：${error.message}`),{collectionReport:{city,counts,interruptions:[{query:'站点发现',message:error.message}]}});}
   const lines = new Map<string,BusLine>();
+  const cachedQueries=new Set<string>();
+  if(options.seed&&!options.seed.filtered&&!options.seed.retrievalComplete
+    &&Date.now()-Date.parse(options.seed.capturedAt)<86400000
+    &&Date.parse(options.seed.capturedAt)<=Date.now()+300000&&cityDataKey(options.seed.city)===cityDataKey(city)){
+    for(const line of options.seed.lines){
+      lines.set(line.id||line.name,line);
+      for(const query of line.sourceQueries||[])cachedQueries.add(lineBaseIdentity(query));
+    }
+    for(const stop of options.seed.stops){
+      const id=`${stop.name}:${stop.location.lng},${stop.location.lat}`;
+      if(!stops.has(id))stops.set(id,stop);
+      for(const name of stop.address.split(/[;；]/).map(part=>part.trim()).filter(Boolean))if(lineBaseIdentity(name))queries.set(lineBaseIdentity(name),name);
+    }
+  }
+  if(!stops.size||!queries.size)throw new Error('没有取得可用的公交站点或线路，未发布空快照。');
+  const cachedDirections=lines.size;
   const queue = [...queries.values()];
-  await options.onProgress?.(`发现${stops.size}个站点，正在查询${queue.length}个线路名称。`);
+  await options.onProgress?.(`发现 ${stops.size} 个站点、${queue.length} 个候选名称；已复用 ${cachedDirections} 个线路方向。`);
   lineLoop: for (let index=0;index<queue.length;index++) {
     const query = queue[index].replace(/[（(].*$/,'').trim();
-    if (!query) { failedQueries.add(queue[index]); continue; }
+    if (!query) { continue; }
+    if(cachedQueries.has(lineBaseIdentity(query)))continue;
     let matched = false, received = 0, expected = Infinity;
     const seenPages = new Set<string>();
     for (let page=1;page<=10;page++) {
@@ -110,7 +121,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
         break;
       }
       const buslines=array(result.buslines);
-      if (!buslines.length) { if (!matched || Number.isFinite(expected) && received<expected) { retrievalComplete=false;failedQueries.add(query); } break; }
+      if (!buslines.length) { if (matched && Number.isFinite(expected) && received<expected) { retrievalComplete=false;failedQueries.add(query); } break; }
       const pageKey=buslines.map(line=>line.id||line.name).join('|');
       if(seenPages.has(pageKey)){retrievalComplete=false;failedQueries.add(query);break;}
       seenPages.add(pageKey);
@@ -130,7 +141,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
     if (counts.line>=maxLineRequests) { retrievalComplete=false;queue.slice(index+1).forEach(name=>failedQueries.add(name));break; }
     if ((index+1)%30===0) await options.onProgress?.(`正在查询线路：${index+1}/${queue.length}。`);
   }
-  if (!lines.size) throw new Error('未取得有效线路路径，保留原有数据。');
+  if (!lines.size) throw Object.assign(new Error(interruptions[0]?.message || '数据源未返回可用线路路径，保留原有数据。'),{collectionReport:{city,counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length,discoveryComplete}});
   // Line responses already include platforms; reuse them instead of another POI search.
   for (const line of lines.values()) for (const stop of line.via_stops||[]) {
     const id=`${stop.name}:${stop.location.lng},${stop.location.lat}`;
@@ -140,5 +151,5 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   }
   const dataset=normalizeCityDataset({schemaVersion:1,city,scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),
     retrievalComplete,filtered:false,stops:[...stops.values()],lines:[...lines.values()]});
-  return { dataset, report:{counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length} };
+  return { dataset, report:{counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length,discoveryComplete,cachedDirections,successfulDirections:lines.size} };
 }

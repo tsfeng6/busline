@@ -102,7 +102,7 @@ test('collection stops repeated POI pages and quota failure never becomes a succ
   const result=await collectCityDataset('张家口市','fake-key',{fetcher:repeated.fetcher,wait:async()=>{},searchPages:10});
   assert.equal(result.dataset.retrievalComplete,false);assert.equal(repeated.counts.poi,2);
   const limited=apiMock(true);
-  await assert.rejects(()=>collectCityDataset('张家口市','fake-key',{fetcher:limited.fetcher,wait:async()=>{}}),/未取得有效线路/);
+  await assert.rejects(()=>collectCityDataset('张家口市','fake-key',{fetcher:limited.fetcher,wait:async()=>{}}),/10003/);
   assert.equal(limited.counts.line,1);
   assert.equal(parseRestLine({...route('a','6路'),polyline:'bad'},'张家口市','6路'),null);
 });
@@ -163,4 +163,49 @@ test('temporarily disabling daily limits bypasses exhausted global and source bu
   assert.equal(x.dispatches(),before);
   x.env.DAILY_UPDATE_LIMITS_ENABLED='true';
   assert.equal((await handleGateway(x.request('石家庄市'),x.env,x.transport)).status,429);
+});
+
+test('saturated city POI searches split spatially, exceed 200 stations, and exclude neighboring city POIs', async () => {
+  const polygons=new Map<string,number>();let broadCalls=0;
+  const fetcher:typeof fetch=async input=>{
+    const url=new URL(String(input));
+    if(url.pathname.includes('district'))return Response.json({status:'1',districts:[{name:'张家口市',level:'city',adcode:'130700',polyline:'116,39;116.1,39;116.1,39.1;116,39.1;116,39'}]});
+    if(url.pathname==='/v3/place/text'){
+      broadCalls++;
+      return Response.json({status:'1',count:'9999',pois:Array.from({length:25},(_,i)=>({...poi,id:'p'+i,name:'站'+i,adcode:'130701'}))});
+    }
+    if(url.pathname==='/v3/place/polygon'){
+      const polygon=url.searchParams.get('polygon')!;
+      if(polygon==='116.000000,39.100000|116.100000,39.000000')return Response.json({status:'1',count:'9999',pois:[poi]});
+      if(!polygons.has(polygon))polygons.set(polygon,polygons.size);
+      const group=polygons.get(polygon)!,page=Number(url.searchParams.get('page'));
+      const records=Array.from({length:61},(_,i)=>({...poi,id:'p'+(group*60+i),name:'站'+(group*60+i),adcode:i===60?'110101':'130701'}));
+      return Response.json({status:'1',count:'61',pois:records.slice((page-1)*25,page*25)});
+    }
+    return Response.json({status:'1',count:'1',buslines:[route('a','6路(甲--乙)')]});
+  };
+  const result=await collectCityDataset('张家口市','private-key',{fetcher,wait:async()=>{}});
+  assert.equal(broadCalls,1);assert.equal(polygons.size,4);
+  assert.equal(result.dataset.retrievalComplete,true);
+  assert.ok(result.dataset.stops.length>=240);
+  assert.equal(result.report.discoveryComplete,true);
+  assert.equal(result.report.counts.poi,14);
+});
+
+test('partial refresh reuses recent source-query paths and does not let a quota error erase them', async () => {
+  const first=apiMock();
+  const seed=(await collectCityDataset('张家口市','key',{fetcher:first.fetcher,wait:async()=>{}})).dataset;
+  seed.retrievalComplete=false;
+  let calls=0;
+  const fetcher:typeof fetch=async input=>{
+    const url=new URL(String(input));
+    if(url.pathname.includes('district'))return Response.json({status:'1',districts:[{name:'张家口市',level:'city',adcode:'130700'}]});
+    if(url.pathname.includes('/place/'))return Response.json({status:'1',count:'1',pois:[{...poi,address:'6路;7路'}]});
+    calls++;assert.equal(url.searchParams.get('keywords'),'7路');
+    return Response.json({status:'0',infocode:'10044'});
+  };
+  const result=await collectCityDataset('张家口市','key',{fetcher,seed,wait:async()=>{}});
+  assert.equal(calls,1);assert.equal(result.dataset.lines.length,3);
+  assert.equal(result.dataset.retrievalComplete,false);
+  assert.match(result.report.interruptions[0].message,/10044/);
 });

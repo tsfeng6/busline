@@ -1,3 +1,4 @@
+import { diagnoseCityData } from './diagnose-city-data';
 import { createHmac } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
@@ -33,7 +34,7 @@ export async function runCityUpdate(env:NodeJS.ProcessEnv=process.env,transport:
     }
     if(!env.AMAP_WEB_SERVICE_KEY)throw new Error('未配置 Web 服务类型的高德 Key。');
     const {dataset,report:collection}=await collectCityDataset(city,env.AMAP_WEB_SERVICE_KEY,{
-      fetcher:transport,searchPages:Number(env.CITY_SEARCH_PAGE_LIMIT)||100,lineRequests:Number(env.CITY_LINE_QUERY_LIMIT)||1500,
+      fetcher:transport,seed:old||undefined,searchPages:Number(env.CITY_SEARCH_PAGE_LIMIT)||400,lineRequests:Number(env.CITY_LINE_QUERY_LIMIT)||1500,
       onProgress:message=>report('running',message),
     });
     await report('running','线路查询结束，正在校验并保存历史版本。');
@@ -46,10 +47,13 @@ export async function runCityUpdate(env:NodeJS.ProcessEnv=process.env,transport:
     });
     return {skipped:false,...saved};
   } catch(error:any) {
+    if(error.collectionReport)await writeFile('city-update-report.json',JSON.stringify(error.collectionReport,null,2));
     if(claimed)try{await report('failed',String(error.message||'城市更新失败，请稍后重试。').slice(0,180));}catch{/* Expired tasks cannot be revived. */}
     throw error;
   }
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href) {
-  runCityUpdate().catch(error=>{console.error(String(error.message||'城市更新失败。'));process.exitCode=1;});
+  (process.env.CITY_UPDATE_DIAGNOSTIC_ONLY==='true'
+    ?diagnoseCityData(process.env.AMAP_WEB_SERVICE_KEY||'',process.env.CITY_UPDATE_CITY||'北京市')
+    :runCityUpdate()).catch(error=>{console.error(String(error.message||'城市更新失败。'));process.exitCode=1;});
 }
