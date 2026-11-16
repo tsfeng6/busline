@@ -10,3 +10,5 @@ coverage/
 .wrangler/
 .dev.vars*
 city-update-report.json
+
+public/city-data/

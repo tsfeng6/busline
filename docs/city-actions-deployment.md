@@ -105,3 +105,11 @@ Actions 需要排队和执行时间，不能保证立即完成。关闭进度卡
 参考：
 - https://developer.amap.com/api/webservice/guide/api-advanced/search
 - https://developer.amap.com/api/webservice/guide/tools/info
+
+## 已有线路采用网站同域读取
+
+网站部署时从 `busline-data` 的固定提交复制每个城市的 `latest.json`、`meta.json` 和历史索引到静态目录 `city-data/v1/`。浏览器默认先读取网站自身域名的 JSON，成功时无需访问 workers.dev。旧版历史快照不整份复制，按需通过原入口下载，以控制体积。
+
+更新任务成功结束后调用同一份网站部署工作流，使新快照也可从网站同域读取。诊断任务不触发发布。发布脚本只复制指定 JSON 文件，不包含源码或密钥；本次静态数据发布总量设置500MiB上限，超出时停止部署而非悄悄丢弃城市。
+
+这消除了“查看已有数据必须先连上 Worker”的依赖，但网站自身的访问质量仍取决于用户网络。发起新采集任务仍需访问 Worker，自定义域名或其他入口可后续单独配置。

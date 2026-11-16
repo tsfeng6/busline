@@ -1,3 +1,4 @@
+import { readCityJSON } from './sharedCityRead';
 import { CityUpdateJobClient } from './cityUpdateJobs';
 import { cityDataKey, normalizeCityDataset, usableCityDataset, previewableCityDataset, type CityDataset, type CitySnapshotMeta } from './cityDataset';
 
@@ -15,11 +16,12 @@ function readUrl(city: string, suffix = '') {
   return `${actionsCityUpdatesEnabled ? gatewayBase : apiBase}/api/city-data/${encodeURIComponent(city)}${suffix ? '/' + suffix : ''}`;
 }
 async function read(city: string, suffix = '', version = '') {
-  const base = readUrl(city, suffix);
-  const url = version ? `${base}?v=${encodeURIComponent(version)}` : base;
-  const response = await fetch(url, { signal: AbortSignal.timeout(30000), cache: 'no-cache' });
-  if (!response.ok) throw Object.assign(new Error(response.status === 404 ? '该城市暂无历史快照。' : '共享线路服务暂时不可用。'), { status: response.status });
-  return response.json();
+  const key = encodeURIComponent(cityDataKey(city));
+  const staticBase = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+  const staticUrl = `${staticBase}/city-data/v1/${key}/${suffix ? suffix + '.json' : 'latest.json'}`;
+  const primary = readUrl(city, suffix);
+  const urls = readBase ? [primary, staticUrl] : [staticUrl, primary];
+  return readCityJSON(urls.map(url => version ? `${url}?v=${encodeURIComponent(version)}` : url));
 }
 type CityCheck = { data: CityDataset | null; status: 'ready' | 'missing' | 'unavailable' };
 const cityLoads = new Map<string, Promise<CityCheck>>();

@@ -57,3 +57,11 @@ jobs:
           path: city-update-report.json
           if-no-files-found: ignore
           retention-days: 7
+
+  publish-site:
+    needs: update
+    if: ${{ success() && inputs.diagnostic != true }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
