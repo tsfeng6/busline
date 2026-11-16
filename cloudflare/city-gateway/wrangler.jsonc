@@ -8,7 +8,8 @@
     "GITHUB_REPO": "tsfeng6/busline",
     "GITHUB_WORKFLOW_REF": "main",
     "CITY_DATA_BRANCH": "busline-data",
-    "MAX_UPDATES_PER_DAY": "1"
+    "MAX_UPDATES_PER_DAY": "1",
+    "DAILY_UPDATE_LIMITS_ENABLED": "false"
   },
   "d1_databases": [
     { "binding": "JOBS", "database_name": "busline-city-jobs", "database_id": "bf9ff4c4-c1b8-4ed3-99f7-6ebcc5210634" }

@@ -4,7 +4,7 @@ interface Database { prepare(sql:string):Statement; batch(statements:Statement[]
 export interface Env {
   JOBS:Database; ALLOWED_ORIGINS:string; GITHUB_REPO:string; GITHUB_DISPATCH_TOKEN:string;
   GITHUB_WORKFLOW_REF?:string; CITY_DATA_BRANCH?:string; CALLBACK_SECRET:string;
-  RATE_LIMIT_SALT:string; MAX_UPDATES_PER_DAY?:string;
+  RATE_LIMIT_SALT:string; MAX_UPDATES_PER_DAY?:string; DAILY_UPDATE_LIMITS_ENABLED?:string;
 }
 type Job={city_key:string;id:string;city:string;state:string;message:string;created_at:number;updated_at:number;expires_at:number;result_json:string|null};
 const terminal=new Set(['completed','retained','failed']);
@@ -113,16 +113,18 @@ export async function handleGateway(request:Request,env:Env,transport:typeof fet
     if(await cityFresh(env,body.city,transport))return json({state:'ready',city:body.city,message:'已有有效共享数据，可以直接加载。'});
     const day=new Date(now).toISOString().slice(0,10),expiry=Date.parse(`${day}T00:00:00Z`)+86400000;
     const ip=await sign(env.RATE_LIMIT_SALT,request.headers.get('CF-Connecting-IP')||'unknown');
+    const dailyLimitsEnabled=env.DAILY_UPDATE_LIMITS_ENABLED==='true';
     const globalLimit=Math.max(1,Math.min(100,Number(env.MAX_UPDATES_PER_DAY)||1));
     const globalKey=`global:${day}`,ipKey=`ip:${day}:${ip}`;
     const global=await env.JOBS.prepare('SELECT used FROM request_budgets WHERE bucket=?').bind(globalKey).first<{used:number}>();
-    if(global&&global.used>=globalLimit)throw fail(429,'今日共享更新名额已用完，请明天再试。');
+    if(dailyLimitsEnabled&&global&&global.used>=globalLimit)throw fail(429,'今日共享更新名额已用完，请明天再试。');
     const id=crypto.randomUUID();
     const claimed=await env.JOBS.prepare(`INSERT INTO city_jobs(city_key,id,city,state,message,created_at,updated_at,expires_at)
       VALUES(?,?,?,'queued','已提交，等待线路更新。',?,?,?) ON CONFLICT(city_key) DO UPDATE SET id=excluded.id,city=excluded.city,
       state=excluded.state,message=excluded.message,created_at=excluded.created_at,updated_at=excluded.updated_at,expires_at=excluded.expires_at,result_json=NULL
       WHERE city_jobs.expires_at<=? RETURNING *`).bind(key,id,body.city,now,now,now+45*60000,now).first<Job>();
     if(!claimed){const joined=await env.JOBS.prepare('SELECT * FROM city_jobs WHERE city_key=?').bind(key).first<Job>();return json(publicJob(joined!),202);}
+    if(dailyLimitsEnabled){
     const budgets=await env.JOBS.batch([
       env.JOBS.prepare(`INSERT INTO request_budgets(bucket,used,expires_at,last_id) VALUES(?,1,?,?)
         ON CONFLICT(bucket) DO UPDATE SET used=used+1,last_id=excluded.last_id WHERE request_budgets.used<3 RETURNING used`).bind(ipKey,expiry,id),
@@ -131,6 +133,7 @@ export async function handleGateway(request:Request,env:Env,transport:typeof fet
         ON CONFLICT(bucket) DO UPDATE SET used=used+1,last_id=excluded.last_id WHERE request_budgets.used<? RETURNING used`).bind(globalKey,expiry,id,ipKey,id,globalLimit),
     ]);
     if(!budgets[0].results?.length||!budgets[1].results?.length){await env.JOBS.prepare('DELETE FROM city_jobs WHERE id=?').bind(id).run();throw fail(429,'更新请求过于频繁，请稍后再试。');}
+    }
     try{
       const response=await transport(`https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/update-city-data.yml/dispatches`,{
         method:'POST',headers:{Authorization:`Bearer ${env.GITHUB_DISPATCH_TOKEN}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'Busline-City-Gateway','Content-Type':'application/json'},

@@ -21,7 +21,7 @@ class D1Test {
 function setup(limit='10'){
   const database=new D1Test();let dispatches=0;
   const env:Env={JOBS:database as any,ALLOWED_ORIGINS:'https://busline.cc',GITHUB_REPO:'tsfeng6/busline',GITHUB_DISPATCH_TOKEN:'fake-dispatch',
-    CALLBACK_SECRET:'test-callback-secret-at-least-32-characters',RATE_LIMIT_SALT:'test-ip-salt-at-least-16-characters',MAX_UPDATES_PER_DAY:limit};
+    CALLBACK_SECRET:'test-callback-secret-at-least-32-characters',RATE_LIMIT_SALT:'test-ip-salt-at-least-16-characters',MAX_UPDATES_PER_DAY:limit,DAILY_UPDATE_LIMITS_ENABLED:'true'};
   const transport:typeof fetch=async(input,init)=>{
     const url=String(input);
     if(url.includes('raw.githubusercontent.com'))return new Response('{}',{status:404});
@@ -148,4 +148,19 @@ test('partial collection records the provider interruption without leaking crede
   assert.match(result.report.interruptions[0].message,/10003/);
   assert.ok(!JSON.stringify(result.report).includes('private-key'));
   assert.ok(!JSON.stringify(result.report).includes('sensitive-provider-message'));
+});
+
+
+test('temporarily disabling daily limits bypasses exhausted global and source budgets but still merges city jobs', async () => {
+  const x=setup('1');
+  await handleGateway(x.request('北京市'),x.env,x.transport);
+  x.env.DAILY_UPDATE_LIMITS_ENABLED='false';
+  for(const city of ['上海市','天津市','重庆市','保定市']) {
+    assert.equal((await handleGateway(x.request(city),x.env,x.transport)).status,202);
+  }
+  const before=x.dispatches();
+  await handleGateway(x.request('北京市'),x.env,x.transport);
+  assert.equal(x.dispatches(),before);
+  x.env.DAILY_UPDATE_LIMITS_ENABLED='true';
+  assert.equal((await handleGateway(x.request('石家庄市'),x.env,x.transport)).status,429);
 });
