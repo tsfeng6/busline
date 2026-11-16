@@ -56,7 +56,10 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
     if (String(result.status) !== '1') {
       const code = text(result.infocode).replace(/[^0-9]/g,'').slice(0,8);
       // Never log request URLs, raw provider messages or key-bearing errors.
-      throw Object.assign(new Error(`数据源拒绝请求${code ? `（${code}）` : ''}，可能涉及权限、额度或请求限制。`),{fatal:true});
+      const message=['10003','10044'].includes(code)
+        ? `高德对应服务日调用额度已超限（${code}）；网站每日名额已解除，但需等待高德额度恢复或调整其配额。`
+        : `数据源拒绝请求${code ? `（${code}）` : ''}，可能涉及权限、额度或请求限制。`;
+      throw Object.assign(new Error(message),{fatal:true});
     }
     return result;
   };
@@ -139,7 +142,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
       if (page===10) retrievalComplete=false;
     }
     if (counts.line>=maxLineRequests) { retrievalComplete=false;queue.slice(index+1).forEach(name=>failedQueries.add(name));break; }
-    if ((index+1)%30===0) await options.onProgress?.(`正在查询线路：${index+1}/${queue.length}。`);
+    if ((index+1)%30===0) await options.onProgress?.(`候选名称处理 ${index+1}/${queue.length}；已取得 ${lines.size} 个线路方向。`);
   }
   if (!lines.size) throw Object.assign(new Error(interruptions[0]?.message || '数据源未返回可用线路路径，保留原有数据。'),{collectionReport:{city,counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length,discoveryComplete}});
   // Line responses already include platforms; reuse them instead of another POI search.
@@ -151,5 +154,5 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   }
   const dataset=normalizeCityDataset({schemaVersion:1,city,scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),
     retrievalComplete,filtered:false,stops:[...stops.values()],lines:[...lines.values()]});
-  return { dataset, report:{counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length,discoveryComplete,cachedDirections,successfulDirections:lines.size} };
+  return { dataset, report:{counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length,discoveryComplete,cachedDirections,successfulDirections:lines.size,distinctLineNames:new Set([...lines.values()].map(line=>lineBaseIdentity(line.name))).size} };
 }
