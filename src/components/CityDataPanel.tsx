@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Download, History, Loader2, RefreshCw, X } from 'lucide-react';
+import { Download, Upload, History, Loader2, RefreshCw, X } from 'lucide-react';
 import type { CityDataset, CitySnapshotMeta } from '../utils/cityDataset';
 import { exportCityJSON, listSharedCityHistory, loadHistoricalCity, sharedCityDataEnabled } from '../utils/sharedCityClient';
 
-export function CityDataPanel({ data, status, onRefresh }: { data: CityDataset | null; status: string; onRefresh?: () => void }) {
+export function CityDataPanel({ data, status, onRefresh, onUpload }: { data: CityDataset | null; status: string; onRefresh?: () => void; onUpload?: () => void }) {
   const [open, setOpen] = useState(false);
   const [records, setRecords] = useState<CitySnapshotMeta[]>([]);
   const [busy, setBusy] = useState(false);
@@ -20,6 +20,7 @@ export function CityDataPanel({ data, status, onRefresh }: { data: CityDataset |
       <div><h3 className="text-sm font-bold text-slate-800">城市线路数据</h3>
         <p className="text-xs text-slate-500 mt-1">{status || '全市检索后可导出本次线路 JSON。'}</p></div>
       <div className="flex gap-2 shrink-0">
+        {onUpload && <button type="button" aria-label="提交当前结果到远端" title="提交当前结果到远端" onClick={onUpload} className="p-2 rounded-full bg-m3-primary-container text-m3-on-primary-container"><Upload className="w-5 h-5" /></button>}
         {onRefresh && <button type="button" aria-label="重新检索并更新城市快照" title="重新检索并更新城市快照" disabled={!data} onClick={onRefresh}
           className="p-2 rounded-full bg-m3-primary-container text-m3-on-primary-container disabled:opacity-35"><RefreshCw className="w-5 h-5" /></button>}
         <button type="button" aria-label="导出当前城市线路 JSON" title="导出当前城市线路 JSON" disabled={!data}

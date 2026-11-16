@@ -1,8 +1,10 @@
+import { CityUploadDialog } from './components/CityUploadDialog';
+import { uploadCitySnapshot } from './utils/cityUploadClient';
 import { CityUpdateStatus } from './components/CityUpdateStatus';
 import type { CityUpdateJob } from './utils/cityUpdateJobs';
 import { CityDataPanel } from './components/CityDataPanel';
 import { normalizeCityDataset, type CityDataset } from './utils/cityDataset';
-import { actionsCityUpdatesEnabled, cityUpdateJobs, loadSharedCity, inspectSharedCity, saveSharedCity, acquireCityRefresh, releaseCityRefresh, citySnapshotFresh, citySnapshotPreviewable, sharedCityDataEnabled } from './utils/sharedCityClient';
+import { actionsCityUpdatesEnabled, cityUpdateJobs, loadSharedCity, inspectSharedCity, gatewayBase, citySnapshotFresh, citySnapshotPreviewable, sharedCityDataEnabled } from './utils/sharedCityClient';
 import { lineBaseIdentity, matchesLineQuery, matchesReturnedLine } from './utils/lineIdentity';
 import { resolveSearchCity } from './utils/searchCity';
 import { discoverStationLines, segmentGridKeys } from './utils/stationCoverage';
@@ -1914,6 +1916,10 @@ export default function App() {
   const [showEmptySearchNotice, setShowEmptySearchNotice] = useState(false);
   const customApiSectionRef = useRef<HTMLDivElement>(null);
   const focusCustomApiRef = useRef(false);
+  const [pendingCityUpload, setPendingCityUpload] = useState<CityDataset | null>(null);
+  const [cityUploadBusy, setCityUploadBusy] = useState(false);
+  const [cityUploadProgress, setCityUploadProgress] = useState(0);
+  const [cityUploadError, setCityUploadError] = useState('');
   const [lastCityDataset, setLastCityDataset] = useState<CityDataset | null>(null);
   const [sharedCityStatus, setSharedCityStatus] = useState('');
   const [cityUpdateJob, setCityUpdateJob] = useState<CityUpdateJob | null>(null);
@@ -6274,14 +6280,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
 
     setAIRegionContext(null);
+    setPendingCityUpload(null);
+    setCityUploadError('');
     setShowEmptySearchNotice(false);
     const searchStartedAt = performance.now();
 
     setIsSearching(true);
     setSharedCityStatus(sharedCityDataEnabled ? '正在检查共享城市线路…' : '');
-    let refreshLeaseToken = '';
-    let refreshLeaseCity = '';
-    let saveHandedOff = false;
     try {
       const AMap = (window as any).AMap;
       
@@ -6390,7 +6395,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
       }
 
-      const sharedDataset = sharedOverride || await loadSharedCity(currentCity);
+      const sharedDataset = sharedOverride || (!forceRefresh ? await loadSharedCity(currentCity) : null);
       if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
       if (sharedDataset) {
         if (!forceRefresh && (citySnapshotFresh(sharedDataset) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(sharedDataset)))) {
@@ -6422,43 +6427,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         setSharedCityStatus('暂无可用共享线路，正在检索。');
       }
 
-      if (actionsCityUpdatesEnabled && !usedSharedCity) {
+      // Remote availability never gates a local search. No upload starts before explicit confirmation.
+      if (!usedSharedCity) {
         cityJobWatchRef.current?.abort();
         setCityUpdateJob(null);
-        try {
-          const job = await cityUpdateJobs.start(currentCity);
-          if (searchVersionRef.current !== thisSearchVer || isClearedRef.current) return;
-          cityAutoChecksRef.current.set(currentCity.replace(/市$/, ''), Date.now());
-          setCityDataNotice(null);
-          setSharedCityStatus(job.message);
-          void watchCityActionJob(job);
-        } catch (error: any) {
-          if (searchVersionRef.current !== thisSearchVer || isClearedRef.current) return;
-          const message = error.message || '暂时无法提交城市更新。';
-          setSharedCityStatus(message);
-          setCityUpdateJob({ city: currentCity, state: 'failed', message });
-        }
-        setIsSearching(false);
-        return;
-      }
-
-      if (sharedCityDataEnabled && !usedSharedCity) {
-        try {
-          refreshLeaseToken = (await acquireCityRefresh(currentCity)).token;
-          refreshLeaseCity = currentCity;
-          if (searchVersionRef.current !== thisSearchVer || isClearedRef.current) return;
-          // An update must use current station data, not silently republish browser-cache results.
-          usedRegionCache = false;
-          refreshLineData = true;
-        } catch (error: any) {
-          if (error.status === 409) {
-            setCityDataNotice({ city: currentCity, kind: 'busy' });
-            setSharedCityStatus(error.message);
-            setIsSearching(false);
-            return;
-          }
-          setSharedCityStatus('共享更新服务暂时不可用，本次检索仅可导出 JSON。');
-        }
+        setCityDataNotice(null);
       }
 
       if (!usedRegionCache) {
@@ -6794,21 +6767,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             lines: [...fetchedLinesCache.current.values()].filter(line => !line.isUserSubmitted && line.city === currentCity),
           });
           setLastCityDataset(dataset);
-          if (sharedCityDataEnabled && refreshLeaseToken && !dataset.filtered && !usedRegionCache) {
-            setSharedCityStatus('检索完成，正在保存城市历史快照…');
-            // Saving is independent of map rendering; a repository outage must not fail a search.
-            saveHandedOff = true;
-            void saveSharedCity(dataset, refreshLeaseToken).then(result => {
-              if (searchVersionRef.current !== thisSearchVer || isClearedRef.current) return;
-              setSharedCityStatus(result.unchanged ? '线路数据未变化，保留现有快照。'
-                : result.promoted ? '已保存并发布城市线路快照。' : '已保留历史快照，最新共享版本保持不变。');
-            }).catch(error => {
-              void releaseCityRefresh(dataset.city, refreshLeaseToken);
-              if (searchVersionRef.current === thisSearchVer && !isClearedRef.current) setSharedCityStatus(`地图已生成；快照未保存：${error.message}`);
-            });
-          } else if (dataset.filtered) setSharedCityStatus('本次开启了线路过滤，仅可导出，不发布为全市共享数据。');
-          else if (!sharedCityDataEnabled) setSharedCityStatus('本次城市数据可导出 JSON；共享仓库尚未启用。');
-          else setSharedCityStatus('本次城市数据可导出 JSON；共享快照暂未保存。');
+          if (dataset.filtered) setSharedCityStatus('本次开启了线路过滤，仅可导出，不发布为全市共享数据。');
+          else {
+            setSharedCityStatus('本地检索完成；尚未提交到远端。');
+            setCityUploadError('');
+            setCityUploadProgress(0);
+            setPendingCityUpload(dataset);
+          }
           } catch { setSharedCityStatus('地图已生成，本次数据未通过快照校验。'); }
         }
 
@@ -6842,12 +6807,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     } catch (error) {
       console.error('Search error:', error);
       setIsSearching(false);
-    } finally {
-      if (refreshLeaseToken && !saveHandedOff) void releaseCityRefresh(refreshLeaseCity, refreshLeaseToken);
     }
   };
 
-  const watchCityActionJob = async (initial: CityUpdateJob) => {
+  const watchCityActionJob = async (initial: CityUpdateJob, preserveLocalMap = false) => {
     cityJobWatchRef.current?.abort();
     const controller = new AbortController();
     cityJobWatchRef.current = controller;
@@ -6855,7 +6818,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const result = await cityUpdateJobs.watch(initial, job => {
         if (!controller.signal.aborted) { setCityUpdateJob(job); setSharedCityStatus(job.message); }
       }, controller.signal);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || preserveLocalMap) return;
       if (result.state === 'ready' || result.state === 'completed' || result.state === 'retained') {
         const data = await loadSharedCity(result.city, result.id || crypto.randomUUID());
         if (controller.signal.aborted) return;
@@ -6876,6 +6839,20 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         setCityUpdateJob(previous => previous ? { ...previous, message: error.message, state: 'failed' } : null);
       }
     }
+  };
+
+  const submitCityUpload = async () => {
+    if (!pendingCityUpload || cityUploadBusy) return;
+    const dataset = pendingCityUpload;
+    setCityUploadBusy(true); setCityUploadError(''); setCityUploadProgress(0);
+    try {
+      const job = await uploadCitySnapshot(gatewayBase, dataset, setCityUploadProgress);
+      setPendingCityUpload(null);
+      setCityUpdateJob(job); setSharedCityStatus(job.message);
+      void watchCityActionJob(job, true);
+    } catch (error: any) {
+      setCityUploadError(error.message || '远端提交失败；本地地图不受影响。');
+    } finally { setCityUploadBusy(false); }
   };
 
   const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string, shouldCancel: () => boolean = () => false, forceRefresh = false) => {
@@ -8341,13 +8318,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       </header>
 
+      <CityUploadDialog data={pendingCityUpload} busy={cityUploadBusy} progress={cityUploadProgress} error={cityUploadError}
+        onSubmit={() => void submitCityUpload()} onClose={() => { if (!cityUploadBusy) setPendingCityUpload(null); }} />
       <CityUpdateStatus job={cityUpdateJob} onClose={() => { cityJobWatchRef.current?.abort(); setCityUpdateJob(null); }} />
       {cityDataNotice && !cityUpdateJob && !isSearching && <div role="status" className="absolute top-24 left-4 sm:left-6 z-30 max-w-sm rounded-2xl bg-m3-surface/95 border border-m3-outline-variant/40 p-4 shadow-lg flex items-center gap-3">
         <div className="text-xs text-slate-600"><p className="font-bold text-slate-800 mb-1">{cityDataNotice.city}</p>
           {cityDataNotice.kind === 'expired' ? '共享线路已超过两个月或尚不完整，请全市检索更新。'
             : cityDataNotice.kind === 'busy' ? '已有城市更新任务，请稍后再试。'
             : cityDataNotice.kind === 'unavailable' ? '暂时无法读取共享线路，您仍可手动进行全市检索。' : '暂无可用的全市线路，请检索后共享给其他用户。'}</div>
-        <button type="button" aria-label="全市检索并保存" title="全市检索并保存" onClick={() => void handleSearch(true)} className="p-3 shrink-0 rounded-full bg-m3-primary text-m3-on-primary"><Search className="w-5 h-5" /></button>
+        <button type="button" aria-label="全市检索" title="全市检索" onClick={() => void handleSearch(true)} className="p-3 shrink-0 rounded-full bg-m3-primary text-m3-on-primary"><Search className="w-5 h-5" /></button>
         <button type="button" aria-label="关闭城市数据提示" onClick={() => setCityDataNotice(null)} className="text-slate-400"><X className="w-4 h-4" /></button>
       </div>}
 
@@ -10549,7 +10528,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   </div>
 
                   <div className="flex-1 p-8 overflow-y-auto relative bg-m3-surface">
-                    {settingsTab === 'general' && <div className="mb-6"><CityDataPanel data={lastCityDataset} status={sharedCityStatus} onRefresh={lastCityDataset && !citySnapshotFresh(lastCityDataset) ? () => { if (!isSearching) { setShowSettings(false); void handleSearch(true); } } : undefined} /></div>}
+                    {settingsTab === 'general' && <div className="mb-6"><CityDataPanel data={lastCityDataset} status={sharedCityStatus} onUpload={lastCityDataset && !lastCityDataset.filtered ? () => { setShowSettings(false); setCityUploadError(''); setPendingCityUpload(lastCityDataset); } : undefined} onRefresh={lastCityDataset && !citySnapshotFresh(lastCityDataset) ? () => { if (!isSearching) { setShowSettings(false); void handleSearch(true); } } : undefined} /></div>}
 
                     <button
                       type="button"

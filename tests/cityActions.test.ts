@@ -1,3 +1,6 @@
+import { uploadCitySnapshot } from '../src/utils/cityUploadClient';
+import { readCityUpload } from '../scripts/read-city-upload';
+import { normalizeCityDataset } from '../src/utils/cityDataset';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -11,7 +14,7 @@ class D1Test {
   db=new DatabaseSync(':memory:');
   constructor(){this.db.exec(readFileSync('cloudflare/city-gateway/schema.sql','utf8'));}
   prepare(sql:string){
-    const wrap=(values:any[]=[])=>({bind:(...next:any[])=>wrap(next),
+    const wrap=(values:any[]=[])=>({bind:(...next:any[])=>wrap(next.map(value=>value instanceof ArrayBuffer?new Uint8Array(value):value)),
       first:async()=>this.db.prepare(sql).get(...values)||null,
       run:async()=>({results:/\b(SELECT|RETURNING)\b/i.test(sql)?this.db.prepare(sql).all(...values):[],...(!/\b(SELECT|RETURNING)\b/i.test(sql)?this.db.prepare(sql).run(...values):{})})});
     return wrap();
@@ -208,4 +211,44 @@ test('partial refresh reuses recent source-query paths and does not let a quota 
   assert.equal(calls,1);assert.equal(result.dataset.lines.length,3);
   assert.equal(result.dataset.retrievalComplete,false);
   assert.match(result.report.interruptions[0].message,/10044/);
+});
+
+
+test('browser JSON uploads in authenticated chunks and Actions reads the same data without AMap calls', async () => {
+  const x=setup();let uploaded=false,externalCalls=0;
+  const external:typeof fetch=async(input,init)=>{
+    externalCalls++;assert.ok(String(input).endsWith('/dispatches'));
+    const body=JSON.parse(String(init?.body));uploaded=body.inputs.uploaded===true;
+    return new Response(null,{status:204});
+  };
+  const origin='https://gateway.example';
+  const transport:typeof fetch=async(input,init)=>{
+    const headers=new Headers(init?.headers);headers.set('Origin','https://busline.cc');
+    return handleGateway(new Request(String(input),{...init,headers}),x.env,external);
+  };
+  const data=normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',filtered:false,retrievalComplete:true,capturedAt:new Date().toISOString(),
+    stops:Array.from({length:1000},(_,i)=>({id:'s'+i,name:'中文站点'+i+'中'.repeat(100),address:'6路',location:{lng:116+i*.00001,lat:39}})),
+    lines:[{id:'l',name:'6路(甲--乙)',city:'北京市',sourceQueries:['6路'],path:Array.from({length:40000},(_,i)=>[116+(i%100)*.00001,39]),via_stops:[]}]});
+  assert.equal(externalCalls,0);
+  const progress:number[]=[];const job=await uploadCitySnapshot(origin,data,n=>progress.push(n),transport);
+  assert.equal(job.state,'queued');assert.equal(uploaded,true);assert.equal(externalCalls,1);
+  assert.ok(progress.length>1);assert.equal(progress.at(-1),100);
+  const restored=await readCityUpload(new URL(origin),job.id!,'北京市',x.env.CALLBACK_SECRET,transport);
+  assert.deepEqual(restored,data);
+  await assert.rejects(()=>readCityUpload(new URL(origin),job.id!,'上海市',x.env.CALLBACK_SECRET,transport),/清单无效/);
+  const denied=await handleGateway(new Request(`${origin}/uploads/${job.id}`,{headers:{Origin:'https://busline.cc'}}),x.env,external);
+  assert.equal(denied.status,401);
+  const callback=JSON.stringify({id:job.id,city:'北京市',state:'completed',message:'saved',at:Date.now()});
+  assert.equal((await handleGateway(new Request(origin+'/jobs/callback',{method:'POST',body:callback,headers:{'x-city-signature':createHmac('sha256',x.env.CALLBACK_SECRET).update(callback).digest('hex')}}),x.env,external)).status,200);
+  assert.equal(x.database.db.prepare('SELECT COUNT(*) AS count FROM city_upload_parts').get()!.count,0);
+});
+
+test('local search contains no automatic update or upload calls before the user confirms', () => {
+  const source=readFileSync('src/App.tsx','utf8');
+  const search=source.slice(source.indexOf('  const handleSearch ='),source.indexOf('  const watchCityActionJob ='));
+  assert.ok(!search.includes('cityUpdateJobs.start('));
+  assert.ok(!search.includes('saveSharedCity('));
+  assert.ok(!search.includes('acquireCityRefresh('));
+  assert.ok(search.includes('setPendingCityUpload(dataset)'));
+  assert.ok(search.includes('new AMap.PlaceSearch('));
 });

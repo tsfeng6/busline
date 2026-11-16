@@ -6,7 +6,7 @@ import { previewableCityDataset, normalizeCityDataset } from '../src/utils/cityD
 import { resolveSearchCity } from '../src/utils/searchCity';
 import { matchesReturnedLine } from '../src/utils/lineIdentity';
 
-test('fresh shared data draws directly and missing data queues Actions without browser discovery', async () => {
+test('fresh shared data draws directly and a remote cache miss starts browser search without an Actions collection', async () => {
   const snapshot = normalizeCityDataset({ schemaVersion: 1, city: '北京市', scope: 'city', coverage: 'observed',
     capturedAt: new Date().toISOString(), retrievalComplete: true, filtered: false,
     stops: [{ id: 's', name: '站点', address: '6路', location: { lng: 116, lat: 39 } }],
@@ -80,8 +80,8 @@ test('fresh shared data draws directly and missing data queues Actions without b
   scope.cityUpdateJobs={start:async(city:string)=>{started++;return {id:crypto.randomUUID(),city,state:'queued',message:'等待更新'};}};
   scope.watchCityActionJob=()=>{watched++;};
   await run();
-  assert.deepEqual(errors,[]);
-  assert.equal(started,1);assert.equal(watched,1);assert.equal(apiRequests,0);assert.deepEqual(rendered,[]);
+  assert.equal(started,0);assert.equal(watched,0);assert.equal(apiRequests,1);assert.deepEqual(rendered,[]);
+  assert.ok(errors.some(args=>String(args).includes('Unexpected POI request')));
 });
 
 test('city zoom checks load ready data, prompt for missing/expired data, and never start live discovery automatically', async () => {

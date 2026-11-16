@@ -15,3 +15,12 @@ CREATE TABLE IF NOT EXISTS request_budgets (
   expires_at INTEGER NOT NULL,
   last_id TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS city_uploads (
+  id TEXT PRIMARY KEY, city TEXT NOT NULL, token_hash TEXT NOT NULL,
+  bytes INTEGER NOT NULL, parts INTEGER NOT NULL, sha256 TEXT NOT NULL,
+  state TEXT NOT NULL, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS city_upload_parts (
+  upload_id TEXT NOT NULL, part INTEGER NOT NULL, body BLOB NOT NULL,
+  bytes INTEGER NOT NULL, PRIMARY KEY(upload_id, part)
+);

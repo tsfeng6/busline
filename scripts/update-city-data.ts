@@ -1,3 +1,4 @@
+import { readCityUpload } from './read-city-upload';
 import { diagnoseCityData } from './diagnose-city-data';
 import { createHmac } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
@@ -28,16 +29,24 @@ export async function runCityUpdate(env:NodeJS.ProcessEnv=process.env,transport:
     if(!token)throw new Error('未配置仓库写入权限。');
     const store=new GithubCityStore({repo:env.GITHUB_REPOSITORY||'tsfeng6/busline',branch:env.CITY_DATA_GITHUB_BRANCH||'busline-data',token,enabled:true},transport);
     const old=await store.latest(city);
-    if(old&&usableCityDataset(old)){
+    if(env.CITY_UPDATE_UPLOADED!=='true'&&old&&usableCityDataset(old)){
       await report('completed','共享数据仍然有效，已跳过重复检索。',{promoted:true,lineDirections:old.lines.length,stops:old.stops.length});
       return {skipped:true};
     }
-    if(!env.AMAP_WEB_SERVICE_KEY)throw new Error('未配置 Web 服务类型的高德 Key。');
-    const {dataset,report:collection}=await collectCityDataset(city,env.AMAP_WEB_SERVICE_KEY,{
-      fetcher:transport,seed:old||undefined,searchPages:Number(env.CITY_SEARCH_PAGE_LIMIT)||400,lineRequests:Number(env.CITY_LINE_QUERY_LIMIT)||1500,
-      onProgress:message=>report('running',message),
-    });
-    await report('running','线路查询结束，正在校验并保存历史版本。');
+    let dataset,collection;
+    if(env.CITY_UPDATE_UPLOADED==='true'){
+      await report('running','正在校验您提交的线路数据，不会重复检索高德。');
+      dataset=await readCityUpload(endpoint,id,city,secret,transport);
+      collection={counts:{district:0,poi:0,line:0},failedQueries:[],interruptions:[],candidateNames:0,source:'browser-upload'};
+    }else{
+      if(!env.AMAP_WEB_SERVICE_KEY)throw new Error('未配置 Web 服务类型的高德 Key。');
+      const collected=await collectCityDataset(city,env.AMAP_WEB_SERVICE_KEY,{
+        fetcher:transport,seed:old||undefined,searchPages:Number(env.CITY_SEARCH_PAGE_LIMIT)||400,lineRequests:Number(env.CITY_LINE_QUERY_LIMIT)||1500,
+        onProgress:message=>report('running',message),
+      });
+      dataset=collected.dataset;collection=collected.report;
+    }
+    await report('running','数据已就绪，正在校验并保存历史版本。');
     await writeFile('city-update-report.json',JSON.stringify({city:dataset.city,retrievalComplete:dataset.retrievalComplete,...collection},null,2));
     const saved=await store.publish(dataset);
     const after=await store.latest(city);

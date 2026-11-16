@@ -1,3 +1,4 @@
+import { handleCityUploads, cleanCityUpload } from './uploads';
 import { cityDataKey, cityDatasetExpiresAt } from '../../src/utils/cityDataset';
 interface Statement { bind(...values: any[]): Statement; first<T=any>(): Promise<T|null>; run(): Promise<any>; }
 interface Database { prepare(sql:string):Statement; batch(statements:Statement[]):Promise<any[]>; }
@@ -77,10 +78,17 @@ export async function handleGateway(request:Request,env:Env,transport:typeof fet
       const expires=terminal.has(body.state)?Date.now()+600000:Date.now()+45*60000;
       await env.JOBS.prepare('UPDATE city_jobs SET state=?,message=?,updated_at=?,expires_at=?,result_json=? WHERE id=? AND state IN (\'queued\',\'running\')')
         .bind(body.state,message,Date.now(),expires,result?JSON.stringify(result):null,body.id).run();
+      if(terminal.has(body.state))await cleanCityUpload(env,body.id);
       return json({accepted:true});
     }
+    if(request.method==='GET'&&path.startsWith('/uploads/'))return await handleCityUploads(request,env,transport);
     if(!allowed.includes(origin))throw fail(403,'此来源不允许访问更新入口。');
-    if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,OPTIONS','Access-Control-Allow-Headers':'Content-Type','Access-Control-Max-Age':'600'}});
+    if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,x-city-upload-token','Access-Control-Max-Age':'600'}});
+    if(path==='/uploads'||path.startsWith('/uploads/')){
+      const result=await handleCityUploads(request,env,transport);
+      const headers=new Headers(result.headers);for(const [key,value] of Object.entries(cors))headers.set(key,value);
+      return new Response(result.body,{status:result.status,headers});
+    }
     // Stream public JSON; never parse a city-sized document in the small Worker.
     if(request.method==='GET'&&path.startsWith('/api/city-data/')){
       const parts=path.slice('/api/city-data/'.length).split('/').map(decodeURIComponent);

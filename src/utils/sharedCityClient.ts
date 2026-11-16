@@ -3,7 +3,7 @@ import { CityUpdateJobClient } from './cityUpdateJobs';
 import { cityDataKey, normalizeCityDataset, usableCityDataset, previewableCityDataset, type CityDataset, type CitySnapshotMeta } from './cityDataset';
 
 const apiBase = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
-const gatewayBase = (import.meta.env.VITE_CITY_UPDATE_GATEWAY_URL || '').replace(/\/$/, '');
+export const gatewayBase = (import.meta.env.VITE_CITY_UPDATE_GATEWAY_URL || '').replace(/\/$/, '');
 export const actionsCityUpdatesEnabled = import.meta.env.VITE_CITY_DATA_ENABLED === 'true' && import.meta.env.VITE_CITY_UPDATE_MODE === 'actions';
 export const cityUpdateJobs = new CityUpdateJobClient(gatewayBase);
 const readBase = (import.meta.env.VITE_CITY_DATA_READ_BASE_URL || '').replace(/\/$/, '');

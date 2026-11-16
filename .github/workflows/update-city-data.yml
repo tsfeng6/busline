@@ -10,6 +10,11 @@ on:
         description: Gateway-issued task UUID
         required: true
         type: string
+      uploaded:
+        description: Save browser-uploaded data without querying AMap again
+        required: false
+        default: false
+        type: boolean
       diagnostic:
         description: Only make two small requests to diagnose provider quota and permissions
         required: false
@@ -40,6 +45,7 @@ jobs:
         env:
           CITY_UPDATE_CITY: ${{ inputs.city }}
           CITY_UPDATE_DIAGNOSTIC_ONLY: ${{ inputs.diagnostic }}
+          CITY_UPDATE_UPLOADED: ${{ inputs.uploaded }}
           CITY_UPDATE_REQUEST_ID: ${{ inputs.request_id }}
           CITY_UPDATE_GATEWAY_URL: ${{ vars.CITY_UPDATE_GATEWAY_URL }}
           CITY_UPDATE_CALLBACK_SECRET: ${{ secrets.CITY_UPDATE_CALLBACK_SECRET }}
