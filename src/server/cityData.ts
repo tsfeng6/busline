@@ -1,5 +1,5 @@
 import { cityStorageFiles, cityContentHash, cityContentBytes } from '../../scripts/city-storage-files';
-import { resolveCityParts } from '../utils/cityStorage';
+import { isCityParts, validateCityPart, resolveCityParts } from '../utils/cityStorage';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { cityDataKey, cityDatasetExpiresAt, normalizeCityDataset, usableCityDataset, type CityDataset, type CitySnapshotMeta } from '../utils/cityDataset';
 
@@ -73,26 +73,44 @@ export class GithubCityStore {
       const history: CitySnapshotMeta[] = Array.isArray(records) ? records : [];
       const oldStable = old ? { ...normalizeCityDataset(old), capturedAt: '' } : null;
       const oldHash = oldStable ? cityContentHash(oldStable) : '';
-      if (hash === oldHash && usableCityDataset(normalizeCityDataset(old))) return { saved: false, promoted: false, unchanged: true, id: history.find(item => item.hash === hash)?.id };
-      if (hash === oldHash && !data.retrievalComplete) return { saved: false, promoted: false, unchanged: true };
-      const promoted = !old || (data.retrievalComplete &&
-        data.lines.length >= old.lines.length * 0.85 && data.stops.length >= old.stops.length * 0.75 &&
-        Date.parse(data.capturedAt) >= Date.parse(old.capturedAt));
+      if (hash === oldHash && Date.parse(data.capturedAt) <= Date.parse(old.capturedAt)) return { saved: false, promoted: false, unchanged: true, id: history.find(item => item.hash === hash)?.id };
+      const promoted = !old || Date.parse(data.capturedAt) >= Date.parse(old.capturedAt);
       const meta: CitySnapshotMeta = { id, city: data.city, capturedAt: data.capturedAt, hash,
         lineDirections: data.lines.length, stops: data.stops.length, retrievalComplete: data.retrievalComplete, promoted };
-      if (hash !== oldHash && history.some(item => item.hash === hash && item.promoted === promoted)) return { saved: false, promoted: false, unchanged: true };
+      const retained = [meta, ...history.filter(item => item.id !== id)]
+        .sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)).slice(0, 5);
+      // An older delayed upload must not displace the current snapshot or exceed retention.
+      if (!retained.some(item => item.id === id)) return { saved: false, promoted: false, unchanged: true };
+      const removed = history.filter(item => !retained.some(keep => keep.id === item.id));
       const files = [
-        { path: `${prefix}/history.json`, content: JSON.stringify([meta, ...history].slice(0, 100)) },
+        { path: `${prefix}/history.json`, content: JSON.stringify(retained) },
         ...(promoted ? [
           { path: `${prefix}/meta.json`, content: JSON.stringify({ schemaVersion: 1, city: data.city,
             capturedAt: data.capturedAt, expiresAt: cityDatasetExpiresAt(data), retrievalComplete: data.retrievalComplete,
             filtered: data.filtered, lineDirections: data.lines.length, stops: data.stops.length, snapshotId: id }) },
         ] : []),
       ];
-      const treeEntries = [];
+      const treeEntries: { path: string; mode: string; type: string; sha: string | null }[] = [];
       for (const file of (function* () { yield* cityStorageFiles(data, prefix, id, promoted); yield* files; })()) {
         const blob = await this.api('/git/blobs', 'POST', { content: file.content, encoding: 'utf-8' });
         treeEntries.push({ path: file.path, mode: '100644', type: 'blob', sha: blob.sha });
+      }
+      const liveParts = new Set<string>();
+      const preserveParts = (manifest: any) => { if (isCityParts(manifest)) for (const part of manifest.parts) liveParts.add(validateCityPart(part)); };
+      if (!promoted) preserveParts(oldFile);
+      for (const record of retained) if (record.id !== id) preserveParts(await this.file(`${prefix}/history/${record.id}.json`, head.object.sha));
+      for (const entry of treeEntries) if (entry.path.startsWith(`${prefix}/parts/`)) liveParts.add(entry.path.slice(prefix.length + 1));
+      for (const record of removed) {
+        if (!/^[\dTZ-]+-[a-f0-9]{12}$/.test(record.id)) throw apiError(400, '历史版本无效。');
+        const path = `${prefix}/history/${record.id}.json`;
+        const manifest = await this.file(path, head.object.sha);
+        if (!manifest) continue;
+        treeEntries.push({ path, mode: '100644', type: 'blob', sha: null });
+        if (isCityParts(manifest)) for (const part of manifest.parts) {
+          validateCityPart(part);
+          if (!liveParts.has(part) && !treeEntries.some(entry => entry.path === `${prefix}/${part}`))
+            treeEntries.push({ path: `${prefix}/${part}`, mode: '100644', type: 'blob', sha: null });
+        }
       }
       const tree = await this.api('/git/trees', 'POST', { base_tree: commit.tree.sha, tree: treeEntries });
       const next = await this.api('/git/commits', 'POST', { message: `data: ${data.city} snapshot ${id}`, tree: tree.sha, parents: [head.object.sha] });

@@ -39,7 +39,7 @@ function githubMock() {
     if (pathname === '/git/blobs') { const sha = `blob-${++counter}`; blobs.set(sha, body.content); return response({ sha }); }
     if (pathname === '/git/trees') {
       const sha = `tree-${++counter}`, tree = new Map(trees.get(body.base_tree));
-      for (const entry of body.tree) tree.set(entry.path, blobs.get(entry.sha)!);
+      for (const entry of body.tree) { if (entry.sha === null) tree.delete(entry.path); else tree.set(entry.path, blobs.get(entry.sha)!); }
       trees.set(sha, tree); return response({ sha });
     }
     if (pathname === '/git/commits') {
@@ -74,7 +74,8 @@ test('snapshot validation strips credentials and preserves transport metadata', 
 
 test('publishes latest/history atomically, reads history and deduplicates unchanged content', async () => {
   const mock = githubMock();
-  const saved = await mock.store.publish(fixture());
+  const initial = fixture();
+  const saved = await mock.store.publish(initial);
   assert.equal(saved.promoted, true);
   const files = mock.files();
   assert.ok(files.has('city-data/v1/北京/latest.json'));
@@ -83,19 +84,35 @@ test('publishes latest/history atomically, reads history and deduplicates unchan
   assert.equal((await mock.store.history('北京')).length, 1);
   assert.equal((await mock.store.historical('北京', saved.id!))?.lines.length, 10);
   const before = mock.writes.length;
-  assert.equal((await mock.store.publish(fixture())).unchanged, true);
+  assert.equal((await mock.store.publish(initial)).unchanged, true);
   assert.equal(mock.writes.length, before);
   assert.ok(mock.writes.filter(write => write.pathname === '/git/trees').every(write => write.body.tree.length === 4));
 });
 
-test('incomplete/regressed results are archived without overwriting the latest good city', async () => {
-  const mock = githubMock();
-  await mock.store.publish(fixture(20));
-  assert.equal((await mock.store.publish(fixture(20, false))).promoted, false);
-  assert.equal((await mock.store.publish(fixture(5))).promoted, false);
-  assert.equal((await mock.store.latest('北京市'))?.lines.length, 20);
-  assert.equal((await mock.store.history('北京市')).length, 3);
-  await assert.rejects(() => mock.store.publish({ ...fixture(), filtered: true }), /过滤/);
+test('newest valid upload becomes default even when partial or smaller; delayed old uploads stay historical', async () => {
+  const mock = githubMock(), now = Date.now();
+  await mock.store.publish({...fixture(20),capturedAt:new Date(now-3000).toISOString()});
+  assert.equal((await mock.store.publish({...fixture(20,false),capturedAt:new Date(now-2000).toISOString()})).promoted,true);
+  assert.equal((await mock.store.latest('北京'))?.retrievalComplete,false);
+  assert.equal((await mock.store.publish({...fixture(5),capturedAt:new Date(now-1000).toISOString()})).promoted,true);
+  assert.equal((await mock.store.publish({...fixture(12),capturedAt:new Date(now-2500).toISOString()})).promoted,false);
+  assert.equal((await mock.store.latest('北京市'))?.lines.length,5);
+  assert.equal((await mock.store.history('北京市')).length,4);
+  await assert.rejects(()=>mock.store.publish({...fixture(),filtered:true}),/过滤/);
+});
+
+test('only five snapshots remain; dropped archives are deleted atomically and current stays readable',async()=>{
+  const mock=githubMock(),now=Date.now();const ids:string[]=[];
+  for(let i=0;i<8;i++){
+    const saved=await mock.store.publish({...fixture(i+1),capturedAt:new Date(now-10000+i*1000).toISOString()});
+    ids.push(saved.id!);
+  }
+  const history=await mock.store.history('北京');
+  assert.deepEqual(history.map(item=>item.id),ids.slice(-5).reverse());
+  assert.equal((await mock.store.latest('北京'))?.lines.length,8);
+  for(const id of ids.slice(0,3))assert.equal(await mock.store.historical('北京',id),null);
+  for(const id of ids.slice(-5))assert.ok(await mock.store.historical('北京',id));
+  assert.equal([...mock.files().keys()].filter(path=>path.includes('/history/')).length,5);
 });
 
 test('retries optimistic ref conflicts and retains one consistent snapshot', async () => {
@@ -219,4 +236,34 @@ test('GitHub publication and subsequent reads round-trip a real snapshot larger 
   assert.deepEqual(await mock.store.latest('北京'),data);
   assert.deepEqual(await mock.store.historical('北京',result.id!),data);
   assert.equal((await mock.store.publish(data)).unchanged,true);
+});
+
+test('existing archives migrate to newest default and five snapshots, pruning only unreferenced parts',async()=>{
+  const {mkdtemp,mkdir,writeFile,readFile,readdir,rm}=await import('node:fs/promises');
+  const {join}=await import('node:path');const {tmpdir}=await import('node:os');
+  const {cityStorageFiles}=await import('../scripts/city-storage-files');
+  const {retainCityHistory}=await import('../scripts/retain-city-history');
+  const root=await mkdtemp(join(tmpdir(),'busline-retain-')),prefix='city-data/v1/北京';
+  try{
+    const records:any[]=[];let newest:any;
+    for(let i=0;i<8;i++){
+      const data=normalizeCityDataset({...fixture(9-i),capturedAt:new Date(Date.now()-10000+i*1000).toISOString()});
+      const id=`${data.capturedAt.replace(/[:.]/g,'-')}-${String(i).padStart(12,'0')}`;
+      for(const file of cityStorageFiles(data,prefix,id,i===0,500)){
+        await mkdir(join(root,file.path,'..'),{recursive:true});await writeFile(join(root,file.path),file.content);
+      }
+      records.unshift({id,capturedAt:data.capturedAt,promoted:i===0});newest=data;
+    }
+    await writeFile(join(root,prefix,'history.json'),JSON.stringify(records.reverse()));
+    assert.equal((await retainCityHistory(root)).cities,1);
+    const index=JSON.parse(await readFile(join(root,prefix,'history.json'),'utf8'));
+    assert.equal(index.length,5);assert.equal(index[0].promoted,true);
+    const {resolveCityParts}=await import('../src/utils/cityStorage');
+    const data=await resolveCityParts(JSON.parse(await readFile(join(root,prefix,'latest.json'),'utf8')),
+      async part=>JSON.parse(await readFile(join(root,prefix,part),'utf8')));
+    assert.deepEqual(normalizeCityDataset(data),newest);
+    assert.equal((await readdir(join(root,prefix,'history'))).length,5);
+    assert.equal((await readdir(join(root,prefix,'parts'))).length,5);
+    assert.deepEqual(await retainCityHistory(root),{cities:1,removed:0});
+  }finally{await rm(root,{recursive:true,force:true});}
 });
