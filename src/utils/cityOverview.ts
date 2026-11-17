@@ -1,5 +1,5 @@
 export const CITY_DETAIL_ZOOM = 13;
-export type CityOverview = {city:string;center:[number,number];bounds:[number,number,number,number];lineDirections:number;capturedAt:string;thumbnail:string};
+export type CityOverview = {province?:string;countySeats?:import('./localTransit').CountySeat[];city:string;center:[number,number];bounds:[number,number,number,number];lineDirections:number;capturedAt:string;thumbnail:string};
 export const mercatorY=(latitude:number)=>180/Math.PI*Math.log(Math.tan(Math.PI/4+Math.max(-85,Math.min(85,latitude))*Math.PI/360));
 /** Pixels map directly to the image's geographic bounds, with no card padding or fitting offsets. */
 export function overviewPixel(point:[number,number],bounds:CityOverview['bounds'],width:number,height:number):[number,number]{

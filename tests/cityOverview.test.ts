@@ -20,11 +20,11 @@ test('publication creates a tiny national index and a thumbnail for every valid 
  const git=(...args:string[])=>execFileSync('git',args,{cwd:root,stdio:'pipe'});
  git('init');git('config','user.name','Test');git('config','user.email','test@example.invalid');
  for(const city of ['北京','廊坊']){const prefix=join(root,'city-data/v1',city);mkdirSync(prefix,{recursive:true});
- writeFileSync(join(prefix,'latest.json'),JSON.stringify({schemaVersion:1,city:city+'市',capturedAt:'2026-11-17T00:00:00Z',lines:[{path:[[116,39],[116.2,39.5]]}],stops:[]}));}
+ writeFileSync(join(prefix,'latest.json'),JSON.stringify({schemaVersion:1,city:city+'市',capturedAt:'2026-11-17T00:00:00Z',lines:[{path:[[116,39],[116.2,39.5]]}],stops:city==='北京'?[{name:'海淀区政府',location:{lng:116,lat:39}}]:[]}));}
  git('add','.');git('commit','-m','fixtures');
  const output=join(root,'out');await mirrorCitySnapshots('HEAD',output,root);
  const text=readFileSync(join(output,'city-data/v1/overview.json'),'utf8'),index=JSON.parse(text);
- assert.equal(index.cities.length,2);assert.ok(text.length<2000);assert.ok(!text.includes('"path"'));
+ assert.equal(index.cities.length,2);assert.equal(index.cities.find((city:any)=>city.city==='北京市').province,'北京市');assert.equal(index.cities.find((city:any)=>city.city==='北京市').countySeats[0].name,'海淀区');assert.ok(text.length<3000);assert.ok(!text.includes('"path"'));
  for(const city of index.cities){const png=readFileSync(join(output,'city-data/v1',decodeURIComponent(city.thumbnail)));assert.deepEqual([...png.subarray(0,8)],[137,80,78,71,13,10,26,10]);assert.equal(city.lineDirections,1);}
  }finally{rmSync(root,{recursive:true,force:true});}
 });

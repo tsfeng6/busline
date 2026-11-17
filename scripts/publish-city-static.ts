@@ -1,3 +1,4 @@
+import {provinceForCity,savedCountySeats} from '../src/utils/localTransit';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -67,7 +68,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
     const latest=await resolveCityParts(JSON.parse(source(file)),async part=>JSON.parse(source(`${prefix}/${part}`)));
     tiles.add(latest);
     const thumbnail=cityThumbnail(latest);
-    if(thumbnail){const name=`thumbnails/${city}-geo-v3.png`;await copy(`city-data/v1/${name}`,cityOverviewPNG(thumbnail.raster));overviews.push({...thumbnail.meta,thumbnail:`thumbnails/${encodeURIComponent(city)}-geo-v3.png`});}
+    if(thumbnail){const name=`thumbnails/${city}-geo-v3.png`;await copy(`city-data/v1/${name}`,cityOverviewPNG(thumbnail.raster));overviews.push({...thumbnail.meta,province:provinceForCity(latest.city),countySeats:savedCountySeats(latest),thumbnail:`thumbnails/${encodeURIComponent(city)}-geo-v3.png`});}
     if (files.has(historyPath)) {
       const text = source(historyPath), records = JSON.parse(text);
       await copy(historyPath, text);

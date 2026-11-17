@@ -1,3 +1,7 @@
+import {NearbyRoutes,type NearbyState} from './components/NearbyRoutes';
+import {loadPublishedCities,loadGameCity} from './utils/publishedTransit';
+import {createOfflineQuestion,shuffle} from './utils/offlineGame';
+import {DAILY_LOCATION_KEY,claimDailyLocation,gpsToMap,nearbyLines,cityTouchesRadius,radiusRing,type PublishedCity,type Point} from './utils/localTransit';
 import { TermsDocument } from './components/TermsDocument';
 import { acceptTerms, hasAcceptedTerms, BEIJING_TOUR_CENTER } from './utils/onboardingConsent';
 import { getCitySearchServices } from './utils/citySearchRealm';
@@ -26,7 +30,6 @@ import { TimelineBar } from './components/TimelineBar';
 import { isLineOperating, updateTimelineVisibility, type TimelineOverlayEntry } from './utils/timeline';
 import { getOperatingHours, SCHEDULE_DATA_VERSION } from './utils/operatingHours';
 import { OperatingHours } from './components/OperatingHours';
-import { GAME_QUOTA_KEY, PUBLIC_GAME_DAILY_LIMIT, readGameQuota, consumeGameQuota } from './utils/gameQuota';
 import { BuslineAI, type AIRegionContext } from './components/BuslineAI';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
@@ -293,6 +296,9 @@ export default function App() {
   const mapClickHandlerRef = useRef<any>(null);
   const defaultMapClickHandlerRef = useRef<any>(null);
   const [loading, setLoading] = useState(true);
+  const [nearbyPanel,setNearbyPanel]=useState<NearbyState|null>(null);
+  const dailyLocationCheckedRef=useRef(false);
+  const locationRequestRef=useRef(0);
   const [zoomLevel, setZoomLevel] = useState(() => {
     const saved = localStorage.getItem('map_zoom');
     return saved ? parseFloat(saved) : 11;
@@ -316,23 +322,40 @@ export default function App() {
   const [gameMode, setGameMode] = useState<'line' | 'station' | 'city' | 'county' | null>(null);
   const [gameDifficulty, setGameDifficulty] = useState<'easy' | 'medium' | 'hard' | 'hell'>('easy');
   const [gameCity, setGameCity] = useState('北京市');
-  const [gameProvince, setGameProvince] = useState('广东省');
+  const [gameProvince, setGameProvince] = useState('北京市');
   const [gameCountyProvince, setGameCountyProvince] = useState('浙江省');
   const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover' | 'review'>('menu');
   const [gameLoading, setGameLoading] = useState(false);
-  const [gameLoadingText, setGameLoadingText] = useState('正在随机检索题目并绘制线网地图，请稍候...');
+  const [gameLoadingText, setGameLoadingText] = useState('正在读取已有线路数据…');
   const [gameScore, setGameScore] = useState(0);
   const [isAdminVerified, setIsAdminVerified] = useState(false);
-  const [publicGamesUsed, setPublicGamesUsed] = useState(() => readGameQuota(localStorage));
-  const publicGameLimitReached = !isAdminVerified && !initialAmapConfig.isCustom && publicGamesUsed >= PUBLIC_GAME_DAILY_LIMIT;
-  useEffect(() => {
-    const refresh = () => setPublicGamesUsed(readGameQuota(localStorage));
-    const interval = window.setInterval(refresh, 15000);
-    window.addEventListener('storage', refresh);
-    window.addEventListener('focus', refresh);
-    return () => { clearInterval(interval); window.removeEventListener('storage', refresh); window.removeEventListener('focus', refresh); };
-  }, []);
-
+  const [gameCatalog,setGameCatalog]=useState<PublishedCity[]>([]);
+  const [gameDataError,setGameDataError]=useState('');
+  const [gameCatalogLoading,setGameCatalogLoading]=useState(false);
+  const gameProvinces=[...new Set(gameCatalog.map(item=>item.province).filter(Boolean))];
+  const gameCities=gameCatalog.filter(item=>item.province===gameProvince);
+  const countyProvinces=[...new Set(gameCatalog.filter(item=>item.countySeats.length).map(item=>item.province).filter(Boolean))];
+  useEffect(()=>{
+    if(!showMinigameModal)return;
+    let cancelled=false;setGameCatalogLoading(true);setGameDataError('');
+    loadPublishedCities(true).then(catalog=>{if(cancelled)return;setGameCatalog(catalog);
+      const provinces=[...new Set(catalog.map(item=>item.province).filter(Boolean))];
+      setGameProvince(previous=>provinces.includes(previous)?previous:provinces[0]||'');
+      const counties=[...new Set(catalog.filter(item=>item.countySeats.length).map(item=>item.province).filter(Boolean))];
+      setGameCountyProvince(previous=>counties.includes(previous)?previous:counties[0]||'');
+    }).catch(error=>{if(!cancelled)setGameDataError(error.message);}).finally(()=>{if(!cancelled)setGameCatalogLoading(false);});
+    return()=>{cancelled=true;};
+  },[showMinigameModal]);
+  useEffect(()=>{if(gameCities.length&&!gameCities.some(item=>item.city===gameCity))setGameCity(gameCities[0].city);},[gameCatalog,gameProvince,gameCity]);
+  const countyMaskRef=useRef<any>(null);
+  const setCountyGameMask=(center?:Point,radius=3000)=>{
+    const map=mapRef.current,AMap=(window as any).AMap;
+    if(countyMaskRef.current){map?.remove(countyMaskRef.current);countyMaskRef.current=null;}
+    if(!center||!map||!AMap?.Polygon)return;
+    const outer=[[60,-5],[150,-5],[150,65],[60,65],[60,-5]];
+    const polygon=new AMap.Polygon({path:[outer,radiusRing(center,radius).reverse()],fillColor:'#f5f5f3',fillOpacity:1,strokeWeight:0,strokeOpacity:0,zIndex:950,bubble:true});
+    map.add(polygon);countyMaskRef.current=polygon;
+  };
 
   const [gameTimeLeft, setGameTimeLeft] = useState<number | null>(null);
   const [gameTimedOut, setGameTimedOut] = useState(false);
@@ -371,6 +394,7 @@ export default function App() {
     networkStops?: Array<{ name?: string; lngLat: [number, number] }>;
     targetPoint?: { name: string; lngLat: [number, number] };
     fallbackCenter?: [number, number];
+    countyWindow?: {center: Point; radius:number};
   };
   const [gameHistory, setGameHistory] = useState<GameHistoryItem[]>([]);
   const currentGameQuestionRef = useRef<Omit<GameHistoryItem, 'userAnswer' | 'isCorrect'> | null>(null);
@@ -417,7 +441,6 @@ export default function App() {
     };
   }, [gameState, gameLoading, gameQuestionData, finishGameOnTimeout]);
 
-  const provinceDivisionsCacheRef = useRef<Map<string, { cities: string[]; counties: Array<{ name: string; city: string; center?: [number, number] }> }>>(new Map());
   const [confirmQuitGame, setConfirmQuitGame] = useState(false);
   const [bestRecords, setBestRecords] = useState(() => {
     const defaultRecords = {
@@ -466,75 +489,6 @@ export default function App() {
     }
   });
 
-  const provincesPool = [
-    '北京市', '天津市', '河北省', '山西省', '内蒙古自治区',
-    '辽宁省', '吉林省', '黑龙江省', '上海市', '江苏省',
-    '浙江省', '安徽省', '福建省', '江西省', '山东省',
-    '河南省', '湖北省', '湖南省', '广东省', '广西壮族自治区',
-    '海南省', '重庆市', '四川省', '贵州省', '云南省',
-    '西藏自治区', '陕西省', '甘肃省', '青海省', '宁夏回族自治区', '新疆维吾尔自治区'
-  ];
-
-  const provinceCitiesFallbackMap: Record<string, string[]> = {
-    '北京市': ['北京市'],
-    '天津市': ['天津市'],
-    '上海市': ['上海市'],
-    '重庆市': ['重庆市'],
-    '河北省': ['石家庄市', '唐山市', '秦皇岛市', '邯郸市', '邢台市', '保定市', '张家口市', '承德市', '沧州市', '廊坊市', '衡水市'],
-    '山西省': ['太原市', '大同市', '阳泉市', '长治市', '晋城市', '朔州市', '晋中市', '运城市', '忻州市', '临汾市', '吕梁市'],
-    '内蒙古自治区': ['呼和浩特市', '包头市', '乌海市', '赤峰市', '通辽市', '鄂尔多斯市', '呼伦贝尔市', '巴彦淖尔市', '乌兰察布市'],
-    '辽宁省': ['沈阳市', '大连市', '鞍山市', '抚顺市', '本溪市', '丹东市', '锦州市', '营口市', '阜新市', '辽阳市', '盘锦市', '铁岭市', '朝阳市', '葫芦岛市'],
-    '吉林省': ['长春市', '吉林市', '四平市', '辽源市', '通化市', '白山市', '松原市', '白城市'],
-    '黑龙江省': ['哈尔滨市', '齐齐哈尔市', '鸡西市', '鹤岗市', '双鸭山市', '大庆市', '伊春市', '佳木斯市', '牡丹江市', '黑河市', '绥化市'],
-    '江苏省': ['南京市', '无锡市', '徐州市', '常州市', '苏州市', '南通市', '连云港市', '淮安市', '盐城市', '扬州市', '镇江市', '泰州市', '宿迁市'],
-    '浙江省': ['杭州市', '宁波市', '温州市', '嘉兴市', '湖州市', '绍兴市', '金华市', '衢州市', '舟山市', '台州市', '丽水市'],
-    '安徽省': ['合肥市', '芜湖市', '蚌埠市', '淮南市', '马鞍山市', '淮北市', '铜陵市', '安庆市', '黄山市', '滁州市', '阜阳市', '宿州市', '六安市', '亳州市', '池州市', '宣城市'],
-    '福建省': ['福州市', '厦门市', '莆田市', '三明市', '泉州市', '漳州市', '南平市', '龙岩市', '宁德市'],
-    '江西省': ['南昌市', '景德镇市', '萍乡市', '九江市', '新余市', '鹰潭市', '赣州市', '吉安市', '宜春市', '抚州市', '上饶市'],
-    '山东省': ['济南市', '青岛市', '淄博市', '枣庄市', '东营市', '烟台市', '潍坊市', '济宁市', '泰安市', '威海市', '日照市', '临沂市', '德州市', '聊城市', '滨州市', '菏泽市'],
-    '河南省': ['郑州市', '开封市', '洛阳市', '平顶山市', '安阳市', '鹤壁市', '新乡市', '焦作市', '濮阳市', '许昌市', '漯河市', '三门峡市', '南阳市', '商丘市', '信阳市', '周口市', '驻马店市'],
-    '湖北省': ['武汉市', '黄石市', '十堰市', '宜昌市', '襄阳市', '鄂州市', '荆门市', '孝感市', '荆州市', '黄冈市', '咸宁市', '随州市'],
-    '湖南省': ['长沙市', '株洲市', '湘潭市', '衡阳市', '邵阳市', '岳阳市', '常德市', '张家界市', '益阳市', '郴州市', '永州市', '怀化市', '娄底市'],
-    '广东省': ['广州市', '韶关市', '深圳市', '珠海市', '汕头市', '佛山市', '江门市', '湛江市', '茂名市', '肇庆市', '惠州市', '梅州市', '汕尾市', '河源市', '阳江市', '清远市', '东莞市', '中山市', '潮州市', '揭阳市', '云浮市'],
-    '广西壮族自治区': ['南宁市', '柳州市', '桂林市', '梧州市', '北海市', '防城港市', '钦州市', '贵港市', '玉林市', '百色市', '贺州市', '河池市', '来宾市', '崇左市'],
-    '海南省': ['海口市', '三亚市', '三沙市', '儋州市'],
-    '四川省': ['成都市', '自贡市', '攀枝花市', '泸州市', '德阳市', '绵阳市', '广元市', '遂宁市', '内江市', '乐山市', '南充市', '眉山市', '宜宾市', '广安市', '达州市', '雅安市', '巴中市', '资阳市'],
-    '贵州省': ['贵阳市', '六盘水市', '遵义市', '安顺市', '毕节市', '铜仁市'],
-    '云南省': ['昆明市', '曲靖市', '玉溪市', '保山市', '昭通市', '丽江市', '普洱市', '临沧市'],
-    '西藏自治区': ['拉萨市', '日喀则市', '昌都市', '林芝市', '山南市', '那曲市'],
-    '陕西省': ['西安市', '铜川市', '宝鸡市', '咸阳市', '渭南市', '延安市', '汉中市', '榆林市', '安康市', '商洛市'],
-    '甘肃省': ['兰州市', '嘉峪关市', '金昌市', '白银市', '天水市', '武威市', '张掖市', '平凉市', '酒泉市', '庆阳市', '定西市', '陇南市'],
-    '青海省': ['西宁市', '海东市'],
-    '宁夏回族自治区': ['银川市', '石嘴山市', '吴忠市', '固原市', '中卫市'],
-    '新疆维吾尔自治区': ['乌鲁木齐市', '克拉玛依市', '吐鲁番市', '哈密市']
-  };
-
-  const citiesPool = [
-    '北京市', '上海市', '广州市', '深圳市', '成都市', '武汉市', '西安市', '南京市', '杭州市',
-    '重庆市', '天津市', '青岛市', '大连市', '厦门市', '长沙市', '郑州市', '苏州市', '无锡市',
-    '宁波市', '合肥市', '福州市', '济南市', '沈阳市', '哈尔滨市', '长春市', '昆明市', '贵阳市', '南宁市', '石家庄市', '太原市'
-  ];
-
-  const linesPoolMap: Record<string, string[]> = {
-    '北京市': ['1路', '2路', '9路', '特2路', '运通101路', '专1路', '300路内环', '368外环', '44路内环', '52路', '387路', '671路', 'X107路', '840路', '兴33路'],
-    '上海市': ['1路', '2路', '15路', '20路', '37路', '71路', '18路', '机场专线', '隧道一线', '42路', '49路'],
-    '广州市': ['1路', '3路', '14路', '24路', '30路', '62路', '107路', 'B2路', '2路', '5路'],
-    '深圳市': ['1路', '11路', '12路', '14路', '19路', 'M191路', 'M200路', '2路', '5路'],
-    '成都市': ['1路', '2路', '4路', '5路', '6路', '11路', '27路', '34路', '8路'],
-    '武汉市': ['1路', '2路', '10路', '14路', '18路', '24路', '501路', '521路'],
-    '西安市': ['1路', '2路', '4路', '5路', '6路', '11路', '26路', '30路'],
-    '南京市': ['1路', '2路', '3路', '8路', '9路', '16路', '24路', '31路'],
-    '杭州市': ['1路', '2路', '4路', '7路', '8路', '13路', '15路', '21路'],
-    'default': ['1路', '2路', '3路', '4路', '5路', '10路', '15路', '20路', '30路', '50路', '101路', '202路', '303路']
-  };
-
-  const stationsPoolMap: Record<string, string[]> = {
-    '北京市': ['北京建筑大学大兴校区', '西单', '国贸', '中关村', '五道口', '北京站', '西直门', '东直门', '望京', '亦庄', '黄村', '天安门西', '王府井', '前门'],
-    '上海市': ['人民广场', '外滩', '陆家嘴', '徐家汇', '南京东路', '静安寺', '中山公园', '世纪大道'],
-    '广州市': ['体育西路', '广州塔', '珠江新城', '北京路', '江南西', '上下九', '长寿路'],
-    'default': ['人民广场', '中山公园', '火车站', '市政府', '大剧院', '科技园', '大学城', '商业街', '体育中心', '图书馆', '中央公园', '客运站']
-  };
-
   const getRating = (mode: string, score: number) => {
     if (mode === 'line' || mode === 'station' || mode === 'county') {
       if (score >= 30) return { title: '巴士之神', color: 'text-amber-500 bg-amber-50 border-amber-200' };
@@ -553,6 +507,7 @@ export default function App() {
   };
 
   const restoreMapAfterMinigame = () => {
+    setCountyGameMask();
     if (prevMapModeBeforeGameRef.current) {
       setMapMode(prevMapModeBeforeGameRef.current);
       prevMapModeBeforeGameRef.current = null;
@@ -562,6 +517,7 @@ export default function App() {
   };
 
   const clearMapStateForMinigame = () => {
+    setCountyGameMask();
     handleClear();
     if (drawingGroupRef.current) {
       try { drawingGroupRef.current.clearOverlays(); } catch {}
@@ -636,113 +592,6 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [showMinigameModal, gameState, reviewAutoPlay, reviewIndex, gameHistory.length]);
 
-  const fetchProvinceDivisions = (
-    AMap: any,
-    provinceName: string
-  ): Promise<{
-    cities: string[];
-    counties: Array<{ name: string; city: string; center?: [number, number] }>;
-  }> => {
-    const cached = provinceDivisionsCacheRef.current.get(provinceName);
-    if (cached && cached.cities.length > 0 && cached.counties.length > 0) {
-      return Promise.resolve(cached);
-    }
-
-    return new Promise((resolve) => {
-      const fallbackCities = provinceCitiesFallbackMap[provinceName] || [provinceName];
-      const finishFallback = () => {
-        resolve({
-          cities: fallbackCities,
-          counties: fallbackCities.map(c => ({ name: c, city: c }))
-        });
-      };
-
-      const timer = setTimeout(finishFallback, 5000);
-      const runSearch = () => {
-        try {
-          const ds = new AMap.DistrictSearch({
-            level: 'province',
-            subdistrict: 2,
-            extensions: 'base'
-          });
-          ds.search(provinceName, (status: string, result: any) => {
-            clearTimeout(timer);
-            if (status === 'complete' && result?.districtList?.[0]?.districtList) {
-              const level1 = result.districtList[0].districtList || [];
-              const cities: string[] = [];
-              const allSubs: Array<{ name: string; city: string; center?: [number, number] }> = [];
-              const trueCounties: Array<{ name: string; city: string; center?: [number, number] }> = [];
-
-              const isMunicipality = ['北京市', '上海市', '天津市', '重庆市'].includes(provinceName);
-              if (isMunicipality) {
-                cities.push(provinceName);
-                level1.forEach((d: any) => {
-                  const centerArr: [number, number] | undefined = d.center ? [d.center.lng, d.center.lat] : undefined;
-                  if (d.name) {
-                    const item = { name: d.name, city: provinceName, center: centerArr };
-                    allSubs.push(item);
-                    if (d.name.endsWith('县')) trueCounties.push(item);
-                  }
-                  (d.districtList || []).forEach((sub: any) => {
-                    const subCenter: [number, number] | undefined = sub.center ? [sub.center.lng, sub.center.lat] : undefined;
-                    if (sub.name) {
-                      const subItem = { name: sub.name, city: provinceName, center: subCenter };
-                      allSubs.push(subItem);
-                      if (sub.name.endsWith('县')) trueCounties.push(subItem);
-                    }
-                  });
-                });
-              } else {
-                level1.forEach((cityNode: any) => {
-                  if (cityNode.name) cities.push(cityNode.name);
-                  const subDistricts = cityNode.districtList || [];
-                  const cityCenter: [number, number] | undefined = cityNode.center ? [cityNode.center.lng, cityNode.center.lat] : undefined;
-                  if (subDistricts.length === 0 && cityNode.name) {
-                    const item = { name: cityNode.name, city: cityNode.name, center: cityCenter };
-                    allSubs.push(item);
-                    if (/[县市旗]$/.test(cityNode.name)) trueCounties.push(item);
-                  }
-                  subDistricts.forEach((d: any) => {
-                    const centerArr: [number, number] | undefined = d.center ? [d.center.lng, d.center.lat] : undefined;
-                    if (d.name) {
-                      const item = { name: d.name, city: cityNode.name, center: centerArr };
-                      allSubs.push(item);
-                      if (/([县市旗]|自治县|自治旗|林区)$/.test(d.name)) {
-                        trueCounties.push(item);
-                      }
-                    }
-                  });
-                });
-              }
-
-              const finalCities = cities.length > 0 ? cities : fallbackCities;
-              const finalCounties = trueCounties.length >= 4
-                ? trueCounties
-                : (allSubs.length > 0 ? allSubs : finalCities.map(c => ({ name: c, city: c })));
-              const res = { cities: finalCities, counties: finalCounties };
-              provinceDivisionsCacheRef.current.set(provinceName, res);
-              resolve(res);
-            } else {
-              finishFallback();
-            }
-          });
-        } catch (e) {
-          clearTimeout(timer);
-          finishFallback();
-        }
-      };
-
-      if (AMap.DistrictSearch) {
-        runSearch();
-      } else if (typeof AMap.plugin === 'function') {
-        AMap.plugin(['AMap.DistrictSearch'], runSearch);
-      } else {
-        clearTimeout(timer);
-        finishFallback();
-      }
-    });
-  };
-
   const startMinigame = (
     mode: 'line' | 'station' | 'city' | 'county',
     diff: 'easy' | 'medium' | 'hard' | 'hell',
@@ -754,19 +603,6 @@ export default function App() {
       setApiErrorNotification('地图尚未就绪，请稍后再开始游戏。');
       return;
     }
-    if (!initialAmapConfig.isCustom && !isAdminVerified) {
-      try {
-        if (!consumeGameQuota(localStorage)) {
-          setPublicGamesUsed(readGameQuota(localStorage));
-          setApiErrorNotification('为保障公共API使用，本浏览器今日3局游戏已用完，请明日再来。');
-          return;
-        }
-        setPublicGamesUsed(readGameQuota(localStorage));
-      } catch {
-        setApiErrorNotification('无法保存每日游戏次数，请允许浏览器本地存储后继续。');
-        return;
-      }
-    }
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
 
     isMinigameActiveRef.current = true;
@@ -775,6 +611,7 @@ export default function App() {
     }
     clearMapStateForMinigame();
 
+    setGameDataError('');
     setGameMode(mode);
     setGameDifficulty(diff);
     setGameCity(city);
@@ -807,954 +644,70 @@ export default function App() {
   };
 
   const generateQuestion = async (
-    mode: 'line' | 'station' | 'city' | 'county',
-    diff: 'easy' | 'medium' | 'hard' | 'hell',
-    city: string,
-    qNum: number,
-    prevAnswer?: string,
-    provinceOverride?: string
+    mode: 'line' | 'station' | 'city' | 'county', diff: 'easy' | 'medium' | 'hard' | 'hell', city: string,
+    qNum: number, prevAnswer?: string, provinceOverride?: string
   ) => {
     const AMap = (window as any).AMap;
     if (!AMap || !mapInstance) return;
-
-    const activeProvince = provinceOverride ?? (mode === 'county' ? gameCountyProvince : gameProvince);
-
-    setGameHints(prev => ({ ...prev, usedOnQuestion: 0 }));
     const sessionId = ++gameSessionIdRef.current;
-    setConfirmQuitGame(false);
-    setGameLoadingText(
-      mode === 'county'
-        ? `正在「${activeProvince}」随机抽取县城并定位县政府检索周边线网，请稍候...`
-        : mode === 'city'
-        ? '正在自动执行全市公交线网搜索，请稍候...'
-        : '正在随机检索题目并绘制线网地图，请稍候...'
-    );
-    setGameLoading(true);
-    setActiveBusLine(null);
-    setSelectedStop(null);
-    setSelectedSegmentLines(null);
-    setStationConnectivityCard(null);
-    setSelectionPos(null);
-    activeRawMarkersRef.current = [];
-    roadStopMarkersRef.current = [];
-    roadViewportCleanupRef.current?.();
-    roadViewportCleanupRef.current = null;
-    roadOverlaysRef.current = [];
-    allMapStopsRef.current.clear();
-    roadStopsDataRef.current.clear();
-    if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
-    if (markerGroupRef.current) clearStopMarkerGroup(markerGroupRef.current);
-
-    const shuffleArr = <T,>(arr: T[]): T[] => {
-      const copy = [...arr];
-      for (let i = copy.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [copy[i], copy[j]] = [copy[j], copy[i]];
-      }
-      return copy;
-    };
-
-    const cleanGameStopName = (n: string) => n.replace(/\(.*?\)|（.*?）/g, '').replace(/公交站$/, '').trim();
-    const cleanGameLineName = (n: string) => {
-      const base = parseLineInfo(n).name || n;
-      return base.replace(/\(.*?\)|（.*?）/g, '').trim();
-    };
-
-    const extractLineNames = (addr: string, applyBlockedFilter = false): string[] => {
-      return (addr || '')
-        .split(';')
-        .map(s => cleanGameLineName(s.trim()))
-        .filter(n => n && n.length >= 2 && !n.includes('地铁') && (!applyBlockedFilter || !isLineNameBlockedRef(n)));
-    };
-
-    const searchStopsInCity = (targetCityName: string, pageIndex: number): Promise<any[]> => {
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => resolve([]), 5000);
-        try {
-          const ps = new AMap.PlaceSearch({
-            type: '公交车站',
-            city: targetCityName,
-            citylimit: true,
-            pageSize: 30,
-            pageIndex,
-            extensions: 'all'
-          });
-          ps.search('', (status: string, result: any) => {
-            clearTimeout(timer);
-            if (status === 'complete' && result?.poiList?.pois?.length > 0) {
-              resolve(result.poiList.pois);
-            } else {
-              resolve([]);
-            }
-          });
-        } catch (e) {
-          clearTimeout(timer);
-          resolve([]);
-        }
-      });
-    };
-
-    const searchNearbyStops = (targetCityName: string, lngLat: [number, number], radius: number): Promise<any[]> => {
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => resolve([]), 5000);
-        try {
-          const ps = new AMap.PlaceSearch({
-            type: '公交车站',
-            city: targetCityName,
-            citylimit: true,
-            pageSize: 25,
-            extensions: 'all'
-          });
-          ps.searchNearBy('', lngLat, radius, (status: string, result: any) => {
-            clearTimeout(timer);
-            if (status === 'complete' && result?.poiList?.pois?.length > 0) {
-              resolve(result.poiList.pois);
-            } else {
-              resolve([]);
-            }
-          });
-        } catch (e) {
-          clearTimeout(timer);
-          resolve([]);
-        }
-      });
-    };
-
-    const searchLineInfoPromise = (targetCityName: string, keyword: string, applyBlockedFilter = false): Promise<any[]> => {
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => resolve([]), 5000);
-        try {
-          const ls = new AMap.LineSearch({
-            city: targetCityName,
-            pageSize: 5,
-            extensions: 'all'
-          });
-          ls.search(keyword, (status: string, result: any) => {
-            clearTimeout(timer);
-            if (status === 'complete' && result?.lineInfo?.length > 0) {
-              resolve(result.lineInfo.filter((l: any) =>
-                l?.path?.length > 1 &&
-                (!applyBlockedFilter || !isLineNameBlockedRef(l.name))
-              ));
-            } else {
-              resolve([]);
-            }
-          });
-        } catch (e) {
-          clearTimeout(timer);
-          resolve([]);
-        }
-      });
-    };
-
-    const searchStationInfoPromise = (targetCityName: string, stationName: string): Promise<any | null> => {
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => resolve(null), 5000);
-        try {
-          const ss = new AMap.StationSearch({
-            city: targetCityName,
-            pageSize: 5
-          });
-          ss.search(stationName, (status: string, result: any) => {
-            clearTimeout(timer);
-            if (status === 'complete' && result?.stationInfo?.length > 0) {
-              resolve(result.stationInfo[0]);
-            } else {
-              resolve(null);
-            }
-          });
-        } catch (e) {
-          clearTimeout(timer);
-          resolve(null);
-        }
-      });
-    };
-
+    setGameHints(prev => ({ ...prev, usedOnQuestion: 0 }));
+    setConfirmQuitGame(false);setGameLoading(true);setGameLoadingText('正在读取网站已有线路数据…');
+    setActiveBusLine(null);setSelectedStop(null);setSelectedSegmentLines(null);setStationConnectivityCard(null);setSelectionPos(null);
+    roadViewportCleanupRef.current?.();roadViewportCleanupRef.current=null;
+    activeRawMarkersRef.current=[];roadStopMarkersRef.current=[];allMapStopsRef.current.clear();roadStopsDataRef.current.clear();
+    lineGroupRef.current?.clearOverlays();if(markerGroupRef.current)clearStopMarkerGroup(markerGroupRef.current);
+    setCountyGameMask();
     try {
-      const candidateCities = prevAnswer ? citiesPool.filter(c => c !== prevAnswer) : citiesPool;
-      let targetCity = city;
-      let provinceDivs: { cities: string[]; counties: Array<{ name: string; city: string; center?: [number, number] }> } | null = null;
-
+      const catalog = await loadPublishedCities();
+      if (gameSessionIdRef.current !== sessionId) return;
+      if (!catalog.length) throw Error('网站暂时没有可供出题的城市线路数据。');
+      const province = provinceOverride ?? (mode === 'county' ? gameCountyProvince : gameProvince);
+      let question: ReturnType<typeof createOfflineQuestion>;
       if (mode === 'county') {
-        provinceDivs = await fetchProvinceDivisions(AMap, activeProvince);
-        if (gameSessionIdRef.current !== sessionId) return;
-        targetCity = provinceDivs.cities[0] || activeProvince;
-      } else if (mode === 'city') {
-        targetCity = candidateCities[Math.floor(Math.random() * candidateCities.length)];
-      } else if (diff === 'hell') {
-        provinceDivs = await fetchProvinceDivisions(AMap, activeProvince);
-        if (gameSessionIdRef.current !== sessionId) return;
-        const provCities = provinceDivs.cities.length > 0 ? provinceDivs.cities : [activeProvince];
-        targetCity = provCities[Math.floor(Math.random() * provCities.length)];
-      }
-
-      if (mode === 'line') {
-        const randPage = Math.floor(Math.random() * 6) + 1;
-        let pois = await searchStopsInCity(targetCity, randPage);
-        if (pois.length === 0 && randPage !== 1) {
-          pois = await searchStopsInCity(targetCity, 1);
-        }
-
-        const candidatePoolSet = new Set<string>();
-        pois.forEach(p => extractLineNames(p.address, true).forEach(n => candidatePoolSet.add(n)));
-        const rawFallback = linesPoolMap[targetCity] || linesPoolMap['default'];
-        const fallbackPool = rawFallback.filter(n => !isLineNameBlockedRef(n));
-        let candidateLines = shuffleArr(Array.from(candidatePoolSet));
-        if (candidateLines.length === 0) {
-          candidateLines = shuffleArr(fallbackPool);
-        }
-
-        let chosenLine: any = null;
-        for (const cand of candidateLines.slice(0, 12)) {
+        const seats = catalog.filter(item=>item.province===province).flatMap(item=>item.countySeats);
+        const pool=shuffle(seats.filter(item=>seats.length===1||item.name!==prevAnswer));
+        let selected: ReturnType<typeof createOfflineQuestion> | undefined;
+        for (const seat of pool) {
+          const data=await loadGameCity(seat.city);
           if (gameSessionIdRef.current !== sessionId) return;
-          const infos = await searchLineInfoPromise(targetCity, cand, true);
-          if (infos.length > 0) {
-            chosenLine = infos[0];
-            break;
-          }
+          try { selected=createOfflineQuestion(mode,diff,data,seats.map(item=>item.name),qNum,prevAnswer,seat);break; } catch { /* Try only other saved county anchors; never query a provider. */ }
         }
-        if (!chosenLine) {
-          for (const fb of shuffleArr(fallbackPool).slice(0, 6)) {
-            const infos = await searchLineInfoPromise(targetCity, fb, true);
-            if (infos.length > 0) {
-              chosenLine = infos[0];
-              break;
-            }
-          }
-        }
-
-        if (gameSessionIdRef.current !== sessionId) return;
-
-        const actualLineName = chosenLine
-          ? cleanGameLineName(chosenLine.name)
-          : (candidateLines[0] || fallbackPool[0] || '');
-        if (!actualLineName) {
-          setGameQuestionData(null);
-          return;
-        }
-
-        if (chosenLine) {
-          renderBusLine(chosenLine, AMap, mapInstance, false, false, false);
-          const validStops = (chosenLine.via_stops || []).filter((st: any) => st?.location);
-          if ((diff === 'easy' || diff === 'medium') && validStops.length > 2 && markerGroupRef.current) {
-            const midStops = validStops.slice(1, validStops.length - 1);
-            const stopMarkers = midStops.map((st: any) => new AMap.CircleMarker({
-              center: [st.location.lng, st.location.lat],
-              radius: 5,
-              fillColor: '#3b82f6',
-              strokeColor: '#ffffff',
-              strokeWeight: 1.5,
-              bubble: true,
-              zIndex: 65
-            }));
-            if (stopMarkers.length > 0) {
-              markerGroupRef.current.addOverlays(stopMarkers);
-            }
-          }
-          // 看图猜线路模式下，所有难度下均在线路上显示始末站圆点（始发站绿色，终点站红色，不显示站名）
-          if (markerGroupRef.current) {
-            const linePath = (chosenLine.path || []).map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat] as [number, number]);
-            const startPos: [number, number] | null = validStops.length > 0
-              ? [validStops[0].location.lng, validStops[0].location.lat]
-              : (linePath.length > 0 ? linePath[0] : null);
-            const endPos: [number, number] | null = validStops.length > 1
-              ? [validStops[validStops.length - 1].location.lng, validStops[validStops.length - 1].location.lat]
-              : (linePath.length > 1 ? linePath[linePath.length - 1] : null);
-
-            const isLoopOverlap = !!(
-              startPos &&
-              endPos &&
-              Math.abs(startPos[0] - endPos[0]) < 1e-4 &&
-              Math.abs(startPos[1] - endPos[1]) < 1e-4
-            );
-
-            const terminalMarkers: any[] = [];
-            if (startPos) {
-              terminalMarkers.push(new AMap.CircleMarker({
-                center: startPos,
-                radius: isLoopOverlap ? 9.5 : 7.5,
-                fillColor: '#16a34a',
-                fillOpacity: 1,
-                strokeColor: '#ffffff',
-                strokeWeight: 2.2,
-                bubble: true,
-                zIndex: 90
-              }));
-            }
-            if (endPos) {
-              terminalMarkers.push(new AMap.CircleMarker({
-                center: endPos,
-                radius: isLoopOverlap ? 5.5 : 7.5,
-                fillColor: '#ef4444',
-                fillOpacity: 1,
-                strokeColor: '#ffffff',
-                strokeWeight: 2,
-                bubble: true,
-                zIndex: 92
-              }));
-            }
-            if (terminalMarkers.length > 0) {
-              markerGroupRef.current.addOverlays(terminalMarkers);
-            }
-          }
-          const overlays = lineGroupRef.current?.getOverlays?.() || [];
-          if (overlays.length > 0) {
-            mapInstance.setFitView(overlays, false, [48, 150, 36, 36]);
-          }
-        }
-
-        const isFillIn = qNum > 10;
-        let options: string[] = [];
-        if (!isFillIn) {
-          const baseKey = (name: string) => name.replace(/[内外]环|路|线/g, '').trim();
-          const actualBase = baseKey(actualLineName);
-          const nearbySet = new Set<string>();
-
-          if (chosenLine?.via_stops?.length > 0) {
-            const midStop = chosenLine.via_stops[Math.floor(chosenLine.via_stops.length / 2)];
-            if (midStop?.location) {
-              const nearPois = await searchNearbyStops(targetCity, [midStop.location.lng, midStop.location.lat], 1500);
-              nearPois.forEach(p => extractLineNames(p.address, true).forEach(n => nearbySet.add(n)));
-            }
-          }
-          pois.forEach(p => extractLineNames(p.address, true).forEach(n => nearbySet.add(n)));
-          fallbackPool.forEach(n => nearbySet.add(n));
-
-          const distractors = shuffleArr(
-            Array.from(nearbySet).filter(n => n !== actualLineName && baseKey(n) !== actualBase && !isLineNameBlockedRef(n))
-          ).slice(0, 3);
-
-          options = shuffleArr([actualLineName, ...distractors]);
-        }
-
-        if (gameSessionIdRef.current !== sessionId) return;
-        const linePromptText = diff === 'hell'
-          ? '请根据地图上的公交线路走向，猜一猜这是哪条线路？'
-          : `请根据地图上的公交线路走向（城市：${targetCity}），猜一猜这是哪条线路？`;
-        currentGameQuestionRef.current = {
-          questionNum: qNum,
-          mode,
-          difficulty: diff,
-          targetCity,
-          province: diff === 'hell' ? activeProvince : undefined,
-          promptText: linePromptText,
-          correctAnswer: actualLineName,
-          lineInfos: chosenLine ? [chosenLine] : []
-        };
-        setGameQuestionData({
-          correctAnswer: actualLineName,
-          options,
-          isFillIn,
-          promptText: linePromptText
-        });
-      } else if (mode === 'station') {
-        const randPage = Math.floor(Math.random() * 6) + 1;
-        let pois = await searchStopsInCity(targetCity, randPage);
-        if (pois.length === 0 && randPage !== 1) {
-          pois = await searchStopsInCity(targetCity, 1);
-        }
-
-        const validPois = pois.filter(p => p?.location && extractLineNames(p.address).length > 0);
-        const richPois = validPois.filter(p => extractLineNames(p.address).length >= 2);
-        const candidatePois = richPois.length > 0 ? richPois : validPois;
-
-        let chosenPoi: any = candidatePois.length > 0
-          ? candidatePois[Math.floor(Math.random() * candidatePois.length)]
-          : null;
-
-        let actualStopName = '';
-        let stopLngLat: [number, number] | null = null;
-        let lineNamesSet = new Set<string>();
-
-        if (chosenPoi) {
-          actualStopName = cleanGameStopName(chosenPoi.name);
-          stopLngLat = [chosenPoi.location.lng, chosenPoi.location.lat];
-          extractLineNames(chosenPoi.address).forEach(n => lineNamesSet.add(n));
-        } else {
-          const fbPool = stationsPoolMap[targetCity] || stationsPoolMap['default'];
-          actualStopName = fbPool[Math.floor(Math.random() * fbPool.length)];
-          const stInfo = await searchStationInfoPromise(targetCity, actualStopName);
-          if (stInfo?.location) {
-            actualStopName = cleanGameStopName(stInfo.name || actualStopName);
-            stopLngLat = [stInfo.location.lng, stInfo.location.lat];
-            (stInfo.buslines || []).forEach((bl: any) => {
-              const nm = cleanGameLineName(bl.name || '');
-              if (nm) lineNamesSet.add(nm);
-            });
-          }
-        }
-
-        if (stopLngLat) {
-          try {
-            const details = await Promise.race([
-              fetchStopDetails(actualStopName, stopLngLat, AMap, targetCity),
-              new Promise<null>(r => setTimeout(() => r(null), 4000))
-            ]);
-            if (details?.lines) {
-              details.lines.forEach((l: string) => {
-                const nm = cleanGameLineName(l);
-                if (nm) lineNamesSet.add(nm);
-              });
-            }
-          } catch (e) {}
-        }
-
-        const uniqueLineNames = Array.from(lineNamesSet).slice(0, 18);
-        const renderedNames = new Set<string>();
-        const capturedStationLines: any[] = [];
-        const stationStopsToShow = new Map<string, { name?: string; lngLat: [number, number] }>();
-        for (let i = 0; i < uniqueLineNames.length; i += 6) {
-          if (gameSessionIdRef.current !== sessionId) return;
-          const batch = uniqueLineNames.slice(i, i + 6);
-          await Promise.all(batch.map(async (lName) => {
-            const infos = await searchLineInfoPromise(targetCity, lName);
-            infos.forEach(info => {
-              if (!renderedNames.has(info.name)) {
-                renderedNames.add(info.name);
-                capturedStationLines.push(info);
-                renderBusLine(info, AMap, mapInstance, false, false, false);
-                if (Array.isArray(info.via_stops)) {
-                  info.via_stops.forEach((vs: any) => {
-                    if (vs?.location) {
-                      const k = `${Number(vs.location.lng).toFixed(5)},${Number(vs.location.lat).toFixed(5)}`;
-                      if (!stationStopsToShow.has(k)) {
-                        stationStopsToShow.set(k, { name: vs.name, lngLat: [vs.location.lng, vs.location.lat] });
-                      }
-                    }
-                  });
-                }
-              }
-            });
-          }));
-        }
-
-        if (gameSessionIdRef.current !== sessionId) return;
-
-        if ((diff === 'easy' || diff === 'medium') && markerGroupRef.current && stationStopsToShow.size > 0) {
-          const otherStopMarkers = Array.from(stationStopsToShow.values()).map((st) =>
-            new AMap.CircleMarker({
-              center: st.lngLat,
-              radius: 4.5,
-              fillColor: '#52796F',
-              strokeColor: '#ffffff',
-              strokeWeight: 1.5,
-              bubble: true,
-              zIndex: 60
-            })
-          );
-          markerGroupRef.current.addOverlays(otherStopMarkers);
-        }
-
-        if (stopLngLat && markerGroupRef.current) {
-          const targetMarker = new AMap.CircleMarker({
-            center: stopLngLat,
-            radius: 10,
-            fillColor: '#ef4444',
-            strokeColor: '#ffffff',
-            strokeWeight: 3,
-            zIndex: 95
-          });
-          markerGroupRef.current.addOverlay(targetMarker);
-        }
-
-        const overlays = lineGroupRef.current?.getOverlays?.() || [];
-        if (overlays.length > 0) {
-          mapInstance.setFitView(overlays, false, [48, 150, 36, 36]);
-        } else if (stopLngLat) {
-          mapInstance.setCenter(stopLngLat);
-          mapInstance.setZoom(14);
-        }
-
-        const isFillIn = qNum > 10;
-        let options: string[] = [];
-        if (!isFillIn) {
-          const nearbyStopNames = new Set<string>();
-          if (stopLngLat) {
-            const nearPois = await searchNearbyStops(targetCity, stopLngLat, 2500);
-            nearPois.forEach(p => {
-              const nm = cleanGameStopName(p.name);
-              if (nm && nm !== actualStopName) nearbyStopNames.add(nm);
-            });
-          }
-          pois.forEach(p => {
-            const nm = cleanGameStopName(p.name);
-            if (nm && nm !== actualStopName) nearbyStopNames.add(nm);
-          });
-          (stationsPoolMap[targetCity] || stationsPoolMap['default']).forEach(nm => {
-            if (nm !== actualStopName) nearbyStopNames.add(nm);
-          });
-
-          const distractors = shuffleArr(Array.from(nearbyStopNames)).slice(0, 3);
-          options = shuffleArr([actualStopName, ...distractors]);
-        }
-
-        if (gameSessionIdRef.current !== sessionId) return;
-        const stationPromptText = diff === 'hell'
-          ? '请根据地图上红色站点及经过它的全部公交线网，猜一猜这是哪个公交站？'
-          : `请根据地图上红色站点及经过它的全部公交线网（城市：${targetCity}），猜一猜这是哪个公交站？`;
-        currentGameQuestionRef.current = {
-          questionNum: qNum,
-          mode,
-          difficulty: diff,
-          targetCity,
-          province: diff === 'hell' ? activeProvince : undefined,
-          promptText: stationPromptText,
-          correctAnswer: actualStopName,
-          lineInfos: capturedStationLines,
-          networkStops: Array.from(stationStopsToShow.values()),
-          targetPoint: stopLngLat ? { name: actualStopName, lngLat: stopLngLat } : undefined,
-          fallbackCenter: stopLngLat || undefined
-        };
-        setGameQuestionData({
-          correctAnswer: actualStopName,
-          options,
-          isFillIn,
-          promptText: stationPromptText
-        });
-      } else if (mode === 'county') {
-        // County mode (看线网猜县城): 在用户指定的省份中随机某县城，先定位县政府再非全市搜索
-        const divs = provinceDivs || (await fetchProvinceDivisions(AMap, activeProvince));
-        if (gameSessionIdRef.current !== sessionId) return;
-
-        const allCounties: Array<{ name: string; city: string; center?: [number, number] }> = divs.counties.length > 0
-          ? divs.counties
-          : divs.cities.map(c => ({ name: c, city: c }));
-        const poolCounties = prevAnswer && allCounties.length > 1
-          ? allCounties.filter(ct => ct.name !== prevAnswer)
-          : allCounties;
-        const shuffledCandidates = shuffleArr(poolCounties);
-
-        const geocodeCountyCenter = (prov: string, countyName: string): Promise<[number, number] | null> => {
-          return new Promise((resolve) => {
-            const timer = setTimeout(() => resolve(null), 4000);
-            try {
-              const geocoder = new AMap.Geocoder({ city: prov });
-              geocoder.getLocation(`${prov}${countyName}`, (status: string, result: any) => {
-                clearTimeout(timer);
-                if (status === 'complete' && result?.geocodes?.[0]?.location) {
-                  const loc = result.geocodes[0].location;
-                  resolve([loc.lng, loc.lat]);
-                } else {
-                  resolve(null);
-                }
-              });
-            } catch (e) {
-              clearTimeout(timer);
-              resolve(null);
-            }
-          });
-        };
-
-        const searchCountyNearbyStops = (cityName: string, center: [number, number], radius: number, page: number): Promise<any[]> => {
-          return new Promise((resolve) => {
-            const timer = setTimeout(() => resolve([]), 5000);
-            try {
-              const ps = new AMap.PlaceSearch({
-                type: '公交车站',
-                city: cityName,
-                citylimit: true,
-                pageSize: 50,
-                pageIndex: page,
-                extensions: 'all'
-              });
-              ps.searchNearBy('', center, radius, (status: string, result: any) => {
-                clearTimeout(timer);
-                if (status === 'complete' && result?.poiList?.pois?.length > 0) {
-                  resolve(result.poiList.pois);
-                } else {
-                  resolve([]);
-                }
-              });
-            } catch (e) {
-              clearTimeout(timer);
-              resolve([]);
-            }
-          });
-        };
-
-        const searchCountyByKeyword = (cityName: string, keyword: string): Promise<any[]> => {
-          return new Promise((resolve) => {
-            const timer = setTimeout(() => resolve([]), 5000);
-            try {
-              const ps = new AMap.PlaceSearch({
-                type: '公交车站',
-                city: cityName,
-                citylimit: true,
-                pageSize: 50,
-                pageIndex: 1,
-                extensions: 'all'
-              });
-              ps.search(keyword, (status: string, result: any) => {
-                clearTimeout(timer);
-                if (status === 'complete' && result?.poiList?.pois?.length > 0) {
-                  resolve(result.poiList.pois);
-                } else {
-                  resolve([]);
-                }
-              });
-            } catch (e) {
-              clearTimeout(timer);
-              resolve([]);
-            }
-          });
-        };
-
-        const findCountyGovernmentLocation = (cityName: string, countyName: string): Promise<[number, number] | null> => {
-          const searchGov = (keyword: string, withGovType: boolean): Promise<[number, number] | null> => {
-            return new Promise((resolve) => {
-              const timer = setTimeout(() => resolve(null), 4000);
-              try {
-                const ps = new AMap.PlaceSearch({
-                  ...(withGovType ? { type: '政府机构及社会团体' } : {}),
-                  city: cityName,
-                  citylimit: true,
-                  pageSize: 10,
-                  pageIndex: 1
-                });
-                ps.search(keyword, (status: string, result: any) => {
-                  clearTimeout(timer);
-                  if (status === 'complete' && result?.poiList?.pois?.length > 0) {
-                    const pois = result.poiList.pois;
-                    const exact = pois.find((p: any) =>
-                      p?.location && p?.name && (p.name.includes(`${countyName}人民政府`) || p.name.includes('人民政府'))
-                    ) || pois.find((p: any) => p?.location && p?.name?.includes('政府')) || pois.find((p: any) => p?.location);
-                    if (exact?.location) {
-                      resolve([exact.location.lng, exact.location.lat]);
-                      return;
-                    }
-                  }
-                  resolve(null);
-                });
-              } catch (e) {
-                clearTimeout(timer);
-                resolve(null);
-              }
-            });
-          };
-
-          return (async () => {
-            const p1 = await searchGov(`${countyName}人民政府`, true);
-            if (p1) return p1;
-            const p2 = await searchGov(`${countyName}人民政府`, false);
-            if (p2) return p2;
-            const p3 = await searchGov(`${countyName}政府`, false);
-            return p3;
-          })();
-        };
-
-        let chosenCounty = shuffledCandidates[0] || { name: activeProvince, city: activeProvince };
-        let countyCenter: [number, number] | null = null;
-        let countyLineNames: string[] = [];
-
-        // Try up to 4 counties from the province until finding one with non-empty local bus network
-        for (const cand of shuffledCandidates.slice(0, 4)) {
-          if (gameSessionIdRef.current !== sessionId) return;
-          // 1. 先定位到该县城的人民政府（核心位置）
-          let center = await findCountyGovernmentLocation(cand.city, cand.name);
-          if (!center) {
-            center = cand.center || null;
-          }
-          if (!center) {
-            center = await geocodeCountyCenter(activeProvince, cand.name);
-          }
-
-          if (gameSessionIdRef.current !== sessionId) return;
-          if (center) {
-            mapInstance.setZoomAndCenter(14, center);
-          }
-
-          // 2. 以县政府为核心位置执行非全市范围检索周边公交线路网
-          let pois: any[] = [];
-          if (center) {
-            const [p1, p2] = await Promise.all([
-              searchCountyNearbyStops(cand.city, center, 5000, 1),
-              searchCountyNearbyStops(cand.city, center, 5000, 2)
-            ]);
-            pois = [...p1, ...p2];
-            if (pois.length < 3) {
-              const wider = await searchCountyNearbyStops(cand.city, center, 12000, 1);
-              pois = [...pois, ...wider];
-            }
-          }
-          if (pois.length === 0) {
-            pois = await searchCountyByKeyword(cand.city, cand.name);
-          }
-
-          const linesSet = new Set<string>();
-          pois.forEach(p => extractLineNames(p.address).forEach(n => linesSet.add(n)));
-          if (linesSet.size > 0) {
-            chosenCounty = cand;
-            countyCenter = center;
-            countyLineNames = Array.from(linesSet);
-            break;
-          }
-        }
-
-        if (gameSessionIdRef.current !== sessionId) return;
-
-        if (countyLineNames.length === 0) {
-          countyLineNames = linesPoolMap[chosenCounty.city] || linesPoolMap['default'];
-        }
-
-        const sampleCountyLines = countyLineNames.slice(0, 60);
-        const renderedCountyLineNames = new Set<string>();
-        const collectedCountyPaths: Array<[number, number][]> = [];
-        const collectedCountyStops = new Map<string, { name?: string; lngLat: [number, number] }>();
-
-        for (let i = 0; i < sampleCountyLines.length; i += 12) {
-          if (gameSessionIdRef.current !== sessionId) return;
-          const batch = sampleCountyLines.slice(i, i + 12);
-          await Promise.all(batch.map(async (lName) => {
-            const infos = await searchLineInfoPromise(chosenCounty.city, lName);
-            if (infos.length > 0) {
-              const info = infos[0];
-              if (!renderedCountyLineNames.has(info.name)) {
-                renderedCountyLineNames.add(info.name);
-                const coords = (info.path || []).map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat] as [number, number]);
-                if (coords.length > 1) {
-                  collectedCountyPaths.push(coords);
-                }
-                if (Array.isArray(info.via_stops)) {
-                  info.via_stops.forEach((vs: any) => {
-                    if (vs?.location && collectedCountyStops.size < 1200) {
-                      const k = `${Number(vs.location.lng).toFixed(4)},${Number(vs.location.lat).toFixed(4)}`;
-                      if (!collectedCountyStops.has(k)) {
-                        collectedCountyStops.set(k, { name: vs.name, lngLat: [vs.location.lng, vs.location.lat] });
-                      }
-                    }
-                  });
-                }
-              }
-            }
-          }));
-        }
-
-        if (gameSessionIdRef.current !== sessionId) return;
-
-        if (collectedCountyPaths.length > 0 && lineGroupRef.current) {
-          const countyNetworkOverlay = new AMap.Polyline({
-            path: collectedCountyPaths,
-            strokeColor: '#52796F',
-            strokeWeight: lineThickness === 'thin' ? 2.5 : 3.8,
-            strokeOpacity: 0.85,
-            lineJoin: 'round',
-            lineCap: 'round',
-            isOutline: true,
-            outlineColor: '#ffffff',
-            borderWeight: 0.6,
-            zIndex: 45
-          });
-          lineGroupRef.current.addOverlay(countyNetworkOverlay);
-          mapInstance.setFitView([countyNetworkOverlay], false, [48, 150, 36, 36]);
-        } else if (countyCenter) {
-          mapInstance.setZoomAndCenter(13, countyCenter);
-        }
-
-        const isFillIn = qNum > 10;
-        let options: string[] = [];
-        if (!isFillIn) {
-          const otherCounties = shuffleArr(
-            Array.from(new Set(allCounties.map(ct => ct.name).filter(n => n !== chosenCounty.name)))
-          ).slice(0, 3);
-          options = shuffleArr([chosenCounty.name, ...otherCounties]);
-        }
-
-        const countyPromptText = `已定位${activeProvince}内随机县城政府核心并检索线网，请猜一猜这是哪个县城？`;
-        currentGameQuestionRef.current = {
-          questionNum: qNum,
-          mode,
-          difficulty: diff,
-          targetCity: chosenCounty.name,
-          province: activeProvince,
-          promptText: countyPromptText,
-          correctAnswer: chosenCounty.name,
-          networkPaths: collectedCountyPaths,
-          networkStops: Array.from(collectedCountyStops.values()),
-          fallbackCenter: countyCenter || undefined
-        };
-        setGameQuestionData({
-          correctAnswer: chosenCounty.name,
-          options,
-          isFillIn,
-          promptText: countyPromptText
-        });
+        if (!selected) throw Error('该省份暂无可出题的县政府站点周边线网，请选择其他省份。');
+        question=selected;
       } else {
-        // City mode (全国猜城市): 自动执行全市搜索（不依赖外部“全市搜索”开关）
-        const searchCityWidePage = (page: number): Promise<{ pois: any[]; count: number }> => {
-          return new Promise((resolve) => {
-            const timer = setTimeout(() => resolve({ pois: [], count: 0 }), 6000);
-            try {
-              const ps = new AMap.PlaceSearch({
-                type: '公交车站',
-                city: targetCity,
-                citylimit: true,
-                pageSize: 50,
-                pageIndex: page,
-                extensions: 'all'
-              });
-              ps.search('', (status: string, result: any) => {
-                clearTimeout(timer);
-                if (status === 'complete' && result?.poiList?.pois?.length > 0) {
-                  resolve({
-                    pois: result.poiList.pois,
-                    count: result.poiList.count || result.poiList.pois.length
-                  });
-                } else {
-                  resolve({ pois: [], count: 0 });
-                }
-              });
-            } catch (e) {
-              clearTimeout(timer);
-              resolve({ pois: [], count: 0 });
-            }
-          });
-        };
-
-        const firstPage = await searchCityWidePage(1);
+        const pool=mode==='city'?catalog.filter(item=>catalog.length===1||item.city!==prevAnswer):catalog.filter(item=>item.city===city);
+        const chosen=shuffle(pool)[0];if(!chosen)throw Error('请选择网站已有线路图的城市。');
+        const data=await loadGameCity(chosen.city);
         if (gameSessionIdRef.current !== sessionId) return;
-
-        const allPois: any[] = [...firstPage.pois];
-        const totalCount = Math.min(firstPage.count || 0, 900);
-        const totalPages = Math.min(18, Math.ceil(totalCount / 50));
-
-        if (totalPages > 1) {
-          const remainingPages: number[] = [];
-          for (let p = 2; p <= totalPages; p++) remainingPages.push(p);
-          for (let i = 0; i < remainingPages.length; i += 6) {
-            if (gameSessionIdRef.current !== sessionId) return;
-            const batchPages = remainingPages.slice(i, i + 6);
-            const batchResults = await Promise.all(batchPages.map(p => searchCityWidePage(p)));
-            batchResults.forEach(r => {
-              if (r.pois.length > 0) allPois.push(...r.pois);
-            });
-          }
-        }
-
-        const cityLinesSet = new Set<string>();
-        allPois.forEach(p => extractLineNames(p.address).forEach(n => cityLinesSet.add(n)));
-
-        const fallbackCityLines = linesPoolMap[targetCity] || linesPoolMap['default'];
-        let cityLineCandidates = Array.from(cityLinesSet);
-        if (cityLineCandidates.length < 10) {
-          cityLineCandidates = Array.from(new Set([...cityLineCandidates, ...fallbackCityLines]));
-        }
-
-        // 均匀抽样或全量抓取（最多 220 条全市线路，覆盖全城路网骨架）
-        const sampleLines = cityLineCandidates.length > 220
-          ? shuffleArr(cityLineCandidates).slice(0, 220)
-          : cityLineCandidates;
-
-        const renderedCityLineNames = new Set<string>();
-        const collectedPaths: Array<[number, number][]> = [];
-        const collectedCityStops = new Map<string, { name?: string; lngLat: [number, number] }>();
-
-        const searchCityLineFast = (keyword: string): Promise<any[]> => {
-          return new Promise((resolve) => {
-            const timer = setTimeout(() => resolve([]), 3500);
-            try {
-              const ls = new AMap.LineSearch({
-                city: targetCity,
-                pageSize: 10,
-                extensions: 'all'
-              });
-              ls.search(keyword, (status: string, result: any) => {
-                clearTimeout(timer);
-                if (status === 'complete' && result?.lineInfo?.length > 0) {
-                  resolve(result.lineInfo.filter((l: any) => l?.path?.length > 1));
-                } else {
-                  resolve([]);
-                }
-              });
-            } catch (e) {
-              clearTimeout(timer);
-              resolve([]);
-            }
-          });
-        };
-
-        for (let i = 0; i < sampleLines.length; i += 16) {
-          if (gameSessionIdRef.current !== sessionId) return;
-          const batch = sampleLines.slice(i, i + 16);
-          await Promise.all(batch.map(async (lName) => {
-            const infos = await searchCityLineFast(lName);
-            if (infos.length > 0) {
-              const info = infos[0];
-              if (!renderedCityLineNames.has(info.name)) {
-                renderedCityLineNames.add(info.name);
-                const coords = (info.path || []).map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat] as [number, number]);
-                if (coords.length > 1) {
-                  collectedPaths.push(coords);
-                }
-                if (Array.isArray(info.via_stops)) {
-                  info.via_stops.forEach((vs: any) => {
-                    if (vs?.location && collectedCityStops.size < 1200) {
-                      const k = `${Number(vs.location.lng).toFixed(4)},${Number(vs.location.lat).toFixed(4)}`;
-                      if (!collectedCityStops.has(k)) {
-                        collectedCityStops.set(k, { name: vs.name, lngLat: [vs.location.lng, vs.location.lat] });
-                      }
-                    }
-                  });
-                }
-              }
-            }
-          }));
-        }
-
-        if (gameSessionIdRef.current !== sessionId) return;
-
-        if (collectedPaths.length > 0 && lineGroupRef.current) {
-          const cityNetworkOverlay = new AMap.Polyline({
-            path: collectedPaths,
-            strokeColor: '#52796F',
-            strokeWeight: lineThickness === 'thin' ? 2 : 3.2,
-            strokeOpacity: 0.82,
-            lineJoin: 'round',
-            lineCap: 'round',
-            isOutline: true,
-            outlineColor: '#ffffff',
-            borderWeight: 0.5,
-            zIndex: 45
-          });
-          lineGroupRef.current.addOverlay(cityNetworkOverlay);
-          mapInstance.setFitView([cityNetworkOverlay], false, [48, 150, 36, 36]);
-        } else {
-          try {
-            mapInstance.setCity(targetCity);
-          } catch (e) {}
-        }
-
-        const isFillIn = qNum > 5;
-        let options: string[] = [];
-        if (!isFillIn) {
-          const otherCities = shuffleArr(citiesPool.filter(c => c !== targetCity)).slice(0, 3);
-          options = shuffleArr([targetCity, ...otherCities]);
-        }
-
-        const cityPromptText = '已执行全市搜索，请根据公交线网布局猜一猜这是哪个城市？';
-        currentGameQuestionRef.current = {
-          questionNum: qNum,
-          mode,
-          difficulty: diff,
-          targetCity,
-          promptText: cityPromptText,
-          correctAnswer: targetCity,
-          networkPaths: collectedPaths,
-          networkStops: Array.from(collectedCityStops.values())
-        };
-        setGameQuestionData({
-          correctAnswer: targetCity,
-          options,
-          isFillIn,
-          promptText: cityPromptText
-        });
+        question=createOfflineQuestion(mode,diff,data,catalog.map(item=>item.city),qNum,prevAnswer);
       }
-    } finally {
-      if (gameSessionIdRef.current === sessionId) {
-        setGameLoading(false);
+      if (gameSessionIdRef.current !== sessionId) return;
+      const paths=question.networkPaths||question.lineInfos?.map(line=>line.path)||[];
+      if (paths.length) {
+        const network = new AMap.Polyline({path:paths,strokeColor:'#52796F',strokeWeight:lineThickness==='thin'?2:3.2,strokeOpacity:.85,lineJoin:'round',lineCap:'round',zIndex:45});
+        lineGroupRef.current?.addOverlay(network);
+        if (question.countyWindow) {
+          const {center,radius}=question.countyWindow,ring=radiusRing(center,radius);
+          mapInstance.setBounds(new AMap.Bounds([Math.min(...ring.map(p=>p[0])),Math.min(...ring.map(p=>p[1]))],[Math.max(...ring.map(p=>p[0])),Math.max(...ring.map(p=>p[1]))]));
+          setCountyGameMask(center,radius);
+        } else if(mode==='station'&&question.targetPoint)mapInstance.setZoomAndCenter(14,question.targetPoint.lngLat);
+        else mapInstance.setFitView([network],false,[48,150,36,36]);
       }
-    }
+      if ((diff==='easy'||diff==='medium') && (mode==='line'||mode==='station')) {
+        const markers=(question.networkStops||[]).map(stop=>new AMap.CircleMarker({center:stop.lngLat,radius:3.5,fillColor:'#52796F',strokeColor:'#fff',strokeWeight:1,zIndex:60,bubble:true}));
+        markerGroupRef.current?.addOverlays(markers);
+      }
+      if (mode==='line'&&paths[0]?.length) {
+        const first=paths[0][0],last=paths[0][paths[0].length-1];
+        markerGroupRef.current?.addOverlays([new AMap.CircleMarker({center:first,radius:7,fillColor:'#16a34a',strokeColor:'#fff',strokeWeight:2,zIndex:90}),new AMap.CircleMarker({center:last,radius:5,fillColor:'#ef4444',strokeColor:'#fff',strokeWeight:2,zIndex:92})]);
+      }
+      if(question.targetPoint)markerGroupRef.current?.addOverlay(new AMap.CircleMarker({center:question.targetPoint.lngLat,radius:9,fillColor:'#ef4444',strokeColor:'#fff',strokeWeight:2,zIndex:95}));
+      currentGameQuestionRef.current={...question,questionNum:qNum,mode,difficulty:diff,province};
+      setGameQuestionData({correctAnswer:question.correctAnswer,options:question.options,isFillIn:question.isFillIn,promptText:question.promptText});
+    } catch(error:any) {
+      if(gameSessionIdRef.current===sessionId){setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
+    } finally {if(gameSessionIdRef.current===sessionId)setGameLoading(false);}
   };
-
 
   const handleMinigameSubmit = (answer: string) => {
     if (!gameQuestionData || gameState !== 'playing' || gameLoading || gameFeedback !== null || gameTimedOutRef.current) return;
@@ -2187,6 +1140,7 @@ export default function App() {
     const AMap = (window as any).AMap;
     if (!item || !AMap || !mapInstance) return;
 
+    setCountyGameMask(item.countyWindow?.center,item.countyWindow?.radius);
     setMapMode(reviewShowBasemap ? 'normal' : 'blank');
     setActiveBusLine(null);
     setSelectedStop(null);
@@ -2368,7 +1322,7 @@ export default function App() {
         mapInstance.setZoomAndCenter(13, item.fallbackCenter);
       } else if (item.targetCity) {
         try {
-          mapInstance.setCity(item.targetCity);
+          const city=gameCatalog.find(city=>city.city===item.targetCity);if(city)mapInstance.setZoomAndCenter(11,city.center);
         } catch (e) {}
       }
     }
@@ -2604,9 +1558,9 @@ export default function App() {
 
   const handleResetApp = async () => {
     try {
-      const gameQuota = localStorage.getItem(GAME_QUOTA_KEY);
+      const dailyLocation = localStorage.getItem(DAILY_LOCATION_KEY);
       localStorage.clear();
-      if (gameQuota) localStorage.setItem(GAME_QUOTA_KEY, gameQuota);
+      if (dailyLocation) localStorage.setItem(DAILY_LOCATION_KEY, dailyLocation);
       sessionStorage.clear();
       await clearAllLineCache();
     } catch {}
@@ -3348,37 +2302,48 @@ export default function App() {
     return `hsl(${h}, 70%, 60%)`;
   };
 
-  const handleLocate = () => {
-    if (!mapRef.current || !(window as any).AMap) return;
-    const AMap = (window as any).AMap;
-    setLoading(true);
-    mapRef.current.plugin('AMap.Geolocation', function() {
-      const geolocation = new AMap.Geolocation({
-        enableHighAccuracy: true,
-        timeout: 10000,
-        buttonPosition: 'RB',
-      });
-      geolocation.getCurrentPosition((status: string, result: any) => {
-        setLoading(false);
-        if (status === 'complete') {
-          mapRef.current.setCenter(result.position);
-          mapRef.current.setZoom(16);
-
-          if (locationMarkerRef.current) {
-            locationMarkerRef.current.setPosition(result.position);
-          } else {
-            locationMarkerRef.current = new AMap.Marker({
-              position: result.position,
-              content: `<div style="width: 14px; height: 14px; background: #3b82f6; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 5px rgba(0,0,0,0.5);"></div>`,
-              offset: new AMap.Pixel(-7, -7),
-              zIndex: 1000
-            });
-            locationMarkerRef.current.setMap(mapRef.current);
-          }
-        }
-      });
-    });
+  const locateAndReadNearby = async () => {
+    if(!mapRef.current||!(window as any).AMap)return;
+    const request=++locationRequestRef.current;
+    setNearbyPanel({status:'locating',lines:[]});
+    if(!navigator.geolocation){setNearbyPanel({status:'error',lines:[],message:'此浏览器不支持定位。'});return;}
+    try {
+      const location=await new Promise<GeolocationPosition>((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:12000,maximumAge:60000}));
+      if(request!==locationRequestRef.current)return;
+      const position=gpsToMap([location.coords.longitude,location.coords.latitude]);
+      const map=mapRef.current,AMap=(window as any).AMap;
+      if(!map||!AMap)return;
+      if(!isMinigameActiveRef.current){
+        map.setZoomAndCenter(16,position);
+        if(locationMarkerRef.current)locationMarkerRef.current.setPosition(position);
+        else {locationMarkerRef.current=new AMap.Marker({position,content:'<div style="width:14px;height:14px;border:2px solid white;border-radius:50%;background:#3b82f6;box-shadow:0 0 5px #0004"></div>',offset:new AMap.Pixel(-7,-7),zIndex:1000});locationMarkerRef.current.setMap(map);}
+      }
+      setNearbyPanel({status:'loading',lines:[],accuracy:location.coords.accuracy});
+      const catalog=await loadPublishedCities();
+      if(request!==locationRequestRef.current)return;
+      const candidates=catalog.filter(city=>cityTouchesRadius(city,position,500));
+      const lines:NonNullable<NearbyState['lines']>=[];let next=0,failed=0;
+      await Promise.all(Array.from({length:Math.min(2,candidates.length)},async()=>{
+        while(next<candidates.length&&request===locationRequestRef.current){const city=candidates[next++];try{const data=await loadGameCity(city.city);lines.push(...nearbyLines(data,position,500));}catch{failed++;}}
+      }));
+      if(request!==locationRequestRef.current)return;
+      lines.sort((a,b)=>a.distance-b.distance);
+      setNearbyPanel({status:lines.length?'ready':'missing',lines,accuracy:location.coords.accuracy,
+        message:failed?'部分城市文件暂时未能读取，可稍后重新定位。':lines.length?undefined:'附近500米暂无网站已保存的线路数据。'});
+    } catch(error:any) {
+      if(request!==locationRequestRef.current)return;
+      setNearbyPanel({status:error?.code===1?'denied':'error',lines:[],message:error?.code===1?'未获得定位权限。您可在浏览器设置中允许定位后重试。':'定位或附近线路读取失败，您仍可正常浏览地图。'});
+    }
   };
+  const handleLocate = () => {void locateAndReadNearby();};
+  useEffect(()=>{
+    if(dailyLocationCheckedRef.current||!mapInstance||loading||onboardingStep!==0||showMinigameModal)return;
+    dailyLocationCheckedRef.current=true;
+    const locate=async()=>{if(claimDailyLocation(localStorage))await locateAndReadNearby();};
+    if(navigator.locks)void navigator.locks.request('busline-daily-location',{ifAvailable:true},async lock=>{if(lock)await locate();}).catch(()=>locate());
+    else void locate();
+  },[mapInstance,loading,onboardingStep,showMinigameModal]);
+  useEffect(()=>()=>{locationRequestRef.current++;},[]);
 
   const clipSegmentToBox = (
     p1: [number, number],
@@ -3976,7 +2941,6 @@ export default function App() {
           const timeout = setTimeout(() => {
             completed++;
             if (completed === total) {
-              mapRef.current?.setFitView();
               setIsSearching(false);
             }
             resolve();
@@ -4009,7 +2973,6 @@ export default function App() {
             }
 
             if (completed === total) {
-              mapRef.current?.setFitView();
               setIsSearching(false);
             }
             resolve();
@@ -4154,7 +3117,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
     setIsSearching(false);
     setConnectivityToast(null);
-    mapRef.current?.setFitView();
   };
 
 
@@ -7745,6 +6707,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       </header>
 
+      {nearbyPanel && !showMinigameModal && onboardingStep===0 && !activeBusLine && !selectedStop && <NearbyRoutes state={nearbyPanel}
+        onClose={()=>{locationRequestRef.current++;setNearbyPanel(null);}} onRetry={handleLocate}
+        onSelect={line=>{if(mapRef.current&&(window as any).AMap){setActiveBusLine(line);renderBusLine(line,(window as any).AMap,mapRef.current);}}} />}
       <CityUploadDialog data={pendingCityUpload} busy={cityUploadBusy} progress={cityUploadProgress} error={cityUploadError}
         onSubmit={() => void submitCityUpload()} onClose={() => { if (!cityUploadBusy) setPendingCityUpload(null); }} />
       {!loading && !showMinigameModal && onboardingStep===0 && <MapActivityIndicator raised={showMoreInfo} mode={searchActivity==='manual'||(isSearching&&searchActivity!=='auto')?'search':cityLoading||searchActivity==='auto'?'city':null} />}
@@ -8991,8 +7956,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         {[
                           { id: 'line', title: '看图猜线路', desc: '随机抽取线路观察走向，挑战猜出正确的公交线路名称' },
                           { id: 'station', title: '看通达度猜站名', desc: '观察站点周边多路公交交织网络，猜出对应的公交站点名称' },
-                          { id: 'city', title: '看线网猜城市', desc: '全国随机城市并自动执行全市搜索，猜出所属城市（共10题）' },
-                          { id: 'county', title: '看线网猜县城', desc: '指定省份随机县城，定位县政府后检索周边线网猜出县城名' }
+                          { id: 'city', title: '看线网猜城市', desc: '从已有线路图城市中随机出题，猜出所属城市（共10题）' },
+                          { id: 'county', title: '看线网猜县城', desc: '使用已有县政府站点附近的线网，遮挡周边区域后猜县城' }
                         ].map(m => (
                           <div 
                             key={m.id}
@@ -9031,7 +7996,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                               { id: 'easy', label: '易 (指定城市+底图+站点)' },
                               { id: 'medium', label: '中 (指定城市+无底图+站点)' },
                               { id: 'hard', label: '难 (指定城市+无底图+无站点)' },
-                              { id: 'hell', label: '地狱 (指定省份+无底图+无站点)' }
+                              { id: 'hell', label: '地狱 (指定城市+全部线路)' }
                             ].map(d => (
                               <button
                                 key={d.id}
@@ -9045,46 +8010,23 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                           </div>
                         </div>
 
-                        {gameDifficulty !== 'hell' ? (
-                          <div className="space-y-2">
-                            <label className="text-xs font-black text-slate-700 tracking-wide uppercase">指定城市</label>
-                            <select
-                              value={gameCity}
-                              onChange={(e) => setGameCity(e.target.value)}
-                              className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
-                            >
-                              {citiesPool.map(c => (
-                                <option key={c} value={c}>{c}</option>
-                              ))}
-                            </select>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择省级行政单位（省内随机）</label>
-                            <select
-                              value={gameProvince}
-                              onChange={(e) => setGameProvince(e.target.value)}
-                              className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
-                            >
-                              {provincesPool.map(p => (
-                                <option key={p} value={p}>{p}</option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="text-xs font-bold text-slate-700">先选择省份<select value={gameProvince} disabled={gameCatalogLoading} onChange={event=>setGameProvince(event.target.value)} className="block mt-2 w-full px-3 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs">{gameProvinces.map(province=><option key={province} value={province}>{province}</option>)}</select></label>
+                          <label className="text-xs font-bold text-slate-700">再选择城市<select value={gameCity} disabled={gameCatalogLoading||!gameCities.length} onChange={event=>setGameCity(event.target.value)} className="block mt-2 w-full px-3 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs">{gameCities.map(city=><option key={city.city} value={city.city}>{city.city}</option>)}</select></label>
+                        </div>
                       </div>
                     )}
 
                     {gameMode === 'county' && (
                       <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20">
                         <div className="space-y-2">
-                          <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择省级行政单位（无底图 · 先定位县政府）</label>
+                          <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择省份（仅含已有县政府站点线网）</label>
                           <select
                             value={gameCountyProvince}
                             onChange={(e) => setGameCountyProvince(e.target.value)}
                             className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
                           >
-                            {provincesPool.map(p => (
+                            {countyProvinces.map(p => (
                               <option key={p} value={p}>{p}</option>
                             ))}
                           </select>
@@ -9093,15 +8035,18 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     )}
 
                     <div className="rounded-2xl border border-m3-outline-variant/40 bg-m3-primary-container/40 p-3 space-y-2">
-                      <p className="text-xs font-bold text-m3-on-primary-container">{isAdminVerified ? '管理员模式已启用，不受每日3局限制。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局`}</p>
-                      <p className="text-[11px] leading-relaxed text-slate-500">为保障公共API使用，同一浏览器每天最多开始3局游戏，所有模式共用次数，按本地日期每日重置。开局即计1次，退出或重新挑战均不退还；复盘不消耗次数。全市检索的自有 API 配置不用于游戏。</p>
+                      <p className="text-xs font-bold text-m3-on-primary-container">只使用网站已有线路，不调用高德查询 API，不限游戏次数</p>
+                      <p className="text-[11px] leading-relaxed text-slate-500">易、中、难只使用数字线路及简单前后缀线路；地狱模式包含该城市所有已保存线路。县城题以县政府站点为近似中心，仅显示周边3公里。</p>
                     </div>
 
+                    {gameCatalogLoading&&<p role="status" className="text-xs text-slate-500">正在读取已有线路图城市…</p>}
+                    {gameDataError&&<p role="alert" className="text-xs text-m3-error">{gameDataError}</p>}
+                    {!gameCatalogLoading&&gameMode==='county'&&!countyProvinces.length&&<p role="status" className="text-xs text-slate-500">暂未收录可定位的县政府站点，请先选择其他模式。</p>}
                     {/* Start & Review Buttons */}
                     <div className="flex gap-2.5">
                       <button
                         type="button"
-                        disabled={!gameMode || publicGameLimitReached}
+                        disabled={!gameMode||gameCatalogLoading||!gameCatalog.length||((gameMode==='line'||gameMode==='station')&&!gameCities.some(city=>city.city===gameCity))||(gameMode==='county'&&!countyProvinces.includes(gameCountyProvince))}
                         onClick={() => startMinigame(
                           gameMode!,
                           gameDifficulty,
@@ -9111,7 +8056,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         className="flex-1 py-3.5 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-sm shadow-lg hover:opacity-95 transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
                       >
                         <Sparkles className="w-4 h-4" />
-                        {publicGameLimitReached ? '今日次数已用完' : '开始挑战'}
+                        {gameCatalogLoading?'正在读取城市…':'开始挑战'}
                       </button>
                       {gameHistory.length > 0 && (
                         <button
@@ -9349,9 +8294,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       );
                     })()}
 
-                    {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式：不受每日3局限制</p>}
-                    {!initialAmapConfig.isCustom && !isAdminVerified && <div className="w-full rounded-2xl bg-m3-primary-container/40 p-3 text-xs text-m3-on-primary-container leading-relaxed">
-                      <p>{publicGameLimitReached ? '本浏览器今日3局公共API游戏次数已用完。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局。`}</p>
+                    {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式已启用</p>}
+                    {<div className="w-full rounded-2xl bg-m3-primary-container/40 p-3 text-xs text-m3-on-primary-container leading-relaxed">
+                      <p>使用已有线路数据，无每日次数限制。</p>
                     </div>}
 
                     <div className="flex gap-2.5 w-full pt-2">
@@ -9367,11 +8312,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       )}
                       <button
                         type="button"
-                        disabled={publicGameLimitReached}
+
                         onClick={() => startMinigame(gameMode!, gameDifficulty, gameCity)}
                         className="flex-1 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-md hover:opacity-95 transition-all"
                       >
-                        {publicGameLimitReached ? '今日次数已用完' : '再玩一次'}
+                        再玩一次
                       </button>
                       <button
                         type="button"
