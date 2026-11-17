@@ -1,7 +1,7 @@
 import { MAX_CITY_BYTES, CITY_CHUNK_BYTES, CITY_UPLOAD_FORMAT, CITY_RECORD_FORMAT, cityUploadBlob, cityBlobHash } from './cityTransfer';
 import { normalizeCityDataset, type CityDataset } from './cityDataset';
 import type { CityUpdateJob } from './cityUpdateJobs';
-export async function uploadCitySnapshot(base:string,input:CityDataset,onProgress:(percent:number)=>void=()=>{},transport:typeof fetch=(url,init)=>globalThis.fetch(url,init)){
+export async function uploadCitySnapshot(base:string,input:CityDataset,onProgress:(percent:number)=>void=()=>{},transport:typeof fetch=(url,init)=>globalThis.fetch(url,init),accessKey=''){
   if(!base)throw Error('远端上传入口未配置；本地地图不受影响。');
   const target=new URL(base);
   if(target.protocol!=='https:'&&!(target.protocol==='http:'&&['localhost','127.0.0.1'].includes(target.hostname)))throw Error('远端上传地址未正确配置。');
@@ -19,7 +19,7 @@ export async function uploadCitySnapshot(base:string,input:CityDataset,onProgres
   };
   let upload:any=null,submitted=false;
   try{
-    upload=await request('/uploads',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city:data.city,bytes:bytes.size,parts:Math.ceil(bytes.size/chunkSize),sha256:hash,format:compressed?CITY_UPLOAD_FORMAT:CITY_RECORD_FORMAT})});
+    upload=await request('/uploads',{method:'POST',headers:{'Content-Type':'application/json','x-city-upload-key':accessKey},body:JSON.stringify({city:data.city,bytes:bytes.size,parts:Math.ceil(bytes.size/chunkSize),sha256:hash,format:compressed?CITY_UPLOAD_FORMAT:CITY_RECORD_FORMAT})});
     if(!/^[a-f0-9-]{36}$/.test(upload.id)||typeof upload.token!=='string'||upload.chunkSize!==chunkSize)throw Error('上传入口返回异常。');
     const headers={'Content-Type':'application/octet-stream','x-city-upload-token':upload.token};
     let done=0,next=0,stopped=false;

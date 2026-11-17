@@ -57,3 +57,10 @@ Production 环境变量（不得使用 `VITE_` 前缀）：
 需线上验证：平台 SDK 凭据注入、云函数运行、Blob首次写入、GitHub真实dispatch/下载/回调、上传域名大陆直连。上线切换前不能将这些标记为完成。
 
 回滚只需将两个 GitHub Variables 恢复旧 Worker 地址并重新部署 Pages。`busline-data` 和共享静态文件无需回退；旧 Worker 在迁移验收前保留。
+
+
+### 临时上传密钥
+
+创建上传会话时必须提交 `x-city-upload-key`，服务端在写入 Blob 和触发 Actions 之前校验密钥；后续分块、完成与取消仍使用会话令牌。前端只接收用户输入，不内置密钥，不将其写入本地存储。错误密钥不影响本地地图。
+
+默认校验摘要仅存在服务端代码。可在 EdgeOne 设置 `UPLOAD_ACCESS_KEY_SHA256`（密钥的 SHA-256 小写十六进制摘要）并重新部署以轮换，不得使用 `VITE_` 前缀。此设置不需要同步到 GitHub Actions。共享密钥只用于临时限制上传，并非个人账号或数据授权。

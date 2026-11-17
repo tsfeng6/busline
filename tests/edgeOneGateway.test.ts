@@ -1,10 +1,11 @@
+import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {handleEdgeOneGateway,gatewaySignature,type UploadStore} from '../edgeone/city-gateway/handler';
 import {uploadCitySnapshot} from '../src/utils/cityUploadClient';
 import {readCityUpload} from '../scripts/read-city-upload';
 import {cityBlobHash,CITY_CHUNK_BYTES} from '../src/utils/cityTransfer';
-const env={GITHUB_DISPATCH_TOKEN:'fake-test-token',CALLBACK_SECRET:'test-only-callback-secret-1234567890',RATE_LIMIT_SALT:'test-only-rate-salt-12345'};
+const env={GITHUB_DISPATCH_TOKEN:'fake-test-token',CALLBACK_SECRET:'test-only-callback-secret-1234567890',RATE_LIMIT_SALT:'test-only-rate-salt-12345',UPLOAD_ACCESS_KEY_SHA256:createHash('sha256').update('test-upload-key').digest('hex')};
 function fixture(){
  const data=new Map<string,string|ArrayBuffer>(),requests:string[]=[];
  const store:UploadStore={
@@ -14,7 +15,7 @@ function fixture(){
  };
  const upstream:typeof fetch=async(input,init)=>{requests.push(String(input));assert.ok(String(input).startsWith('https://api.github.com/repos/tsfeng6/busline/actions/'));const body=JSON.parse(String(init?.body));assert.equal(body.inputs.uploaded,true);return new Response(null,{status:204});};
  const transport:typeof fetch=async(input,init)=>handleEdgeOneGateway(new Request(String(input),init),env,store,upstream);
- const browser:typeof fetch=(input,init)=>transport(input,{...init,headers:{...Object.fromEntries(new Headers(init?.headers)),Origin:'https://busline.cc'}});
+ const browser:typeof fetch=(input,init)=>transport(input,{...init,headers:{...Object.fromEntries(new Headers(init?.headers)),Origin:'https://busline.cc','x-city-upload-key':'test-upload-key'}});
  return {data,store,transport,browser,requests};
 }
 const sample=()=>({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),retrievalComplete:false,filtered:false,
@@ -55,7 +56,7 @@ test('EdgeOne validates part lengths, missing parts, retries completion once and
  const at=Date.now()-600000;assert.equal((await f.transport(base,{headers:{'x-city-timestamp':String(at),'x-city-signature':gatewaySignature(env.CALLBACK_SECRET,`${created.id}:manifest:${at}`)}})).status,401);
 });
 test('EdgeOne failed dispatch keeps local map intact, reports failure and does not leak secrets',async()=>{
- const f=fixture();const broken:typeof fetch=(input,init)=>handleEdgeOneGateway(new Request(String(input),{...init,headers:{...Object.fromEntries(new Headers(init?.headers)),Origin:'https://busline.cc'}}),env,f.store,async()=>new Response(null,{status:403}));
+ const f=fixture();const broken:typeof fetch=(input,init)=>handleEdgeOneGateway(new Request(String(input),{...init,headers:{...Object.fromEntries(new Headers(init?.headers)),Origin:'https://busline.cc','x-city-upload-key':'test-upload-key'}}),env,f.store,async()=>new Response(null,{status:403}));
  await assert.rejects(uploadCitySnapshot('https://upload.example',sample(),()=>{},broken),/本地地图不受影响/);
  const job=JSON.parse(String([...f.data.entries()].find(([k])=>k.startsWith('jobs/'))![1]));assert.equal(job.state,'failed');
  const response=await broken('https://upload.example/jobs/'+job.id);assert.ok(!(await response.text()).includes(env.GITHUB_DISPATCH_TOKEN));
@@ -63,7 +64,7 @@ test('EdgeOne failed dispatch keeps local map intact, reports failure and does n
 
 test('EdgeOne expiry, cancellation, browser preflight and best-effort per-IP throttling',async()=>{
  const f=fixture(),blob=new Blob(['test']);
- const request=()=>new Request('https://upload.example/uploads',{method:'POST',headers:{Origin:'https://busline.cc'},body:JSON.stringify({city:'北京',bytes:4,parts:1,sha256:'a'.repeat(64)})});
+ const request=()=>new Request('https://upload.example/uploads',{method:'POST',headers:{Origin:'https://busline.cc','x-city-upload-key':'test-upload-key'},body:JSON.stringify({city:'北京',bytes:4,parts:1,sha256:'a'.repeat(64)})});
  const first=await handleEdgeOneGateway(request(),env,f.store,fetch,'192.0.2.1');const session=await first.json();assert.equal(first.status,200);
  assert.equal((await handleEdgeOneGateway(request(),env,f.store,fetch,'192.0.2.1')).status,429);
  assert.equal((await f.browser(`https://upload.example/uploads/${session.id}`,{method:'DELETE',headers:{'x-city-upload-token':session.token}})).status,200);
@@ -83,7 +84,28 @@ test('EdgeOne Actions reader rejects payload hash tampering before publication',
 test('Node function request adapters without a Web stream body can submit valid manifests',async()=>{
  const f=fixture();
  const raw=JSON.stringify({city:'北京',bytes:2,parts:1,sha256:'a'.repeat(64)});
- const request={url:'https://upload.example/uploads',method:'POST',headers:new Headers({Origin:'https://busline.cc','Content-Length':String(Buffer.byteLength(raw))}),body:undefined,arrayBuffer:async()=>new TextEncoder().encode(raw).buffer} as unknown as Request;
+ const request={url:'https://upload.example/uploads',method:'POST',headers:new Headers({Origin:'https://busline.cc','x-city-upload-key':'test-upload-key','Content-Length':String(Buffer.byteLength(raw))}),body:undefined,arrayBuffer:async()=>new TextEncoder().encode(raw).buffer} as unknown as Request;
  const response=await handleEdgeOneGateway(request,env,f.store);
  assert.equal(response.status,200);assert.ok((await response.json()).token);
+});
+
+test('upload key is required before any Blob writes or workflow dispatch; CORS permits the key header',async()=>{
+ const f=fixture();
+ for(const key of ['', 'wrong']){
+  const response=await f.transport('https://upload.example/uploads',{method:'POST',headers:{Origin:'https://busline.cc','x-city-upload-key':key},body:'{}'});
+  assert.equal(response.status,401);assert.match((await response.json()).error,/密钥/);
+ }
+ assert.equal(f.data.size,0);assert.equal(f.requests.length,0);
+ const response=await f.browser('https://upload.example/uploads',{method:'OPTIONS'});
+ assert.ok(response.headers.get('Access-Control-Allow-Headers')?.includes('x-city-upload-key'));
+});
+test('browser passes the entered key only when creating a session and server accepts it',async()=>{
+ const f=fixture();
+ const browser:typeof fetch=(input,init)=>{
+  const headers=new Headers(init?.headers);headers.set('Origin','https://busline.cc');
+  assert.equal(headers.get('x-city-upload-key'),String(input).endsWith('/uploads')?'test-upload-key':null);
+  return f.transport(input,{...init,headers});
+ };
+ const job=await uploadCitySnapshot('https://upload.example',sample(),()=>{},browser,'test-upload-key');
+ assert.ok(job.id);assert.equal(f.requests.length,1);
 });

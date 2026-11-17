@@ -6875,12 +6875,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
   };
 
-  const submitCityUpload = async () => {
+  const submitCityUpload = async (accessKey: string) => {
     if (!pendingCityUpload || cityUploadBusy) return;
     const dataset = pendingCityUpload;
     setCityUploadBusy(true); setCityUploadError(''); setCityUploadProgress(0);
     try {
-      const job = await uploadCitySnapshot(gatewayBase, dataset, setCityUploadProgress);
+      const job = await uploadCitySnapshot(gatewayBase, dataset, setCityUploadProgress, undefined, accessKey);
       setPendingCityUpload(null);
       setCityUpdateJob(job); setSharedCityStatus(job.message);
       void watchCityActionJob(job, true);
@@ -8075,7 +8075,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       </header>
 
       <CityUploadDialog data={pendingCityUpload} busy={cityUploadBusy} progress={cityUploadProgress} error={cityUploadError}
-        onSubmit={() => void submitCityUpload()} onClose={() => { if (!cityUploadBusy) setPendingCityUpload(null); }} />
+        onSubmit={accessKey => void submitCityUpload(accessKey)} onClose={() => { if (!cityUploadBusy) setPendingCityUpload(null); }} />
       {!loading && !showMinigameModal && onboardingStep===0 && <MapActivityIndicator raised={showMoreInfo} mode={searchActivity==='manual'||(isSearching&&searchActivity!=='auto')?'search':cityLoading||searchActivity==='auto'?'city':null} />}
       <CityUpdateStatus job={cityUpdateJob} onClose={() => { cityJobWatchRef.current?.abort(); setCityUpdateJob(null); }} />
       {cityDataNotice && !cityUpdateJob && !isSearching && <div role="status" className="absolute top-24 left-4 sm:left-6 z-30 max-w-sm rounded-2xl bg-m3-surface/95 border border-m3-outline-variant/40 p-4 shadow-lg flex items-center gap-3">
