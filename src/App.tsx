@@ -1,3 +1,5 @@
+import { TermsDocument } from './components/TermsDocument';
+import { acceptTerms, hasAcceptedTerms, BEIJING_TOUR_CENTER } from './utils/onboardingConsent';
 import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
 import {MapActivityIndicator} from './components/MapActivityIndicator';
@@ -2579,24 +2581,8 @@ export default function App() {
     return !!savedVersion && compareVersions(APP_VERSION, savedVersion) > 0;
   });
 
-  const barButtonRefs = useRef<(HTMLElement | null)[]>([]);
-
-  const handleOnboardingSelectCache = async (enabled: boolean) => {
-    if (enabled) {
-      setEnableLineCache(true);
-      enableLineCacheRef.current = true;
-      localStorage.setItem(APP_LINE_CACHE_ENABLED_KEY, 'true');
-      await checkAndPurgeIfMonthChanged();
-      await refreshLineCacheStats();
-    } else {
-      setEnableLineCache(false);
-      enableLineCacheRef.current = false;
-      localStorage.setItem(APP_LINE_CACHE_ENABLED_KEY, 'false');
-      await clearAllLineCache();
-      queriedLineNamesRef.current.clear();
-      await refreshLineCacheStats();
-    }
-  };
+  const termsAcceptedRef = useRef(hasAcceptedTerms(localStorage));
+  const handleAcceptTerms = () => { termsAcceptedRef.current = true; acceptTerms(localStorage); };
 
   const handleOnboardingSelectCustomApi = (enabled: boolean) => {
     setUseCustomApiKey(enabled);
@@ -2604,10 +2590,17 @@ export default function App() {
   };
 
   const handleFinishOnboarding = () => {
+    if (!termsAcceptedRef.current) { setOnboardingStep(2); return; }
     localStorage.setItem(APP_LAST_VERSION_KEY, APP_VERSION);
     setOnboardingStep(0);
 
   };
+
+  useEffect(() => {
+    if (onboardingStep !== 4 || !mapInstance) return;
+    mapInstance.setZoomAndCenter(9, BEIJING_TOUR_CENTER);
+    setCurrentCity('北京市');
+  }, [onboardingStep, mapInstance]);
 
   const handleResetApp = async () => {
     try {
@@ -7145,7 +7138,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   useEffect(() => {
-    if (!sharedCityDataEnabled || !mapInstance || isSearching || showMinigameModal || onboardingStep !== 0
+    if (!sharedCityDataEnabled || !mapInstance || isSearching || showMinigameModal || (onboardingStep !== 0 && onboardingStep !== 4)
       || activeBusLine || pendingCityUpload || cityUploadBusy || zoomLevel < CITY_DETAIL_ZOOM || !currentCity || currentCity === '全国') return;
     const key = currentCity.replace(/市$/, '');
     if (manualResultCityRef.current === key) return;
@@ -9996,6 +9989,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         <div className="px-3 py-1 bg-m3-primary-container rounded-full border border-m3-outline/5 select-none font-sans">
                            <span className="text-[9px] font-black text-m3-on-primary-container tracking-widest uppercase">busline 5.5</span>
                         </div>
+                        <details className="w-full rounded-2xl border border-m3-outline-variant/30 bg-m3-surface-container p-4">
+                          <summary className="cursor-pointer text-xs font-bold text-m3-primary">巴士线路图使用条款</summary>
+                          <div className="mt-3"><TermsDocument /></div>
+                        </details>
+                        <button type="button" onClick={() => { setShowSettings(false); setOnboardingStep(1); }} className="text-xs text-m3-primary underline underline-offset-2">重新查看使用引导</button>
                         <section aria-label="数据来源与侵权投诉" className="w-full rounded-2xl bg-m3-surface-container border border-m3-outline-variant/30 p-4 text-xs leading-relaxed text-slate-600 space-y-2 select-text">
                           <h4 className="font-bold text-slate-800">数据来源与说明</h4>
                           <p>本站公交线路、站点及轨迹数据主要来源于高德地图开放平台，用于公交线路可视化展示与爱好者交流。相关数据及标识的权利归相应权利人所有。</p>
@@ -10636,18 +10634,18 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         <OnboardingGuide
           step={onboardingStep}
           setStep={setOnboardingStep}
-          lineThickness={lineThickness}
-          setLineThickness={setLineThickness}
-          enableLineCache={enableLineCache}
-          onSelectLineCache={handleOnboardingSelectCache}
           useCustomApiKey={useCustomApiKey}
           onSelectCustomApiKey={handleOnboardingSelectCustomApi}
           customApiKey={customApiKey}
           setCustomApiKey={setCustomApiKey}
           customApiSecurityCode={customApiSecurityCode}
           setCustomApiSecurityCode={setCustomApiSecurityCode}
+          onAcceptTerms={handleAcceptTerms}
+          mapReady={!!mapInstance}
+          zoom={zoomLevel}
+          beijingReady={!!lastCityDataset && lastCityDataset.city.replace(/市$/, '') === '北京' && sharedMapDataRef.current}
+          onZoomToBeijing={() => { if (mapInstance) { mapInstance.setZoomAndCenter(CITY_DETAIL_ZOOM, BEIJING_TOUR_CENTER); setCurrentCity('北京市'); } }}
           onFinishOnboarding={handleFinishOnboarding}
-          barButtonRefs={barButtonRefs}
         />
 
       </main>

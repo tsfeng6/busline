@@ -150,10 +150,10 @@ test('city auto-loading respects manual results and upload dialogs, and discards
   const code=ts.transpile(`const effect = ${arrow.getText(ast)};`,{target:ts.ScriptTarget.ES2022});
   const data=normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),retrievalComplete:true,filtered:false,
     stops:[{id:'s',name:'站点',address:'6路',location:{lng:116,lat:39}}],lines:[{id:'l',name:'6路(甲--乙)',city:'北京市',path:[[116,39],[116.1,39.1]],via_stops:[]}]});
-  for(const scenario of ['ready','missing','expired','unavailable','zoomed-out','city-overview','cancelled','manual-result','submission-dialog','uploading','late-response','new-search','late-dialog']) {
+  for(const scenario of ['ready','missing','expired','unavailable','zoomed-out','city-overview','cancelled','manual-result','submission-dialog','uploading','late-response','new-search','late-dialog','onboarding-modal','map-tour']) {
     const notices:any[]=[], rendered:any[]=[], jobs:(()=>Promise<void>)[]=[];
     const snapshot=scenario==='expired'?{...data,capturedAt:new Date(Date.now()-90*86400000).toISOString()}:data;
-    const scope:any={CITY_DETAIL_ZOOM,sharedCityDataEnabled:true,mapInstance:{},isSearching:false,showMinigameModal:false,onboardingStep:0,
+    const scope:any={CITY_DETAIL_ZOOM,sharedCityDataEnabled:true,mapInstance:{},isSearching:false,showMinigameModal:false,onboardingStep:scenario==='onboarding-modal'?2:scenario==='map-tour'?4:0,
       activeBusLine:null,cityUpdateJob:null,pendingCityUploadRef:{current:scenario==='submission-dialog'?snapshot:null},pendingCityUpload:scenario==='submission-dialog'?snapshot:null,cityUploadBusy:scenario==='uploading',manualResultCityRef:{current:scenario==='manual-result'?'北京':''},searchVersionRef:{current:1},zoomLevel:scenario==='zoomed-out'?8:scenario==='city-overview'?12:13,currentCity:'北京市',Date,
       sharedMapDataRef:{current:false},lastCityDataset:null,cityAutoChecksRef:{current:new Map()},isMinigameActiveRef:{current:false},
       citySnapshotPreviewable:previewableCityDataset,actionsCityUpdatesEnabled:false,inspectSharedCity:async()=>scenario==='missing'?{data:null,status:'missing'}:scenario==='unavailable'?{data:null,status:'unavailable'}:{data:snapshot,status:'ready'},
@@ -175,7 +175,7 @@ test('city auto-loading respects manual results and upload dialogs, and discards
       }
       await waiting;
     }
-    if(scenario==='ready') {assert.equal(rendered.length,1); assert.equal(rendered[0][0],false);assert.equal(rendered[0][1],data);}
+    if(scenario==='ready'||scenario==='map-tour') {assert.equal(rendered.length,1); assert.equal(rendered[0][0],false);assert.equal(rendered[0][1],data);}
     else {assert.equal(rendered.length,0);if(['missing','expired','unavailable'].includes(scenario))assert.equal(notices[0].kind,scenario);else assert.equal(notices.length,0);}
     cleanup?.();
   }
@@ -247,4 +247,51 @@ test('isolated AMap frame preserves SDK coordinates without exposing them to ano
  receive({source:parent,origin:sandbox.location.origin,data:{type:'query',channel:'channel',id:1,service:'LineSearch',method:'search',args:['6路']}});
  const result=messages.at(-1);assert.equal(result.origin,sandbox.location.origin);
  assert.equal(result.data.result.lineInfo[0].path[0].lng,116.123456789123);assert.equal(result.data.result.lineInfo[0].path[0].lat,39.987654321098);
+});
+
+test('terms require reaching the real scroll bottom and an explicit checkbox; consent is versioned locally',async()=>{
+ const {reachedTermsEnd,canAcceptTerms,acceptTerms,hasAcceptedTerms,TERMS_ACCEPTANCE_KEY}=await import('../src/utils/onboardingConsent');
+ assert.equal(reachedTermsEnd({scrollTop:0,scrollHeight:3000,clientHeight:320}),false);
+ assert.equal(reachedTermsEnd({scrollTop:2678.5,scrollHeight:3000,clientHeight:320}),true);
+ assert.equal(reachedTermsEnd({scrollTop:0,scrollHeight:0,clientHeight:0}),false);
+ assert.equal(reachedTermsEnd({scrollTop:NaN,scrollHeight:3000,clientHeight:320}),false);
+ assert.equal(reachedTermsEnd({scrollTop:0,scrollHeight:200,clientHeight:320}),true);
+ assert.equal(canAcceptTerms(false,true),false);assert.equal(canAcceptTerms(true,false),false);assert.equal(canAcceptTerms(true,true),true);
+ const values=new Map<string,string>(),storage={getItem:(key:string)=>values.get(key)||null,setItem:(key:string,value:string)=>values.set(key,value)};
+ assert.equal(hasAcceptedTerms(storage),false);acceptTerms(storage);assert.equal(hasAcceptedTerms(storage),true);
+ values.set(TERMS_ACCEPTANCE_KEY,JSON.stringify({version:'old',acceptedAt:new Date().toISOString()}));assert.equal(hasAcceptedTerms(storage),false);
+ values.set(TERMS_ACCEPTANCE_KEY,'invalid');assert.equal(hasAcceptedTerms(storage),false);
+ assert.doesNotThrow(()=>acceptTerms({setItem(){throw Error('storage unavailable');}}));
+});
+
+test('actual onboarding navigation cannot skip consent, allows declining API, and validates opted-in credentials',async()=>{
+ const {canAcceptTerms}=await import('../src/utils/onboardingConsent');
+ const source=fs.readFileSync('src/components/OnboardingGuide.tsx','utf8'),ast=ts.createSourceFile('OnboardingGuide.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ let declaration:ts.VariableDeclaration|undefined;
+ const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='handleNext')declaration=node;ts.forEachChild(node,visit);};visit(ast);assert.ok(declaration);
+ const code=ts.transpile(`const ${declaration.getText(ast)};`,{target:ts.ScriptTarget.ES2022});
+ const events:any[]=[],scope:any={step:1,readToEnd:false,agreed:false,useCustomApiKey:false,customApiKey:'',customApiSecurityCode:'',canAcceptTerms,citySearchApiStatus,
+  onAcceptTerms:()=>events.push('accepted'),onFinishOnboarding:()=>events.push('finished'),setStep:(value:number)=>events.push(value),setApiError:(value:string)=>events.push(value)};
+ const run=Function('scope',`with(scope){${code};return handleNext;}`)(scope);
+ run();assert.deepEqual(events,[2]);events.length=0;
+ scope.step=2;run();assert.deepEqual(events,[]);
+ scope.agreed=true;run();assert.deepEqual(events,[]);
+ scope.readToEnd=true;scope.agreed=false;run();assert.deepEqual(events,[]);
+ scope.agreed=true;run();assert.deepEqual(events,['accepted',3]);events.length=0;
+ scope.step=3;run();assert.deepEqual(events,[4]);events.length=0;
+ scope.useCustomApiKey=true;run();assert.equal(events.length,1);assert.equal(typeof events[0],'string');events.length=0;
+ scope.customApiKey='a'.repeat(32);scope.customApiSecurityCode='b'.repeat(32);run();assert.deepEqual(events,[4]);events.length=0;
+ scope.step=4;run();assert.deepEqual(events,['finished']);
+});
+
+test('parent completion guard prevents marking onboarding complete before consent; terms file has all seven sections',()=>{
+ const source=fs.readFileSync('src/App.tsx','utf8'),ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ let declaration:ts.VariableDeclaration|undefined;
+ const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='handleFinishOnboarding')declaration=node;ts.forEachChild(node,visit);};visit(ast);assert.ok(declaration);
+ const code=ts.transpile(`const ${declaration.getText(ast)};`,{target:ts.ScriptTarget.ES2022}),events:any[]=[];
+ const scope={termsAcceptedRef:{current:false},APP_LAST_VERSION_KEY:'visited',APP_VERSION:'5.5',localStorage:{setItem:(key:string,value:string)=>events.push([key,value])},setOnboardingStep:(value:number)=>events.push(value)};
+ const run=Function('scope',`with(scope){${code};return handleFinishOnboarding;}`)(scope);run();assert.deepEqual(events,[2]);events.length=0;
+ scope.termsAcceptedRef.current=true;run();assert.deepEqual(events,[['visited','5.5'],0]);
+ const terms=fs.readFileSync('src/content/busline-terms.md','utf8');assert.equal(terms.match(/^## /gm)?.length,7);assert.equal(terms.match(/^\d+\. /gm)?.length,24);
+ assert.ok(terms.endsWith('最后更新日期：2026 年 11 月 17 日\n'));
 });
