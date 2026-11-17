@@ -5,6 +5,8 @@ import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isCityParts, validateCityPart, CITY_FILE_BYTES } from '../src/utils/cityStorage';
 import { cityDataKey } from '../src/utils/cityDataset';
+import { cityThumbnail, type CityOverview } from '../src/utils/cityOverview';
+import { resolveCityParts } from '../src/utils/cityStorage';
 import { cityStorageFiles } from './city-storage-files';
 
 const snapshotId = /^[\dTZ-]+-[a-f0-9]{12}$/;
@@ -18,6 +20,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
     return git(['show', `${commit}:${path}`]);
   };
   let bytes = 0, cities = 0, historySnapshots = 0;
+  const overviews:CityOverview[]=[];
   const copied = new Set<string>();
   const copy = async (path: string, content: string) => {
     if (copied.has(path)) return;
@@ -58,6 +61,9 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       await copy(metaPath, text);
     }
     await snapshot(prefix, file, currentId); cities++;
+    const latest=await resolveCityParts(JSON.parse(source(file)),async part=>JSON.parse(source(`${prefix}/${part}`)));
+    const thumbnail=cityThumbnail(latest);
+    if(thumbnail){const name=`thumbnails/${city}.svg`;await copy(`city-data/v1/${name}`,thumbnail.svg);overviews.push({...thumbnail.meta,thumbnail:`thumbnails/${encodeURIComponent(city)}.svg`});}
     if (files.has(historyPath)) {
       const text = source(historyPath), records = JSON.parse(text);
       await copy(historyPath, text);
@@ -67,6 +73,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       }
     }
   }
+  await copy('city-data/v1/overview.json',JSON.stringify({schemaVersion:1,cities:overviews}));
   await mkdir(join(output, 'city-data/v1'), { recursive: true });
   await writeFile(join(output, 'city-data/v1/publication.json'), JSON.stringify({ commit, cities, historySnapshots, bytes, publishedAt: new Date().toISOString() }));
   return { cities, historySnapshots, bytes, commit };

@@ -1,3 +1,5 @@
+import { CityOverviewLayer } from './components/CityOverviewLayer';
+import { CITY_DETAIL_ZOOM } from './utils/cityOverview';
 import { lazyTimelineRoute } from './utils/lazyTimelineRoute';
 import { lazyStopMarker, viewportStopMarkers, syncLazyMarkers, clearStopMarkerGroup } from './utils/lazyStopMarker';
 import { RouteRenderIndex, offsetRoutePath, type RenderRoute } from './utils/routeRenderIndex';
@@ -2026,6 +2028,8 @@ export default function App() {
   const [timelineAvailable, setTimelineAvailable] = useState(false);
   const [timelineMinute, setTimelineMinute] = useState(() => new Date().getHours() * 60 + new Date().getMinutes());
   const [timelineLines, setTimelineLines] = useState<BusLine[]>([]);
+  const timelineShownRef = useRef(showTimeline);
+  timelineShownRef.current = showTimeline;
   const timelineOverlaysRef = useRef<TimelineOverlayEntry[]>([]);
   const timelineMinuteRef = useRef(timelineMinute);
   timelineMinuteRef.current = timelineMinute;
@@ -3687,7 +3691,7 @@ export default function App() {
   function syncStopMarkersToMap(map: any, AMap: any) {
     if (!markerGroupRef.current || isMinigameActiveRef.current) return;
     
-    if (!showStations) {
+    if (!showStations || map.getZoom() < CITY_DETAIL_ZOOM) {
       syncLazyMarkers(markerGroupRef.current, []);
       setStats((prev: any) => ({ ...prev, stops: 0 }));
       return;
@@ -6059,7 +6063,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         saveMapState();
       });
 
+      map.on('zoomstart', () => {lineGroupRef.current?.hide();markerGroupRef.current?.hide();});
       map.on('zoomend', () => {
+        if(map.getZoom()>=CITY_DETAIL_ZOOM&&!timelineShownRef.current){lineGroupRef.current?.show();markerGroupRef.current?.show();}
         syncVisibleStopsRef.current();
         const newZoom = map.getZoom();
         setZoomLevel((prevZoom) => {
@@ -7219,6 +7225,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
     const networkLayers: { color: string; overlay: any }[] = [];
     const visibleGroups = () => {
+      if(map.getZoom()<CITY_DETAIL_ZOOM)return new Map<string,[number,number][][]>();
       const bounds = map.getBounds(), sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
       const padX = (ne.lng - sw.lng) * .15, padY = (ne.lat - sw.lat) * .15;
       const visible = hitIndex.visiblePaths({minLng:sw.lng-padX,maxLng:ne.lng+padX,minLat:sw.lat-padY,maxLat:ne.lat+padY});
@@ -7447,6 +7454,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     return () => { cancelled = true; clearTimeout(timer); };
   }, [mapInstance, currentCity, zoomLevel, isSearching, showMinigameModal, onboardingStep, activeBusLine, pendingCityUpload, cityUploadBusy, cityUpdateJob?.id, cityUpdateJob?.state]);
 
+  useEffect(()=>{
+    if(!mapInstance)return;
+    if(zoomLevel<CITY_DETAIL_ZOOM){lineGroupRef.current?.hide();markerGroupRef.current?.hide();}
+    else if(!showTimeline){lineGroupRef.current?.show();markerGroupRef.current?.show();}
+    else{lineGroupRef.current?.hide();markerGroupRef.current?.hide();}
+  },[mapInstance,zoomLevel,showTimeline]);
+
   useEffect(() => {
     if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
     const map = mapRef.current;
@@ -7480,7 +7494,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const updateViewport=()=>{
       const bounds=map.getBounds(),sw=bounds.getSouthWest(),ne=bounds.getNorthEast();
       const dx=(ne.lng-sw.lng)*.15,dy=(ne.lat-sw.lat)*.15;
-      const visible=index.visiblePaths({minLng:sw.lng-dx,maxLng:ne.lng+dx,minLat:sw.lat-dy,maxLat:ne.lat+dy});
+      const visible=map.getZoom()<CITY_DETAIL_ZOOM?new Map<string,[number,number][][]>():index.visiblePaths({minLng:sw.lng-dx,maxLng:ne.lng+dx,minLat:sw.lat-dy,maxLat:ne.lat+dy});
       for(const [name,overlay] of overlays){
         const paths=visible.get(name)||[];
         overlay.setPaths(box?paths.flatMap(path=>clipPathToBox(path,box.minLng,box.maxLng,box.minLat,box.maxLat)):paths);
@@ -8063,6 +8077,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       <main className="relative flex-1">
         <div className="relative w-full h-full">
+          <CityOverviewLayer map={mapInstance} zoom={zoomLevel} enabled={!showTimeline && !showMinigameModal} />
           <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
           
           {isBoxSelectMode && (
