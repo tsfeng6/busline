@@ -52,3 +52,19 @@ test('geographic PNG has transparent background and draws only the original proj
  const rows=inflateSync(Buffer.concat(compressed));
  assert.equal(rows[4],255);assert.equal(rows[8],0);assert.equal(rows[13],0);assert.equal(rows[17],255);
 });
+
+test('each overview zoom has geographically correct XYZ tiles; missing tiles need no network request',async()=>{
+ const {CityOverviewTiles,worldPixel,TILE_MIN_ZOOM,TILE_MAX_ZOOM}=await import('../scripts/city-overview-tiles');
+ const {validTileIndex,CITY_DETAIL_ZOOM}=await import('../src/utils/cityOverview');
+ const path:[number,number][]=[[116.123456789123,39.987654321098],[116.15,40]];
+ const original=JSON.stringify(path),tiles=new CityOverviewTiles();tiles.add({lines:[{path}]});
+ for(let z=TILE_MIN_ZOOM;z<=TILE_MAX_ZOOM;z++){
+  const [x,y]=worldPixel(path[0],z);assert.ok(tiles.keys.includes(`${z}/${Math.floor(x/256)}/${Math.floor(y/256)}`));
+  const larger=worldPixel(path[0],z+1);assert.ok(Math.abs(larger[0]-x*2)<1e-7);assert.ok(Math.abs(larger[1]-y*2)<1e-7);
+ }
+ assert.equal(JSON.stringify(path),original);assert.equal(CITY_DETAIL_ZOOM,13);
+ const index={base:'tiles/xyz-v1',revision:'a'.repeat(40),minZoom:2,maxZoom:13,keys:tiles.keys};
+ assert.equal(validTileIndex(index),true);assert.equal(validTileIndex({...index,base:'https://external.example'}),false);
+ assert.equal(validTileIndex({...index,keys:['13/999999/0']}),false);
+ for(const file of tiles.files(index.base))assert.deepEqual([...file.content.subarray(0,8)],[137,80,78,71,13,10,26,10]);
+});

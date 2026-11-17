@@ -1,4 +1,4 @@
-export const CITY_DETAIL_ZOOM = 11;
+export const CITY_DETAIL_ZOOM = 13;
 export type CityOverview = {city:string;center:[number,number];bounds:[number,number,number,number];lineDirections:number;capturedAt:string;thumbnail:string};
 export const mercatorY=(latitude:number)=>180/Math.PI*Math.log(Math.tan(Math.PI/4+Math.max(-85,Math.min(85,latitude))*Math.PI/360));
 /** Pixels map directly to the image's geographic bounds, with no card padding or fitting offsets. */
@@ -32,4 +32,12 @@ export function cityThumbnail(data:{city:string;capturedAt:string;lines:{path:[n
   let d='';for(let y=0;y<H;y++)for(let x=0;x<W;x++){if(!grid[y*W+x])continue;const start=x;while(x+1<W&&grid[y*W+x+1])x++;d+=`M${start} ${y}h${Math.max(.5,x-start)}`;}
   const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W-1} ${H-1}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="#52796f" stroke-width="1.25" stroke-linecap="round"/></svg>`;
   return {svg,raster:{width:W,height:H,pixels:grid},meta:{city:data.city,center:[(minX+maxX)/2,(minY+maxY)/2] as [number,number],bounds,lineDirections:data.lines.length,capturedAt:data.capturedAt}};
+}
+
+export type OverviewTileIndex={base:string;revision:string;minZoom:number;maxZoom:number;keys:string[]};
+export function validTileIndex(value:any):value is OverviewTileIndex{
+ return value?.base==='tiles/xyz-v1'&&/^[a-f0-9]{40}$/.test(value?.revision||'')&&value.minZoom===2&&value.maxZoom===13&&Array.isArray(value.keys)&&value.keys.length<=25000&&value.keys.every((key:any)=>{
+  if(typeof key!=='string'||!/^\d+\/\d+\/\d+$/.test(key))return false;
+  const [z,x,y]=key.split('/').map(Number);return z>=2&&z<=13&&x>=0&&y>=0&&x<2**z&&y<2**z;
+ });
 }

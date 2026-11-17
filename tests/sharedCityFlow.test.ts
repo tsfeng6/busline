@@ -1,3 +1,4 @@
+import {CITY_DETAIL_ZOOM} from '../src/utils/cityOverview';
 import { lazyStopMarker, clearStopMarkerGroup } from '../src/utils/lazyStopMarker';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -110,11 +111,11 @@ test('city auto-loading respects manual results and upload dialogs, and discards
   const code=ts.transpile(`const effect = ${arrow.getText(ast)};`,{target:ts.ScriptTarget.ES2022});
   const data=normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),retrievalComplete:true,filtered:false,
     stops:[{id:'s',name:'站点',address:'6路',location:{lng:116,lat:39}}],lines:[{id:'l',name:'6路(甲--乙)',city:'北京市',path:[[116,39],[116.1,39.1]],via_stops:[]}]});
-  for(const scenario of ['ready','missing','expired','unavailable','zoomed-out','cancelled','manual-result','submission-dialog','uploading','late-response','new-search','late-dialog']) {
+  for(const scenario of ['ready','missing','expired','unavailable','zoomed-out','city-overview','cancelled','manual-result','submission-dialog','uploading','late-response','new-search','late-dialog']) {
     const notices:any[]=[], rendered:any[]=[], jobs:(()=>Promise<void>)[]=[];
     const snapshot=scenario==='expired'?{...data,capturedAt:new Date(Date.now()-90*86400000).toISOString()}:data;
-    const scope:any={sharedCityDataEnabled:true,mapInstance:{},isSearching:false,showMinigameModal:false,onboardingStep:0,
-      activeBusLine:null,cityUpdateJob:null,pendingCityUploadRef:{current:scenario==='submission-dialog'?snapshot:null},pendingCityUpload:scenario==='submission-dialog'?snapshot:null,cityUploadBusy:scenario==='uploading',manualResultCityRef:{current:scenario==='manual-result'?'北京':''},searchVersionRef:{current:1},zoomLevel:scenario==='zoomed-out'?8:13,currentCity:'北京市',Date,
+    const scope:any={CITY_DETAIL_ZOOM,sharedCityDataEnabled:true,mapInstance:{},isSearching:false,showMinigameModal:false,onboardingStep:0,
+      activeBusLine:null,cityUpdateJob:null,pendingCityUploadRef:{current:scenario==='submission-dialog'?snapshot:null},pendingCityUpload:scenario==='submission-dialog'?snapshot:null,cityUploadBusy:scenario==='uploading',manualResultCityRef:{current:scenario==='manual-result'?'北京':''},searchVersionRef:{current:1},zoomLevel:scenario==='zoomed-out'?8:scenario==='city-overview'?12:13,currentCity:'北京市',Date,
       sharedMapDataRef:{current:false},lastCityDataset:null,cityAutoChecksRef:{current:new Map()},isMinigameActiveRef:{current:false},
       citySnapshotPreviewable:previewableCityDataset,actionsCityUpdatesEnabled:false,inspectSharedCity:async()=>scenario==='missing'?{data:null,status:'missing'}:scenario==='unavailable'?{data:null,status:'unavailable'}:{data:snapshot,status:'ready'},
       citySnapshotFresh:(value:any)=>value.capturedAt===data.capturedAt,

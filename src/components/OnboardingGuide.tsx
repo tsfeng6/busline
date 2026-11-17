@@ -143,7 +143,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
             if (isLastTour) {
               onFinishOnboarding();
             } else {
-              setStep(step + 1);
+              if(step>=5)onFinishOnboarding();else setStep(step + 1);
             }
           }}
         />
@@ -191,7 +191,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
                       if (isLastTour) {
                         onFinishOnboarding();
                       } else {
-                        setStep(step + 1);
+                        if(step>=5)onFinishOnboarding();else setStep(step + 1);
                       }
                     }}
                     className="px-3.5 py-1.5 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-black shadow-sm hover:opacity-95 active:scale-95 transition-all flex items-center gap-1.5 cursor-pointer"
@@ -220,7 +220,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
       setApiErrorHint('请填写有效的高德 Web端 API Key，或选择使用公共API');
       return;
     }
-    setStep(step + 1);
+    if(step>=5)onFinishOnboarding();else setStep(step + 1);
   };
 
   return (
@@ -479,10 +479,10 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
                   <Compass className="w-7 h-7" />
                 </div>
                 <h2 className="text-xl font-black text-slate-900 tracking-tight">
-                  我们即将完成最后一步
+                  设置完成，开始浏览
                 </h2>
                 <p className="text-xs font-medium text-slate-500 leading-relaxed max-w-[320px]">
-                  您是否需要我们指引你如何使用巴士线路图？
+                  缩小查看各地线网概览，放大到城市后自动加载详细线路。暂无数据时，可按页面提示进行全市检索。
                 </p>
               </div>
             )}
@@ -498,7 +498,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
                   onClick={() => setConfirmSkipAll(true)}
                   className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-500 hover:text-slate-800 hover:bg-m3-surface-container transition-all cursor-pointer"
                 >
-                  跳过
+                  进入地图
                 </button>
               )}
               {step === 1 && confirmSkipAll && (
@@ -525,7 +525,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
                   onClick={onFinishOnboarding}
                   className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-500 hover:text-slate-800 hover:bg-m3-surface-container transition-all cursor-pointer"
                 >
-                  跳过
+                  进入地图
                 </button>
               )}
             </div>
