@@ -1,0 +1,32 @@
+<!doctype html><meta charset="utf-8"><title>城市检索服务</title>
+<script>
+(()=>{
+ let channel='',ready=false;
+ const origin=location.origin;
+ const send=data=>parent.postMessage({...data,channel},origin);
+ // Strip SDK instances and circular metadata; coordinates retain their original numeric precision.
+ const plain=(value,seen=new WeakSet())=>{
+  if(value==null||typeof value!=='object')return typeof value==='function'?undefined:value;
+  if(typeof value.getLng==='function'&&typeof value.getLat==='function')return {lng:value.getLng(),lat:value.getLat()};
+  if(seen.has(value))return undefined;seen.add(value);
+  const result=Array.isArray(value)?value.map(item=>plain(item,seen)):Object.fromEntries(Object.keys(value).map(key=>[key,plain(value[key],seen)]).filter(([,v])=>v!==undefined));
+  seen.delete(value);return result;
+ };
+ addEventListener('message',event=>{
+  if(event.source!==parent||event.origin!==origin)return;
+  const data=event.data||{};
+  if(data.type==='init'&&!channel&&/^[a-f0-9]{32}$/i.test(data.key||'')&&/^[a-f0-9]{32}$/i.test(data.securityCode||'')){
+   channel=data.channel;window._AMapSecurityConfig={securityJsCode:data.securityCode};
+   const script=document.createElement('script');
+   script.src='https://webapi.amap.com/maps?v=2.0&key='+encodeURIComponent(data.key)+'&plugin=AMap.PlaceSearch,AMap.LineSearch,AMap.StationSearch,AMap.DistrictSearch';
+   script.onload=()=>{ready=true;send({type:'ready'});};script.onerror=()=>send({type:'error'});document.head.appendChild(script);return;
+  }
+  if(!ready||data.channel!==channel||data.type!=='query'||!Number.isInteger(data.id)||!['PlaceSearch','LineSearch','StationSearch','DistrictSearch'].includes(data.service)||!['search','searchInBounds'].includes(data.method))return;
+  try{
+   const service=new AMap[data.service](data.options||{}),args=data.args||[];
+   if(data.method==='searchInBounds')args[1]=new AMap.Bounds(args[1][0],args[1][1]);
+   service[data.method](...args,(status,result)=>{try{send({type:'result',id:data.id,status,result:plain(result)});}catch{send({type:'result',id:data.id,status:'error',result:{info:'RESULT_SERIALIZATION_FAILED'}});}});
+  }catch{send({type:'result',id:data.id,status:'error',result:{info:'SEARCH_FAILED'}});}
+ });
+})();
+</script>
