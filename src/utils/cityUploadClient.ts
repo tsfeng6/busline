@@ -11,7 +11,7 @@ export async function uploadCitySnapshot(base:string,input:CityDataset,onProgres
   const compressed=typeof CompressionStream!=='undefined';
   if(compressed)bytes=await new Response(bytes.stream().pipeThrough(new CompressionStream('gzip'))).blob();
   const chunkSize=CITY_CHUNK_BYTES;
-  if(bytes.size>MAX_CITY_BYTES)throw Error('本次数据超过1GB（1GiB），仍可保留地图或导出JSON。');
+  if(bytes.size>MAX_CITY_BYTES)throw Error('本次数据超过1GB（1GiB），仍可在当前地图中查看。');
   const hash=await cityBlobHash(bytes);
   const request=async(path:string,init:RequestInit={})=>{
     const response=await transport(base.replace(/\/$/,'')+path,{...init,signal:AbortSignal.timeout(30000)});

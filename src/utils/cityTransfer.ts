@@ -20,7 +20,7 @@ export async function cityUploadBlob(data: CityDataset): Promise<Blob> {
   }
   if (records.length) blocks.push(new Blob(records));
   const blob=new Blob(blocks, { type: 'application/x-ndjson' });
-  if(blob.size>MAX_CITY_BYTES)throw Error('本次数据超过1GB（1GiB），仍可保留地图或导出JSON。');
+  if(blob.size>MAX_CITY_BYTES)throw Error('本次数据超过1GB（1GiB），仍可在当前地图中查看。');
   return blob;
 }
 /** SHA256 of ordered chunk SHA256s: bounded memory, detects corruption/reordering. */

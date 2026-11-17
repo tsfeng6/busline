@@ -53,25 +53,3 @@ export async function saveSharedCity(data: CityDataset, token: string) {
   return result;
 }
 export const listSharedCityHistory = (city: string): Promise<CitySnapshotMeta[]> => read(city, 'history');
-export async function loadHistoricalCity(city: string, id: string): Promise<CityDataset> {
-  if (!/^[\dTZ-]+-[a-f0-9]{12}$/.test(id)) throw new Error('快照版本无效。');
-  return normalizeCityDataset(await read(city, `history/${id}`));
-}
-function cityExportBlob(data:CityDataset) {
-  const {lines,stops,...header}=data;
-  const blocks:Blob[]=[];
-  for(const [kind,records] of [['lines',lines],['stops',stops]] as const){
-    let parts:BlobPart[]=[`,"${kind}":[`],length=0;
-    for(let i=0;i<records.length;i++){const record=(i?',':'')+JSON.stringify(records[i]);parts.push(record);length+=record.length;if(length>1024*1024){blocks.push(new Blob(parts));parts=[];length=0;}}
-    parts.push(']');blocks.push(new Blob(parts));
-  }
-  return new Blob([JSON.stringify(header).slice(0,-1),...blocks,'}'],{type:'application/json;charset=utf-8'});
-}
-export function exportCityJSON(data: CityDataset) {
-  const url = URL.createObjectURL(cityExportBlob(data));
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${cityDataKey(data.city)}-${data.capturedAt.slice(0, 10)}.json`;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}

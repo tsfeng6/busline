@@ -10413,6 +10413,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         <div className="px-3 py-1 bg-m3-primary-container rounded-full border border-m3-outline/5 select-none font-sans">
                            <span className="text-[9px] font-black text-m3-on-primary-container tracking-widest uppercase">busline 5.5</span>
                         </div>
+                        <section aria-label="数据来源与侵权投诉" className="w-full rounded-2xl bg-m3-surface-container border border-m3-outline-variant/30 p-4 text-xs leading-relaxed text-slate-600 space-y-2 select-text">
+                          <h4 className="font-bold text-slate-800">数据来源与说明</h4>
+                          <p>本站公交线路、站点及轨迹数据主要来源于高德地图开放平台，用于公交线路可视化展示与爱好者交流。相关数据及标识的权利归相应权利人所有。</p>
+                          <p>数据可能存在更新延迟、缺漏或误差，仅供参考；实际线路、站点及运营时间请以公交运营方最新公告为准。</p>
+                          <p>如您认为本站内容侵犯您的合法权益，请提供具体页面或线路、权属证明及联系方式，我们将在核实后及时处理。</p>
+                          <p>侵权投诉邮箱：<a href="mailto:hextyrz@gmail.com" className="text-m3-primary underline underline-offset-2 break-all">hextyrz@gmail.com</a></p>
+                        </section>
                         <div className="flex flex-col items-center mt-2 gap-3">
                            <span 
                              onClick={handleFooterClick}
@@ -11063,6 +11070,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       </main>
 
       <footer className="fixed bottom-2 right-4 sm:bottom-3 sm:right-6 z-10 pointer-events-none flex flex-col items-end gap-1.5">
+        <p className="max-w-[70vw] text-right text-[10px] leading-snug text-slate-600 bg-m3-surface/85 rounded px-1.5 py-0.5">
+          公交线路数据来源：高德地图开放平台 · 仅供参考
+        </p>
         <div className="mr-1 cursor-pointer pointer-events-auto" onClick={handleFooterClick}>
           <span className="text-[9px] font-bold text-slate-400 opacity-60 uppercase tracking-widest leading-none select-none">@TsFeng</span>
         </div>
