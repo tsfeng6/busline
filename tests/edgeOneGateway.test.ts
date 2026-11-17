@@ -79,3 +79,11 @@ test('EdgeOne Actions reader rejects payload hash tampering before publication',
  const key=`chunks/${job.id}/0`,part=new Uint8Array(f.data.get(key) as ArrayBuffer);part[0]^=1;f.data.set(key,part.buffer);
  await assert.rejects(readCityUpload(new URL('https://upload.example'),job.id!,'北京市',env.CALLBACK_SECRET,f.transport));
 });
+
+test('Node function request adapters without a Web stream body can submit valid manifests',async()=>{
+ const f=fixture();
+ const raw=JSON.stringify({city:'北京',bytes:2,parts:1,sha256:'a'.repeat(64)});
+ const request={url:'https://upload.example/uploads',method:'POST',headers:new Headers({Origin:'https://busline.cc','Content-Length':String(Buffer.byteLength(raw))}),body:undefined,arrayBuffer:async()=>new TextEncoder().encode(raw).buffer} as unknown as Request;
+ const response=await handleEdgeOneGateway(request,env,f.store);
+ assert.equal(response.status,200);assert.ok((await response.json()).token);
+});

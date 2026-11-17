@@ -18,7 +18,13 @@ const equal=(a:string,b:string)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&ti
 export const gatewaySignature=(secret:string,text:string)=>createHmac('sha256',secret).update(text).digest('hex');
 async function bodyBytes(request:Request,limit:number){
   if(Number(request.headers.get('content-length')||0)>limit)throw fail(413,'请求内容过大。');
-  const reader=request.body?.getReader();const chunks:Uint8Array[]=[];let size=0;
+  // Some Node function adapters expose arrayBuffer()/text(), but not a Web ReadableStream body.
+  if(!request.body||typeof request.body.getReader!=='function'){
+    const bytes=typeof request.arrayBuffer==='function'?new Uint8Array(await request.arrayBuffer()):new TextEncoder().encode(await request.text());
+    if(bytes.byteLength>limit)throw fail(413,'请求内容过大。');
+    return bytes;
+  }
+  const reader=request.body.getReader();const chunks:Uint8Array[]=[];let size=0;
   if(reader)for(;;){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;
     if(size>limit){await reader.cancel();throw fail(413,'请求内容过大。');}chunks.push(value);}
   const bytes=new Uint8Array(size);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.length;}return bytes;
