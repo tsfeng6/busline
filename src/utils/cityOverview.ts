@@ -1,21 +1,35 @@
 export const CITY_DETAIL_ZOOM = 11;
 export type CityOverview = {city:string;center:[number,number];bounds:[number,number,number,number];lineDirections:number;capturedAt:string;thumbnail:string};
+export const mercatorY=(latitude:number)=>180/Math.PI*Math.log(Math.tan(Math.PI/4+Math.max(-85,Math.min(85,latitude))*Math.PI/360));
+/** Pixels map directly to the image's geographic bounds, with no card padding or fitting offsets. */
+export function overviewPixel(point:[number,number],bounds:CityOverview['bounds'],width:number,height:number):[number,number]{
+  return [(point[0]-bounds[0])/(bounds[2]-bounds[0])*(width-1),
+    (mercatorY(bounds[3])-mercatorY(point[1]))/(mercatorY(bounds[3])-mercatorY(bounds[1]))*(height-1)];
+}
+export function validCityOverview(c:any):c is CityOverview{
+  return typeof c?.city==='string'&&Array.isArray(c.bounds)&&c.bounds.length===4&&c.bounds.every(Number.isFinite)
+    &&c.bounds[0]>=-180&&c.bounds[2]<=180&&c.bounds[1]>=-85&&c.bounds[3]<=85&&c.bounds[0]<c.bounds[2]&&c.bounds[1]<c.bounds[3]
+    &&/^thumbnails\/[\p{L}\p{N}·% _-]+\.(?:svg|png)$/u.test(c.thumbnail);
+}
 /** Display-only rasterization. Source coordinates are read, never rounded or rewritten. */
 export function cityThumbnail(data:{city:string;capturedAt:string;lines:{path:[number,number][]}[]}) {
   let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
-  for(const line of data.lines||[])for(const [x,y] of line.path||[]){if(!Number.isFinite(x)||!Number.isFinite(y))continue;minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);}
+  for(const line of data.lines||[])for(const [x,y] of line.path||[]){if(!Number.isFinite(x)||!Number.isFinite(y)||Math.abs(y)>85)continue;minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);}
   if(!Number.isFinite(minX))return null;
-  const W=160,H=100,grid=new Uint8Array(W*H),scale=Math.min((W-12)/Math.max(maxX-minX,1e-6),(H-12)/Math.max(maxY-minY,1e-6));
-  const ox=(W-(maxX-minX)*scale)/2,oy=(H-(maxY-minY)*scale)/2;
+  if(maxX===minX){minX-=.00001;maxX+=.00001;}if(maxY===minY){minY-=.00001;maxY+=.00001;}
+  const bounds:[number,number,number,number]=[minX,minY,maxX,maxY];
+  const ratio=(maxX-minX)/(mercatorY(maxY)-mercatorY(minY));
+  const W=ratio>=1?512:Math.max(32,Math.round(512*ratio)),H=ratio>=1?Math.max(32,Math.round(512/ratio)):512;
+  const grid=new Uint8Array(W*H);
   for(const line of data.lines||[]){let previous:[number,number]|null=null;
-    for(const [x,y] of line.path||[]){if(!Number.isFinite(x)||!Number.isFinite(y)){previous=null;continue;}
-      const point:[number,number]=[Math.round(ox+(x-minX)*scale),Math.round(oy+(maxY-y)*scale)];
+    for(const [x,y] of line.path||[]){if(!Number.isFinite(x)||!Number.isFinite(y)||Math.abs(y)>85){previous=null;continue;}
+      const pixel=overviewPixel([x,y],bounds,W,H);const point:[number,number]=[Math.round(pixel[0]),Math.round(pixel[1])];
       if(previous){const steps=Math.max(Math.abs(point[0]-previous[0]),Math.abs(point[1]-previous[1]));
         for(let i=0;i<=steps;i++){const t=steps?i/steps:0,px=Math.round(previous[0]+(point[0]-previous[0])*t),py=Math.round(previous[1]+(point[1]-previous[1])*t);if(px>=0&&px<W&&py>=0&&py<H)grid[py*W+px]=1;}
       }previous=point;
     }
   }
-  let d='';for(let y=0;y<H;y++)for(let x=0;x<W;x++){if(!grid[y*W+x])continue;const start=x;while(x+1<W&&grid[y*W+x+1])x++;d+=`M${start} ${y}h${x-start+1}`;}
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100" viewBox="0 0 160 100"><rect width="160" height="100" rx="12" fill="#f2f6f3"/><path d="${d}" fill="none" stroke="#52796f" stroke-width="1.2" stroke-linecap="round"/></svg>`;
-  return {svg,meta:{city:data.city,center:[(minX+maxX)/2,(minY+maxY)/2] as [number,number],bounds:[minX,minY,maxX,maxY] as [number,number,number,number],lineDirections:data.lines.length,capturedAt:data.capturedAt}};
+  let d='';for(let y=0;y<H;y++)for(let x=0;x<W;x++){if(!grid[y*W+x])continue;const start=x;while(x+1<W&&grid[y*W+x+1])x++;d+=`M${start} ${y}h${Math.max(.5,x-start)}`;}
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W-1} ${H-1}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="#52796f" stroke-width="1.25" stroke-linecap="round"/></svg>`;
+  return {svg,raster:{width:W,height:H,pixels:grid},meta:{city:data.city,center:[(minX+maxX)/2,(minY+maxY)/2] as [number,number],bounds,lineDirections:data.lines.length,capturedAt:data.capturedAt}};
 }
