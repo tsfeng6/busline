@@ -8,7 +8,7 @@ export function CityOverviewLayer({map,zoom,enabled,detailReady=false}:{map:any;
  useEffect(()=>{
   if(!map||!enabled)return;
   const controller=new AbortController();
-  fetch(`${import.meta.env.BASE_URL}city-data/v1/overview.json?v=xyz-v1`,{signal:controller.signal,cache:'no-cache'})
+  fetch(`${import.meta.env.BASE_URL}city-data/v1/overview.json?v=xyz-hd2`,{signal:controller.signal,cache:'no-cache'})
    .then(r=>{if(!r.ok)throw Error('Overview unavailable');return r.json();})
    .then(data=>{if(data.schemaVersion!==3||!validTileIndex(data.tiles))throw Error('Invalid tile index');setIndex(data.tiles);})
    .catch(()=>{/* Precise data and manual search remain independent. */});
@@ -19,8 +19,8 @@ export function CityOverviewLayer({map,zoom,enabled,detailReady=false}:{map:any;
   const AMap=(window as any).AMap;if(!AMap?.TileLayer)return;
   const keys=new Set(index.keys);
   const layer=new AMap.TileLayer({getTileUrl:(x:number,y:number,z:number)=>{
-   const key=`${z}/${x}/${y}`;return keys.has(key)?`${import.meta.env.BASE_URL}city-data/v1/${index.base}/${key}.png?v=${index.revision}`:EMPTY_TILE;
-  },zooms:[index.minZoom,index.maxZoom],zIndex:20,opacity:.95});
+   const key=`${z}/${x}/${y}`;return keys.has(key)?`${import.meta.env.BASE_URL}city-data/v1/${index.base}/${key}.png?v=${index.revision}&q=hd2`:EMPTY_TILE;
+  },tileSize:256,zooms:[index.minZoom,index.maxZoom],zIndex:20,opacity:.95});
   map.add(layer);return()=>map.remove(layer);
  },[map,overviewVisible,index]);
  return null;

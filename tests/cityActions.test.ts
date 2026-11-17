@@ -250,7 +250,8 @@ test('local search contains no automatic update or upload calls before the user 
   assert.ok(!search.includes('saveSharedCity('));
   assert.ok(!search.includes('acquireCityRefresh('));
   assert.ok(search.includes('setPendingCityUpload(dataset)'));
-  assert.ok(search.includes('new AMap.PlaceSearch('));
+  assert.ok(search.includes('new searchServices.PlaceSearch('));
+  assert.ok(search.includes('await getCitySearchServices(customApiKey, customApiSecurityCode)'));
 });
 
 

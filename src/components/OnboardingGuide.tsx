@@ -217,7 +217,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
 
   // Step 1 ~ 5: Onboarding Wizard Cards
   const handleNext = () => {
-    if (step === 4 && useCustomApiKey && citySearchApiStatus(true, customApiKey, customApiSecurityCode, {isCustom:false,key:'',securityCode:''}) === 'missing') {
+    if (step === 4 && useCustomApiKey && citySearchApiStatus(true, customApiKey, customApiSecurityCode) === 'missing') {
       setApiErrorHint('请填写有效的高德 Web端 API Key 和 Security Code，或暂时关闭自定义 API，仅查看共享线路');
       return;
     }
@@ -402,9 +402,9 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
                         <KeyRound className="w-4 h-4" />
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-xs font-black text-slate-800">使用自定义高德API</span>
+                        <span className="text-xs font-black text-slate-800">全市检索使用自有高德 API</span>
                         <span className="text-[10px] font-medium text-slate-400">
-                          {useCustomApiKey ? '已启用专属 API（引导结束后刷新生效）' : '当前使用默认公共 API'}
+                          {useCustomApiKey ? '仅全市检索使用您的 API' : '仅使用公共搜索与已有共享线路'}
                         </span>
                       </div>
                     </div>
@@ -466,7 +466,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
                         <p className="text-[10px] font-bold text-red-500">{apiErrorHint}</p>
                       ) : (
                         <p className="text-[10px] font-medium text-slate-400">
-                          填写数据将自动同步保存，待全部引导结束后自动刷新页面生效。
+                          配置自动保存在本机浏览器，下次全市检索时生效；普通搜索继续使用公共 API。
                         </p>
                       )}
                     </div>

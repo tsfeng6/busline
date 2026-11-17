@@ -1,3 +1,4 @@
+import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
 import {MapActivityIndicator} from './components/MapActivityIndicator';
 import { CityOverviewLayer } from './components/CityOverviewLayer';
@@ -122,27 +123,6 @@ const deleteApprovedLineInFirebase = async (id: string, adminPassword?: string) 
 const getInitialAmapConfig = () => {
   const defaultKey = import.meta.env.VITE_AMAP_KEY || '20f5c6b65349e5d4cb5f58c7e0c4a4ba'; 
   const defaultSecurityCode = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
-  if (typeof window !== 'undefined') {
-    const useCustom = localStorage.getItem('app_use_custom_api_key') === 'true';
-    const customKey = localStorage.getItem('app_custom_api_key')?.trim();
-    const customSec = localStorage.getItem('app_custom_api_security_code')?.trim();
-
-    if (useCustom && (!customKey || customKey.length < 5)) {
-      localStorage.setItem('app_use_custom_api_key', 'false');
-      localStorage.setItem('app_api_fallback_message', '您填写的是无效的高德API，因此您的巴士线路图已重新恢复公共API');
-      return {
-        key: defaultKey,
-        securityCode: defaultSecurityCode,
-        isCustom: false,
-      };
-    }
-
-    return {
-      isCustom: !!(useCustom && customKey),
-      key: useCustom && customKey ? customKey : defaultKey,
-      securityCode: useCustom && customSec ? customSec : defaultSecurityCode,
-    };
-  }
   return { key: defaultKey, securityCode: defaultSecurityCode, isCustom: false };
 };
 
@@ -240,12 +220,12 @@ const compressImageToBase64 = (file: File): Promise<string> => {
         const MAX_WIDTH = 800;
         let width = img.width;
         let height = img.height;
-        
+
         if (width > MAX_WIDTH) {
           height = Math.round((height * MAX_WIDTH) / width);
           width = MAX_WIDTH;
         }
-        
+
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
@@ -295,7 +275,7 @@ export default function App() {
   const activeRawMarkersRef = useRef<any[]>([]);
   const roadStopsDataRef = useRef<Map<string, any>>(new Map());
   const activeBusLinePolylineRef = useRef<any | null>(null);
-  const referenceAreaOverlayRef = useRef<any | null>(null);
+
   const searchVersionRef = useRef<number>(0);
   const aggregateVersionRef = useRef(0);
   const roadLookupVersionRef = useRef(0);
@@ -350,13 +330,7 @@ export default function App() {
     window.addEventListener('focus', refresh);
     return () => { clearInterval(interval); window.removeEventListener('storage', refresh); window.removeEventListener('focus', refresh); };
   }, []);
-  const openGameApiSettings = () => {
-    exitMinigameToMap();
-    focusCustomApiRef.current = true;
-    setUseCustomApiKey(true);
-    setSettingsTab('general');
-    setShowSettings(true);
-  };
+
 
   const [gameTimeLeft, setGameTimeLeft] = useState<number | null>(null);
   const [gameTimedOut, setGameTimedOut] = useState(false);
@@ -782,12 +756,12 @@ export default function App() {
       try {
         if (!consumeGameQuota(localStorage)) {
           setPublicGamesUsed(readGameQuota(localStorage));
-          setApiErrorNotification('为保障公共API使用，本浏览器今日3局游戏已用完。请填写自己的高德API，刷新生效后继续游戏。');
+          setApiErrorNotification('为保障公共API使用，本浏览器今日3局游戏已用完，请明日再来。');
           return;
         }
         setPublicGamesUsed(readGameQuota(localStorage));
       } catch {
-        setApiErrorNotification('无法保存每日游戏次数，请允许浏览器本地存储，或填写自己的高德API后继续。');
+        setApiErrorNotification('无法保存每日游戏次数，请允许浏览器本地存储后继续。');
         return;
       }
     }
@@ -2020,7 +1994,7 @@ export default function App() {
   });
   const stationLineStatsRef = useRef(stationLineStats);
   useEffect(() => { stationLineStatsRef.current = stationLineStats; }, [stationLineStats]);
-  
+
   const stopCountCacheRef = useRef<Map<string, number>>(new Map());
 
   const [showSettings, setShowSettings] = useState(false);
@@ -2044,7 +2018,7 @@ export default function App() {
   const [aiSearchProgress, setAISearchProgress] = useState('');
   const [aiRegionContext, setAIRegionContext] = useState<AIRegionContext | null>(null);
   const [settingsTab, setSettingsTab] = useState<'general' | 'about' | 'dataFilter'>('general');
-  
+
   // WeChat Group QR Code management
   const [showWeChatQR, setShowWeChatQR] = useState(false);
   const [adminPasswordUsed, setAdminPasswordUsed] = useState('');
@@ -2100,7 +2074,7 @@ export default function App() {
               password: adminPasswordUsed || 'buslineadmin'
             }),
           });
-          
+
           if (response.ok) {
             localStorage.setItem('app_wechat_qr_img', base64);
             const now = Date.now();
@@ -2192,24 +2166,13 @@ export default function App() {
     const saved = localStorage.getItem('app_line_thickness');
     return (saved === 'thin' || saved === 'thick') ? saved : 'thick';
   });
-  const [showReferenceArea, setShowReferenceArea] = useState(() => {
-    const saved = sessionStorage.getItem('app_show_reference_area');
-    return saved === null ? true : saved === 'true';
-  });
-  const showReferenceAreaRef = useRef(showReferenceArea);
-  useEffect(() => {
-    showReferenceAreaRef.current = showReferenceArea;
-  }, [showReferenceArea]);
 
-  const referenceBoxRef = useRef<any | null>(null);
-  const referenceAreaTextRef = useRef<any | null>(null);
-  const isPosOutsideReferenceArea = (lng: number, lat: number) => {
-    if (showReferenceAreaRef.current && referenceBoxRef.current) {
-      const box = referenceBoxRef.current;
-      return (lng < box.minLng || lng > box.maxLng || lat < box.minLat || lat > box.maxLat);
-    }
-    return false;
-  };
+
+
+
+
+
+
 
   const [showToolbox, setShowToolbox] = useState(false);
   const [mapInstance, setMapInstance] = useState<any>(null);
@@ -2602,14 +2565,6 @@ export default function App() {
   }, [customApiKey]);
   useEffect(() => {
     localStorage.setItem('app_custom_api_security_code', customApiSecurityCode);
-    if (typeof window !== 'undefined') {
-      const code = useCustomApiKey && customApiSecurityCode.trim() 
-        ? customApiSecurityCode.trim() 
-        : (import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075');
-      (window as any)._AMapSecurityConfig = {
-        securityJsCode: code,
-      };
-    }
   }, [customApiSecurityCode, useCustomApiKey]);
 
   // First-time / version-upgrade onboarding state
@@ -2623,11 +2578,7 @@ export default function App() {
     const savedVersion = localStorage.getItem(APP_LAST_VERSION_KEY);
     return !!savedVersion && compareVersions(APP_VERSION, savedVersion) > 0;
   });
-  const initialApiSnapshotRef = useRef({
-    useCustom: useCustomApiKey,
-    key: customApiKey,
-    sec: customApiSecurityCode,
-  });
+
   const barButtonRefs = useRef<(HTMLElement | null)[]>([]);
 
   const handleOnboardingSelectCache = async (enabled: boolean) => {
@@ -2655,16 +2606,7 @@ export default function App() {
   const handleFinishOnboarding = () => {
     localStorage.setItem(APP_LAST_VERSION_KEY, APP_VERSION);
     setOnboardingStep(0);
-    const snap = initialApiSnapshotRef.current;
-    const apiChanged =
-      useCustomApiKey !== snap.useCustom ||
-      (useCustomApiKey && (customApiKey !== snap.key || customApiSecurityCode !== snap.sec));
-    if (apiChanged) {
-      localStorage.setItem('app_use_custom_api_key', String(useCustomApiKey));
-      localStorage.setItem('app_custom_api_key', customApiKey);
-      localStorage.setItem('app_custom_api_security_code', customApiSecurityCode);
-      window.location.reload();
-    }
+
   };
 
   const handleResetApp = async () => {
@@ -2701,37 +2643,13 @@ export default function App() {
   }, []);
 
   // Automatic recovery handler when custom API is broken or invalid
-  const triggerCustomApiFallback = useCallback(() => {
-    const isCustom = localStorage.getItem('app_use_custom_api_key') === 'true';
-    if (!isCustom) return;
 
-    // 1. Immediately turn off custom API in storage and state
-    localStorage.setItem('app_use_custom_api_key', 'false');
-    // 2. Set exact required prompt
-    localStorage.setItem('app_api_fallback_message', '您填写的是无效的高德API，因此您的巴士线路图已重新恢复公共API');
-
-    const defaultSecurityCode = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
-    if (typeof window !== 'undefined') {
-      (window as any)._AMapSecurityConfig = {
-        securityJsCode: defaultSecurityCode,
-      };
-    }
-
-    setUseCustomApiKey(false);
-    setApiErrorNotification('您填写的是无效的高德API，因此您的巴士线路图已重新恢复公共API');
-    setLoading(false);
-
-    // Reload with clean script environment to restore default public API immediately
-    setTimeout(() => {
-      window.location.reload();
-    }, 120);
-  }, []);
 
   const checkAmapQuotaError = useCallback((status: string, result: any) => {
     if (status === 'error' || (result && result.info && result.info !== 'OK' && result.info !== 'NO_DATA')) {
       const info = String(result?.info || '').toUpperCase();
       const infocode = String(result?.infocode || '');
-      
+
       if (
         info.includes('INVALID_USER_KEY') ||
         info.includes('PLAT_NOMATCH') ||
@@ -2740,10 +2658,7 @@ export default function App() {
         infocode === '10001' ||
         infocode === '10002'
       ) {
-        if (localStorage.getItem('app_use_custom_api_key') === 'true') {
-          triggerCustomApiFallback();
-          return true;
-        }
+
         setApiErrorNotification(
           '高德 API Key 无效或平台类型不匹配。请确认在设置中配置的是高德「Web端 (JS API)」类型的 Key 与安全密钥。'
         );
@@ -2756,7 +2671,7 @@ export default function App() {
         infocode === '10044'
       ) {
         setApiErrorNotification(
-          '高德 API 配额不足（日调用量已达上限）。建议前往设置开启“使用自定义高德API”并填入专属 Key 与安全密钥。'
+          '高德查询配额已达上限，请稍后再试；全市检索请检查您自己的 API 配额。'
         );
         return true;
       }
@@ -2766,7 +2681,7 @@ export default function App() {
       }
     }
     return false;
-  }, [triggerCustomApiFallback]);
+  }, []);
 
   useEffect(() => {
     if (apiErrorNotification) {
@@ -2784,13 +2699,10 @@ export default function App() {
         msg.includes('INVALID_USER_SCODE') ||
         msg.includes('KEY_NOT_EXIST')
       ) {
-        if (localStorage.getItem('app_use_custom_api_key') === 'true') {
-          triggerCustomApiFallback();
-          return;
-        }
+
         setApiErrorNotification('高德 API Key 无效或平台类型不匹配，请前往设置检查。');
       } else if (msg.includes('DAILY_QUERY_OVER_LIMIT') || msg.includes('OVER_LIMIT')) {
-        setApiErrorNotification('高德 API 配额不足（日调用量已达上限），请在设置中配置自定义 API。');
+        setApiErrorNotification('公共高德 API 配额不足，请稍后再试；已有共享线路仍可查看。');
       }
     };
 
@@ -2803,9 +2715,7 @@ export default function App() {
         reason.includes('KEY_NOT_EXIST') ||
         (reason.includes('AMAP') && (reason.includes('FAIL') || reason.includes('ERROR')))
       ) {
-        if (localStorage.getItem('app_use_custom_api_key') === 'true') {
-          triggerCustomApiFallback();
-        }
+        setApiErrorNotification('公共高德服务暂时不可用，请稍后重试。');
       }
     };
 
@@ -2815,7 +2725,7 @@ export default function App() {
       window.removeEventListener('error', handleWindowError);
       window.removeEventListener('unhandledrejection', handleUnhandledRejection);
     };
-  }, [triggerCustomApiFallback]);
+  }, []);
 
   const [footerClickCount, setFooterClickCount] = useState(0);
   const [lastFooterClickTime, setLastFooterClickTime] = useState(0);
@@ -2850,7 +2760,7 @@ export default function App() {
       lines: Set<string>;
       locations: any[];
     }>();
-    
+
     boxSelectedStops.forEach((stop: any) => {
       const name = stop.name;
       let existing = mapByName.get(name);
@@ -2899,7 +2809,7 @@ export default function App() {
   const handleSingleStopSelectionToggle = (key: string, isCtrlPressed: boolean) => {
     const stop = allMapStopsRef.current.get(key);
     if (!stop) return;
-    
+
     if (isCtrlPressed) {
       setBoxSelectedStops(prev => {
         const index = prev.findIndex(s => s.key === key);
@@ -2919,7 +2829,7 @@ export default function App() {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    
+
     setBoxSelectStartPos({ x, y });
     setBoxSelectEndPos({ x, y });
     setIsBoxSelecting(true);
@@ -2930,7 +2840,7 @@ export default function App() {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    
+
     setBoxSelectEndPos({ x, y });
   };
 
@@ -2939,32 +2849,32 @@ export default function App() {
       setIsBoxSelecting(false);
       return;
     }
-    
+
     setIsBoxSelecting(false);
-    
+
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    
+
     const x1 = boxSelectStartPos.x;
     const y1 = boxSelectStartPos.y;
     const x2 = x;
     const y2 = y;
-    
+
     const width = Math.abs(x2 - x1);
     const height = Math.abs(y2 - y1);
-    
+
     const map = mapRef.current;
     if (!map) return;
-    
+
     const isClick = width < 5 && height < 5;
-    
+
     if (isClick) {
       if (markerGroupRef.current) {
         const overlays = markerGroupRef.current.getOverlays();
         let closestOverlay: any = null;
         let minPixelDist = 25;
-        
+
         overlays.forEach((o: any) => {
           const center = o.getCenter();
           if (center) {
@@ -2978,7 +2888,7 @@ export default function App() {
             }
           }
         });
-        
+
         if (closestOverlay) {
           const ext = closestOverlay.getExtData ? closestOverlay.getExtData() : null;
           if (ext && ext.key) {
@@ -2991,18 +2901,18 @@ export default function App() {
       const maxX = Math.max(x1, x2);
       const minY = Math.min(y1, y2);
       const maxY = Math.max(y1, y2);
-      
+
       if (markerGroupRef.current) {
         const overlays = markerGroupRef.current.getOverlays();
         const selectedKeys: string[] = [];
-        
+
         overlays.forEach((o: any) => {
           const center = o.getCenter();
           if (center) {
             const containerPixel = map.lngLatToContainer(center);
             const cx = typeof containerPixel.getX === 'function' ? containerPixel.getX() : containerPixel.x;
             const cy = typeof containerPixel.getY === 'function' ? containerPixel.getY() : containerPixel.y;
-            
+
             if (cx >= minX && cx <= maxX && cy >= minY && cy <= maxY) {
               const ext = o.getExtData ? o.getExtData() : null;
               if (ext && ext.key) {
@@ -3011,7 +2921,7 @@ export default function App() {
             }
           }
         });
-        
+
         if (selectedKeys.length > 0) {
           if (e.ctrlKey || e.metaKey) {
             setBoxSelectedStops(prev => {
@@ -3035,7 +2945,7 @@ export default function App() {
         }
       }
     }
-    
+
     setBoxSelectStartPos(null);
     setBoxSelectEndPos(null);
   };
@@ -3054,7 +2964,7 @@ export default function App() {
     if (!markerGroupRef.current) return;
     const overlays = markerGroupRef.current.getOverlays();
     const selectedKeys = new Set(boxSelectedStops.map(s => s.key));
-    
+
     overlays.forEach((o: any) => {
       const ext = o.getExtData ? o.getExtData() : null;
       if (ext && ext.key) {
@@ -3113,7 +3023,7 @@ export default function App() {
       0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
       0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
     ];
-    
+
     const bytes = new TextEncoder().encode(message);
     const words: number[] = [];
     for (let i = 0; i < bytes.length; i++) {
@@ -3125,7 +3035,7 @@ export default function App() {
     const padIdx = len >> 2;
     if (words[padIdx] === undefined) words[padIdx] = 0;
     words[padIdx] |= 0x80 << (24 - (len % 4) * 8);
-    
+
     while (((words.length + 2) % 16) !== 0) {
       words.push(0);
     }
@@ -3197,9 +3107,9 @@ export default function App() {
         const data = await res.json();
         list = data || [];
       }
-      
+
       setApprovedUserLines(list);
-      
+
       // Load user submitted lines into fetchedLinesCache
       list.forEach((ul: any) => {
         fetchedLinesCache.current.set(ul.name, {
@@ -3251,7 +3161,7 @@ export default function App() {
         .filter((id): id is string => typeof id === 'string' && id.trim() !== '');
 
       if (validIds.length === 0) return;
-      
+
       let data: Record<string, string> = {};
       if (isFirebaseEnabled()) {
         data = await checkSubmissionStatusFromFirebase(validIds);
@@ -3264,7 +3174,7 @@ export default function App() {
         }
         data = await res.json();
       }
-      
+
       // Compare with existing local statuses to find newly processed items
       let newlyApproved = 0;
       let newlyRejected = 0;
@@ -3362,7 +3272,6 @@ export default function App() {
     showBaseMap: '显示底图',
     satelliteMap: '卫星底图',
     showMoreInfo: '详细信息',
-    showReferenceArea: '显示参考区域',
     showUserSubmittedData: '显示用户添加数据',
     customDrawingDisabledHint: '自定义绘图功能已停用',
     lineThickness: '线条粗细',
@@ -3388,10 +3297,10 @@ export default function App() {
   };
 
   const t = (key: string) => translations[key] || key;
-  
+
   useEffect(() => {
     localStorage.setItem('app_line_thickness', lineThickness);
-    
+
     // Auto-redraw lines after changing thickness
     if (mapInstance) {
       if (activeBusLine) {
@@ -3403,21 +3312,7 @@ export default function App() {
     }
   }, [lineThickness]);
 
-  useEffect(() => {
-    sessionStorage.setItem('app_show_reference_area', String(showReferenceArea));
-    
-    // Auto-redraw reference area and clip lines after changing the setting
-    if (mapInstance) {
-      const AMap = (window as any).AMap;
-      drawReferenceArea(mapInstance, AMap);
-      
-      if (activeBusLine) {
-        renderBusLine(activeBusLine, AMap, mapInstance, true, true, false);
-      } else if (selectedSegmentLines && selectedSegmentLines.length > 0) {
-        aggregateAndVisualize(selectedSegmentLines, mapInstance, AMap);
-      }
-    }
-  }, [showReferenceArea, mapInstance]);
+
 
   const [baseMapVisible, setBaseMapVisible] = useState(true);
   const [selectionPos, setSelectionPos] = useState<[number, number] | null>(null);
@@ -3454,7 +3349,7 @@ export default function App() {
     };
   }, []);
 
-  
+
   const getRandomPastelColor = () => {
     const h = Math.floor(Math.random() * 360);
     return `hsl(${h}, 70%, 60%)`;
@@ -3694,13 +3589,13 @@ export default function App() {
 
   function syncStopMarkersToMap(map: any, AMap: any) {
     if (!markerGroupRef.current || isMinigameActiveRef.current) return;
-    
+
     if (!showStations || map.getZoom() < CITY_DETAIL_ZOOM) {
       syncLazyMarkers(markerGroupRef.current, []);
       setStats((prev: any) => ({ ...prev, stops: 0 }));
       return;
     }
-    
+
     const rawMarkers = activeRawMarkersRef.current || [];
     let visibleMarkers = rawMarkers;
 
@@ -3731,35 +3626,9 @@ export default function App() {
 
     }
 
-    const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
-    if (showReferenceAreaRef.current && box) {
-      visibleMarkers = visibleMarkers.filter((marker: any) => {
-        let latlng: [number, number] | null = null;
-        const ext = marker.getExtData ? marker.getExtData() : null;
-        if (ext && ext.key) {
-          const parts = ext.key.split(',').map(Number);
-          if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-            latlng = [parts[0], parts[1]];
-          }
-        }
-        if (!latlng) {
-          if (typeof marker.getCenter === 'function') {
-            const center = marker.getCenter();
-            if (center) latlng = [center.getLng(), center.getLat()];
-          } else if (typeof marker.getPosition === 'function') {
-            const pos = marker.getPosition();
-            if (pos) latlng = [pos.getLng(), pos.getLat()];
-          }
-        }
-        
-        if (latlng) {
-          const [lng, lat] = latlng;
-          return (lng >= box.minLng && lng <= box.maxLng && lat >= box.minLat && lat <= box.maxLat);
-        }
-        return true;
-      });
-    }
-    
+
+
+
     const eligibleCount = visibleMarkers.length;
     visibleMarkers = viewportStopMarkers(visibleMarkers, map);
     if (isTerminalMode) {
@@ -3792,7 +3661,7 @@ export default function App() {
         } catch (e) {}
       });
     }
-    
+
     syncLazyMarkers(markerGroupRef.current, visibleMarkers);
     setStats((prev: any) => ({ ...prev, stops: eligibleCount }));
 
@@ -3823,144 +3692,7 @@ export default function App() {
     return count;
   }, [cacheUpdateTick, stats.lines, stats.stops, isTerminalStation]);
 
-  const drawReferenceArea = (map: any, AMap: any) => {
-    if (referenceAreaOverlayRef.current) {
-      try {
-        map.remove(referenceAreaOverlayRef.current);
-      } catch (e) {
-        console.warn('Failed to remove reference area overlay', e);
-      }
-      referenceAreaOverlayRef.current = null;
-    }
 
-    if (referenceAreaTextRef.current) {
-      try {
-        map.remove(referenceAreaTextRef.current);
-      } catch (e) {
-        console.warn('Failed to remove reference area text overlay', e);
-      }
-      referenceAreaTextRef.current = null;
-    }
-
-    if (isClearedRef.current || !showReferenceAreaRef.current || !map || !AMap) {
-      syncStopMarkersToMap(map, AMap);
-      return null;
-    }
-
-    const thisSearchVersion = searchVersionRef.current;
-
-    let box = referenceBoxRef.current;
-    if (!box) {
-      const stopsList = Array.from(roadStopsDataRef.current.size > 0 ? roadStopsDataRef.current.values() : allMapStopsRef.current.values());
-      box = getBoxForStops(stopsList);
-      if (box) {
-        referenceBoxRef.current = box;
-      }
-    }
-
-    if (!box || isClearedRef.current) {
-      syncStopMarkersToMap(map, AMap);
-      return null;
-    }
-
-    const rectangle = new AMap.Rectangle({
-      bounds: new AMap.Bounds(
-        new AMap.LngLat(box.minLng, box.minLat),
-        new AMap.LngLat(box.maxLng, box.maxLat)
-      ),
-      strokeColor: '#52796F',
-      strokeWeight: 2,
-      strokeOpacity: 0.85,
-      fillColor: '#52796F',
-      fillOpacity: 0.02,
-      zIndex: 10,
-      bubble: true
-    });
-
-    rectangle.setMap(map);
-    referenceAreaOverlayRef.current = rectangle;
-
-    syncStopMarkersToMap(map, AMap);
-
-    // Setup Morandi sage label badge above the reference area
-    const centerLng = (box.minLng + box.maxLng) / 2;
-    const createTextLabel = (textStr: string) => {
-      if (isClearedRef.current || searchVersionRef.current !== thisSearchVersion) return;
-      if (referenceAreaTextRef.current) {
-        try {
-          map.remove(referenceAreaTextRef.current);
-        } catch (e) {
-          console.warn('Failed to remove text label', e);
-        }
-        referenceAreaTextRef.current = null;
-      }
-
-      const textMarker = new AMap.Text({
-        text: textStr,
-        anchor: 'bottom-center',
-        position: [centerLng, box.maxLat],
-        style: {
-          'background-color': '#2C443B',
-          'border-color': '#2C443B',
-          'color': '#ffffff',
-          'font-size': '11px',
-          'font-weight': '600',
-          'padding': '3px 10px',
-          'border-radius': '9999px',
-          'box-shadow': '0 4px 12px rgba(44, 68, 59, 0.15)',
-          'border-width': '0px',
-          'white-space': 'nowrap',
-          'letter-spacing': '0.04em'
-        },
-        offset: new AMap.Pixel(0, -8),
-        zIndex: 100
-      });
-      textMarker.setMap(map);
-      referenceAreaTextRef.current = textMarker;
-    };
-
-    let defaultLabel = '参考区域';
-    if (selectedSegmentName && selectedSegmentName !== "正在获取路段信息...") {
-      defaultLabel = selectedSegmentName;
-    } else if (selectedStop) {
-      defaultLabel = selectedStop.name;
-    } else if (currentCity) {
-      defaultLabel = currentCity;
-    }
-
-    createTextLabel(defaultLabel);
-
-    if (AMap.Geocoder) {
-      if (!geocoderRef.current) {
-        geocoderRef.current = new AMap.Geocoder({
-          radius: 1000,
-          extensions: 'base'
-        });
-      }
-      geocoderRef.current.getAddress([centerLng, (box.minLat + box.maxLat) / 2], (status: string, result: any) => {
-        if (isClearedRef.current || searchVersionRef.current !== thisSearchVersion) return;
-        if (status === 'complete' && result.regeocode) {
-          const addrComp = result.regeocode.addressComponent;
-          const district = addrComp.district || '';
-          const township = addrComp.township || '';
-          let preciseLabel = '';
-          if (district) {
-            preciseLabel = district;
-            if (township && !township.startsWith('无')) {
-              preciseLabel += ' · ' + township;
-            }
-          } else {
-            preciseLabel = addrComp.city || addrComp.province || defaultLabel;
-          }
-          if (preciseLabel) {
-            createTextLabel(preciseLabel);
-          }
-        }
-      });
-    }
-
-    return box;
-  };
 
   const renderBusLine = (line: any, AMap: any, map: any, clear = true, showMarkers = true, shouldFitView = true) => {
     roadLookupVersionRef.current++;
@@ -3979,9 +3711,9 @@ export default function App() {
     displayedLineNamesRef.current = clear ? [line.name] : Array.from(new Set([...displayedLineNamesRef.current, line.name]));
     setTimelineAvailable(true);
     let polylineObj: any = null;
-    
+
     let displayPaths = [path];
-    
+
     if (lineGroupRef.current) {
       if (clear) {
         // If there was an active single line polyline, remove it first
@@ -4002,7 +3734,7 @@ export default function App() {
           });
         });
       }
-      
+
       let polyline: any = null;
       if (displayPaths.length > 0) {
         polyline = new AMap.Polyline({
@@ -4024,13 +3756,11 @@ export default function App() {
           activeBusLinePolylineRef.current = polyline;
           polyline.on('click', (e: any) => {
             const clickLngLat = [e.lnglat.getLng(), e.lnglat.getLat()];
-            if (isPosOutsideReferenceArea(clickLngLat[0], clickLngLat[1])) {
-              return;
-            }
-            
+
+
             if (!(window as any).AMap.GeometryUtil) return;
             const GeometryUtil = (window as any).AMap.GeometryUtil;
-            
+
             // Map stops to path indices
             const stopIndices = line.via_stops.map((stop: any) => {
               let minDist = Infinity;
@@ -4059,13 +3789,13 @@ export default function App() {
             let bestProjected = clickLngLat as [number, number];
             let bestDistSq = Infinity;
             let bestSegIdx = 0;
-            
+
             const localGetDistSq = (p1: [number, number], p2: [number, number]) => {
               const dx = p1[0] - p2[0];
               const dy = p1[1] - p2[1];
               return dx * dx + dy * dy;
             };
-            
+
             const localGetProjection = (p: [number, number], v: [number, number], w: [number, number]): [number, number] => {
               const l2 = localGetDistSq(v, w);
               if (l2 === 0) return v;
@@ -4088,7 +3818,7 @@ export default function App() {
                 bestSegIdx = i;
               }
             }
-            
+
             const clickMinIdx = bestSegIdx;
 
             // Find surrounding stops
@@ -4100,14 +3830,14 @@ export default function App() {
               }
             }
             if (clickMinIdx > stopIndices[stopIndices.length - 1]) prevStopIdx = stopIndices.length - 2;
-            
+
             let nextStopIdx = prevStopIdx + 1;
             if (nextStopIdx >= line.via_stops.length) nextStopIdx = line.via_stops.length - 1;
 
             setSelectionPos(bestProjected);
             setSelectedSegmentName(null);
             setSelectedSegmentLines(null);
-            
+
             let queryLngLat = bestProjected;
             const snapSegStart = path[bestSegIdx];
             const snapSegEnd = path[bestSegIdx + 1];
@@ -4136,11 +3866,11 @@ export default function App() {
                   comp.district,
                   comp.township
                 ].filter(Boolean).join('');
-                
+
                 const nearestRoad = result.regeocode.roads && result.regeocode.roads.length > 0 ? result.regeocode.roads[0].name : '';
                 const genericPoi = result.regeocode.pois && result.regeocode.pois.length > 0 ? result.regeocode.pois[0].name : '当前位置';
                 const fallbackName = nearestRoad || genericPoi;
-                
+
                 setSelectedStop({
                   name: fallbackName,
                   address: preciseLocation || result.regeocode.formattedAddress,
@@ -4190,9 +3920,7 @@ export default function App() {
         marker.on('click', async () => {
           if (isMinigameActiveRef.current) return;
           const stopLatLng = getLatLng(stop.location);
-          if (isPosOutsideReferenceArea(stopLatLng[0], stopLatLng[1])) {
-            return;
-          }
+
           setSelectionPos(stopLatLng);
           setTopCard('stop');
           setSelectedStop({
@@ -4201,7 +3929,7 @@ export default function App() {
             lines: [],
             city: currentCity
           });
-          
+
           // Fetch full details to show all lines
           const details = await fetchStopDetails(stop.name, stopLatLng, AMap, currentCity);
           if (details) {
@@ -4221,17 +3949,17 @@ export default function App() {
       syncStopMarkersToMap(map, AMap);
     }
     if (shouldFitView && polylineObj) map.setFitView(polylineObj);
-    drawReferenceArea(map, AMap);
+
   };
 
   const showStopConnectivity = async (stopLines: string[]) => {
     if (!lineGroupRef.current || !markerGroupRef.current || !(window as any).AMap || !stopLines.length) return;
-    
+
     setIsSearching(true);
     lineGroupRef.current.clearOverlays();
     clearStopMarkerGroup(markerGroupRef.current);
     setStats(prev => ({ ...prev, lines: stopLines.length }));
-    
+
     const AMap = (window as any).AMap;
     const lineSearch = new AMap.LineSearch({
       city: currentCity || '全国',
@@ -4242,7 +3970,7 @@ export default function App() {
 
     let completed = 0;
     const total = stopLines.length;
-    
+
     // Batch processing to avoid overwhelming the API and UI
     const BATCH_SIZE = 5;
     for (let i = 0; i < stopLines.length; i += BATCH_SIZE) {
@@ -4250,7 +3978,7 @@ export default function App() {
       await Promise.all(batch.map(async (lineStr) => {
         return new Promise<void>((resolve) => {
           const { name: shortName } = parseLineInfo(lineStr);
-          
+
           // Add a safety timeout for each search
           const timeout = setTimeout(() => {
             completed++;
@@ -4286,7 +4014,7 @@ export default function App() {
               }
               renderBusLine(bestLine, AMap, mapRef.current, false, false, false);
             }
-            
+
             if (completed === total) {
               mapRef.current?.setFitView();
               setIsSearching(false);
@@ -4305,7 +4033,7 @@ export default function App() {
     atStation: number
   ) => {
     if (!lineGroupRef.current || !markerGroupRef.current || !(window as any).AMap) return;
-    
+
     const linesToQuery = stop.lines || [];
     if (linesToQuery.length === 0) {
       setConnectivityToast('该站点暂无线路信息');
@@ -4315,7 +4043,7 @@ export default function App() {
 
     setIsSearching(true);
     setConnectivityToast('正在初始化检索...');
-    
+
     lineGroupRef.current.clearOverlays();
     clearStopMarkerGroup(markerGroupRef.current);
 
@@ -4343,11 +4071,11 @@ export default function App() {
                if (status === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
                    for (const info of result.lineInfo) {
                        if (isLineNameBlockedRef(info.name)) continue;
-                       
+
                        const stops = info.via_stops || [];
                        const stopNames = stops.map((s: any) => s.name);
                        const cleanStopNames = stopNames.map(cleanStopName);
-                       
+
                        if (!isTransfer) {
                            // Try exact match then partial match
                            let idx = cleanStopNames.indexOf(targetSourceClean);
@@ -4361,7 +4089,7 @@ export default function App() {
                                    renderBusLine(info, AMap, mapRef.current, false, false, false);
                                    directLinesInfo.push({ name: info.name, stops: stopNames });
                                }
-                               
+
                                if (transferEnabled) {
                                    const targetIdx = idx + atStation;
                                    if (targetIdx < stops.length) {
@@ -4394,7 +4122,7 @@ export default function App() {
     // 2. Process transfer stations
     if (transferEnabled && transferStations.size > 0) {
         setConnectivityToast(`发现 ${transferStations.size} 个换乘站点，正在检索增益线路...`);
-        
+
         const stationEntries = Array.from(transferStations.entries());
         for (const [sName, sLoc] of stationEntries) {
             const details = await fetchStopDetails(sName, sLoc, AMap, currentCity);
@@ -4518,7 +4246,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         type: '公交车站',
         city: city || '全国'
       });
-      
+
       ps.searchNearBy(name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').replace(/\s*-\s*\d+$/, ''), location, 200, (pStatus: string, pResult: any) => {
         let matchedPois: any[] = [];
         const cleanSearchName = name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').replace(/\s*-\s*\d+$/, '').trim();
@@ -4539,7 +4267,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             matchedPois = [bestPoi];
           }
         }
-        
+
         if (matchedPois.length === 0) {
           doStationSearchFallback();
           return;
@@ -4547,7 +4275,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
         const aggregatedShortLines = new Set<string>();
         const aggregatedAddresses = new Set<string>();
-        
+
         matchedPois.forEach(poi => {
           const addressStr = poi.address || '';
           if (addressStr) aggregatedAddresses.add(addressStr);
@@ -4558,7 +4286,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         });
 
         const shortLinesArray = Array.from(aggregatedShortLines);
-        
+
         if (shortLinesArray.length === 0) {
            doStationSearchFallback();
            return;
@@ -4631,7 +4359,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       if (map.getZoom() < 16) map.setZoom(16);
       setSelectionPos(itemLatLng);
     }
-    
+
     setSelectedStop({
       name: item.name,
       address: t('loadingDetails'),
@@ -4728,7 +4456,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setFilterUserSubmissions(next);
     localStorage.setItem('app_filter_user_submissions', next.toString());
     setCacheUpdateTick(v => v + 1);
-    
+
     // Auto re-aggregate lines if needed
     if (mapInstance) {
       if (activeBusLine) {
@@ -4747,7 +4475,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setStationLineStats(next);
     stationLineStatsRef.current = next; // Synchronously update ref
     localStorage.setItem('app_station_line_stats', next.toString());
-    
+
     // Refresh colors across active maps
     setCacheUpdateTick(v => v + 1);
     if (markerGroupRef.current) {
@@ -4826,7 +4554,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       setLoading(false);
       if (status === 'complete' && result.routes && result.routes[0]) {
         const pathStepCoordinates: { lng: number, lat: number }[] = [];
-        
+
         result.routes[0].steps.forEach((step: any) => {
           step.path.forEach((p: any) => {
             const lastPathPt = pathStepCoordinates[pathStepCoordinates.length - 1];
@@ -4852,7 +4580,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           const currentSnapshot = drawnPointsRef.current;
           setUndoStack(u => [...u, currentSnapshot]);
           setRedoStack([]);
-          
+
           setDrawnPoints(curr => {
             const updated = [...curr];
             if (updated.length > 0) {
@@ -4940,7 +4668,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       setLoading(false);
       if (status === 'complete' && result.routes && result.routes[0]) {
         const pathStepCoordinates: { lng: number, lat: number }[] = [];
-        
+
         result.routes[0].steps.forEach((step: any) => {
           step.path.forEach((p: any) => {
             const lastPathPt = pathStepCoordinates[pathStepCoordinates.length - 1];
@@ -4967,7 +4695,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
           setUndoStack(u => [...u, currentSnapshot]);
           setRedoStack([]);
-          
+
           // Align previous point coordinate to snappedStart and Append newPt at snappedEnd
           setDrawnPoints(curr => {
             const updated = [...curr];
@@ -4994,7 +4722,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     if (selectedPointIdx === null) return;
     const pt = drawnPoints[selectedPointIdx];
     setNamingStopIdx(selectedPointIdx);
-    
+
     if (pt.isStop && pt.name) {
       setNamingValue(pt.name);
     } else {
@@ -5216,7 +4944,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         body: JSON.stringify({ password: trimmed }),
       });
       setLoading(false);
-      
+
       if (res.ok) {
         setIsAdminVerified(true);
         setAdminPasswordUsed(trimmed);
@@ -5341,7 +5069,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           let list = JSON.parse(localSaved);
           list = list.map((item: any) => item.id === id ? { ...item, name: newName.trim() } : item);
           localStorage.setItem('client_approved_user_lines', JSON.stringify(list));
-          
+
           // Also edit history if it exists
           const histSaved = localStorage.getItem('user_drawn_lines_history');
           if (histSaved) {
@@ -5350,7 +5078,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             localStorage.setItem('user_drawn_lines_history', JSON.stringify(hist));
             setHistoricalSubmissions(hist);
           }
-          
+
           alert('【本地修改成功】线路名已在本地缓存中更新！');
           setEditingLineId(null);
           fetchApprovedLines();
@@ -5401,7 +5129,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       console.warn('Backend unavailable, falling back to local delete:', err);
       const localSaved = localStorage.getItem('client_approved_user_lines');
       const histSaved = localStorage.getItem('user_drawn_lines_history');
-      
+
       let deletedFromLocal = false;
       if (localSaved) {
         try {
@@ -5416,7 +5144,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           console.error(e);
         }
       }
-      
+
       if (histSaved) {
         try {
           let hist = JSON.parse(histSaved);
@@ -5428,7 +5156,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           console.error(e);
         }
       }
-      
+
       if (deletedFromLocal) {
         setDeletingLineId(null);
         fetchApprovedLines();
@@ -5490,7 +5218,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const markers: any[] = [];
     drawnPoints.forEach((pt, idx) => {
       const isSelected = selectedPointIdx === idx;
-      
+
       if (pt.isStop) {
         const nameLabel = pt.name || `未命名站点`;
         const marker = new AMap.Marker({
@@ -5614,12 +5342,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         pageSize: 1,
         extensions: 'all'
       });
-      
+
       setLoading(true);
       const { name: shortName } = parseLineInfo(item.name);
-      
+
       const timeout = setTimeout(() => setLoading(false), 10000);
-      
+
       lineSearch.search(shortName, (status: string, result: any) => {
         clearTimeout(timeout);
         setLoading(false);
@@ -5649,7 +5377,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       map.setCenter(itemLatLng);
       map.setZoom(17);
       setSelectionPos(itemLatLng);
-      
+
       const cleanItemName = item.name.replace(/\(.*?\)|（.*?）/g, '').replace(/\s*-\s*\d+$/, '').trim();
 
       setSelectedStop({
@@ -5666,7 +5394,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       } else {
         const isTransitPOI = item.type && (item.type.includes('公交') || item.type.includes('车站') || item.type.includes('交通设施') || item.type.includes('地铁'));
         let lines: string[] = [];
-        
+
         if (isTransitPOI) {
            lines = (item.address || '').split(/[;；]/).map((s: string) => s.trim()).filter((s: string) =>
              s.length > 0 && !isLineNameBlockedRef(s)
@@ -5722,7 +5450,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         citylimit: false
       });
     }
-    
+
     // Parallel search for better results
     const fetchTips = new Promise<any[]>((resolve) => {
       const timeout = setTimeout(() => resolve([]), 8000);
@@ -5767,19 +5495,19 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
     Promise.all([fetchTips, fetchLines]).then(([tips, lines]) => {
       if (currentSearchId !== searchIdRef.current || !searchActiveRef.current) return;
- 
+
       // Prioritize exact line matches, then other lines, then POIs with locations
       const combined = [...lines];
-      
+
       const stationGroups = new Map<string, any[]>();
       const otherTips: any[] = [];
-      
+
       tips.forEach((tip: any) => {
         // High fidelity station detection
         const isStation = getSuggestionKind(tip) === 'station';
-                         
+
         const isLine = !isStation && checkIsLineQuery(tip.name);
-        
+
         if (isLine) {
            if (!combined.some(c => c.name.startsWith(tip.name))) {
              combined.push({ ...tip, type: 'busline' });
@@ -5794,14 +5522,14 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
            otherTips.push(tip);
         }
       });
-      
+
       Array.from(stationGroups.entries()).forEach(([cleanName, groupTips]) => {
          if (groupTips.length > 1) {
              // 1. Calculate centroid for the aggregated "All platforms" tip
              let sumLng = 0, sumLat = 0;
              groupTips.forEach(t => { sumLng += parseFloat(t.location.lng); sumLat += parseFloat(t.location.lat); });
              const centroid = { lng: sumLng / groupTips.length, lat: sumLat / groupTips.length };
-             
+
              // The aggregated button
              combined.push({
                  ...groupTips[0],
@@ -5809,7 +5537,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                  location: centroid,
                  isAggregated: true
              });
-             
+
              // Number the different platforms
              groupTips.forEach((t, idx) => {
                  combined.push({
@@ -5821,7 +5549,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
              combined.push(groupTips[0]);
          }
       });
-      
+
       otherTips.forEach(t => combined.push(t));
 
       // Include approved user custom lines matching description
@@ -5877,7 +5605,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         pageSize: 1,
         extensions: 'all'
       });
-      
+
       const status = await new Promise<string>((resolve) => {
         const timeout = setTimeout(() => resolve('fail'), 10000);
         lineSearch.search(query, (s: string, result: any) => {
@@ -5973,7 +5701,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           offset: new (window as any).AMap.Pixel(-20, -40),
           zIndex: 100
         });
-        
+
         selectionMarkerRef.current.setMap(map);
       } else {
         selectionMarkerRef.current.setContent(content);
@@ -5989,18 +5717,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
   useEffect(() => {
     let map: any;
-    const isCustomActive = localStorage.getItem('app_use_custom_api_key') === 'true';
-
-    // Watchdog timer: If custom API was enabled, but map fails to initialize or hangs within 4.5s
     let watchdogTimer: any = null;
-    if (isCustomActive) {
-      watchdogTimer = setTimeout(() => {
-        if (!mapRef.current && localStorage.getItem('app_use_custom_api_key') === 'true') {
-          console.warn('Custom AMap API timed out during launch. Falling back to public API...');
-          triggerCustomApiFallback();
-        }
-      }, 4500);
-    }
 
     AMapLoader.load({
       key: AMAP_KEY,
@@ -6034,7 +5751,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       mapRef.current = map;
       setMapInstance(map);
-      
+
       map.getCity((res: any) => {
         if (res.city || res.province) {
           const detectedCity = resolveSearchCity(res);
@@ -6086,16 +5803,14 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
         if (map.getZoom() < 14) return;
         const [lng, lat] = [e.lnglat.getLng(), e.lnglat.getLat()];
-        if (isPosOutsideReferenceArea(lng, lat)) {
-          return;
-        }
-        
+
+
         const geocoder = new AMap.Geocoder();
         geocoder.getAddress([lng, lat], (status: string, result: any) => {
           if (status === 'complete' && result.info === 'OK') {
             const regeocode = result.regeocode;
             const pois = regeocode.pois || [];
-            
+
             // Build the precise locality string
             const comp = regeocode.addressComponent;
             const preciseLocation = [
@@ -6104,15 +5819,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               comp.district,
               comp.township
             ].filter(Boolean).join('');
-            
+
             const busStop = pois.find((p: any) => p.type.includes('公交车站'));
-            
+
             if (busStop) {
               const stopPos = getLatLng(busStop.location);
               setSelectionPos(stopPos);
               setSelectedSegmentName(null);
               setSelectedSegmentLines(null);
-              
+
               const initialLines = (busStop.address || '').split(/[;；]/).map((s: string) => s.trim()).filter((s: string) =>
                 s.length > 0 && !isLineNameBlockedRef(s)
               ).filter(isValidBusLineName);
@@ -6145,7 +5860,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               setSelectionPos([lng, lat]);
               setSelectedSegmentName(null);
               setSelectedSegmentLines(null);
-              
+
               const nearestRoad = regeocode.roads && regeocode.roads.length > 0 ? regeocode.roads[0].name : '';
               const genericPoi = pois.length > 0 ? pois[0].name : '当前位置';
               const displayName = nearestRoad || genericPoi;
@@ -6162,18 +5877,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           }
         });
       };
-      
+
       defaultMapClickHandlerRef.current = defaultClickHandler;
       mapClickHandlerRef.current = defaultClickHandler;
       map.on('click', defaultClickHandler);
     }).catch(e => {
       if (watchdogTimer) clearTimeout(watchdogTimer);
       console.error('AMapLoader load error:', e);
-      if (localStorage.getItem('app_use_custom_api_key') === 'true') {
-        triggerCustomApiFallback();
-      } else {
-        setLoading(false);
-      }
+      setLoading(false);
+      setApiErrorNotification('公共高德地图服务暂时不可用，请稍后刷新。');
     });
 
     return () => {
@@ -6194,13 +5906,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         map.destroy();
       }
     };
-  }, [triggerCustomApiFallback]);
+  }, []);
 
   // Controlling visibility of station markers
+
+
   useEffect(() => {
-    if (mapInstance && (window as any).AMap) {
-      drawReferenceArea(mapInstance, (window as any).AMap);
-    }
+    if (mapInstance && (window as any).AMap) syncStopMarkersToMap(mapInstance, (window as any).AMap);
   }, [showStations, mapInstance]);
 
   // Initial markers search if stations are shown on load could be handled here or just wait for map click/search button
@@ -6213,7 +5925,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const pos = selectedStop.location ? 
         (Array.isArray(selectedStop.location) ? { lng: selectedStop.location[0], lat: selectedStop.location[1] } : selectedStop.location) : 
         (selectionPos ? { lng: selectionPos[0], lat: selectionPos[1] } : null);
-        
+
       if (pos) {
         onStopClick({
           name: selectedStop.name,
@@ -6300,8 +6012,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     isClearedRef.current = false;
     const thisSearchVer = ++searchVersionRef.current;
 
-    // Reset reference box so the new search initiates a fresh reference bounds calculation
-    referenceBoxRef.current = null;
+
     setFilterTerminalOnly(false);
     filterTerminalOnlyRef.current = false;
 
@@ -6321,10 +6032,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setSharedCityStatus(sharedCityDataEnabled ? '正在检查共享城市线路…' : '');
     try {
       const AMap = (window as any).AMap;
-      
+      let searchServices:any = AMap;
+
       const center = map.getCenter();
       let currentCity = sharedOverride?.city || '';
-      
+
       try {
         if (!currentCity) {
         const geocoder = new AMap.Geocoder();
@@ -6353,7 +6065,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const sw = bounds.getSouthWest();
       const ne = bounds.getNorthEast();
       const boundCenter = bounds.getCenter();
-      
+
       const lngDiff = ne.lng - sw.lng;
       const latDiff = ne.lat - sw.lat;
 
@@ -6446,7 +6158,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           setLastCityDataset(sharedDataset);
           const message = sharedDataset.retrievalComplete
             ? `已读取共享线路 · ${new Date(sharedDataset.capturedAt).toLocaleDateString('zh-CN')}`
-            : `已显示已保存的 ${sharedDataset.lines.length} 个线路方向；采集尚未完整，请稍后补全。`;
+            : `已读取共享线路 · ${sharedDataset.lines.length} 个线路方向`;
           setSharedCityStatus(message);
           setCityUpdateJob(sharedDataset.retrievalComplete ? null : {city:sharedDataset.city,state:'retained',message});
         } else {
@@ -6461,11 +6173,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       // Shared data stays readable without visitor credentials; live city discovery must use their SDK key.
       if (!usedSharedCity) {
-        const apiStatus = citySearchApiStatus(useCustomApiKey, customApiKey, customApiSecurityCode, initialAmapConfig);
+        const apiStatus = citySearchApiStatus(useCustomApiKey, customApiKey, customApiSecurityCode);
         if (apiStatus !== 'ready') {
-          const message = apiStatus === 'missing'
-            ? '此城市需要重新检索，请先填写您自己的高德 Web端 API Key 和 Security Code，并刷新页面生效。'
-            : '高德 API 配置已修改，请先刷新页面使配置生效，再重新检索。';
+          const message = '此城市需要重新检索，请先填写您自己的高德 Web端 API Key 和 Security Code。';
           setSharedCityStatus(message);
           setApiErrorNotification(message);
           focusCustomApiRef.current = true;
@@ -6474,6 +6184,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           setShowSettings(true);
           return;
         }
+      }
+
+      if (!usedSharedCity) {
+        searchServices = await getCitySearchServices(customApiKey, customApiSecurityCode);
+        if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
       }
 
       // Remote availability never gates a local search. No upload starts before explicit confirmation.
@@ -6485,7 +6200,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
 
       if (!usedRegionCache) {
-        const placeSearch = new AMap.PlaceSearch({
+        const placeSearch = new searchServices.PlaceSearch({
           type: '公交车站',
           pageSize: 50,
           city: currentCity,
@@ -6501,7 +6216,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             let finished = false;
             const timeout = setTimeout(() => { finished = true; wasTruncated = true; resolve(false); }, 10000);
             placeSearch.setPageIndex(page);
-            
+
             const callback = (status: string, result: any) => {
               if (finished) return;
               finished = true;
@@ -6556,7 +6271,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       if (allPois.length > 0) {
         const pois = allPois;
         setStats(prev => ({ ...prev, stops: pois.length }));
-        
+
         // High performance clear
         clearStopMarkerGroup(markerGroupRef.current);
         allMapStopsRef.current.clear();
@@ -6572,7 +6287,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             city: currentCity
           });
           stopCountCacheRef.current.set(key, linesAr.length);
-          
+
           const origColor = getStopColor(linesAr.length, '#3b82f6');
           const marker = lazyStopMarker(AMap, {
             center: [poi.location.lng, poi.location.lat],
@@ -6588,9 +6303,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
           marker.on('click', () => {
             const stopPos: [number, number] = [poi.location.lng, poi.location.lat];
-            if (isPosOutsideReferenceArea(stopPos[0], stopPos[1])) {
-              return;
-            }
+
             setSelectionPos(stopPos);
             setTopCard('stop');
             setSelectedSegmentLines(null);
@@ -6639,7 +6352,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             .sort((a: any, b: any) =>
               (a.location.lng - center.lng) ** 2 + (a.location.lat - center.lat) ** 2
               - (b.location.lng - center.lng) ** 2 - (b.location.lat - center.lat) ** 2).slice(0, 60);
-          const extraNames = await discoverStationLines(AMap, currentCity, visibleStops,
+          const extraNames = await discoverStationLines(searchServices, currentCity, visibleStops,
             () => searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current);
           extraNames.filter(name => !isLineNameBlockedRef(name)).forEach(name => lineNamesSet.add(name));
         }
@@ -6678,7 +6391,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               setSharedCityStatus('本次检索结果未通过快照校验，无法提交；已获得的线路仍可在本地查看。');
             }
           };
-          const linesComplete = await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity, () => false, refreshLineData, prepareUpload);
+          const linesComplete = await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity, () => false, refreshLineData, prepareUpload, searchServices);
           if (!linesComplete) wasTruncated = true;
         }
         if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
@@ -6714,7 +6427,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             if (dx * dx + dy * dy < 0.000000002) return key;
           }
         };
-        
+
         Array.from(lineNamesSet).forEach(lineName => {
           const cacheKeys = Array.from(fetchedLinesCache.current.keys()).filter((k: any) => matchesReturnedLine(lineName, fetchedLinesCache.current.get(k)!));
 
@@ -6779,12 +6492,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               cursor: 'pointer',
               extData: { key, originalColor: origColor, originalRadius: 8 }
             });
-            
+
             marker.on('click', () => {
               const stopPos = getLatLng(poi.location);
-              if (isPosOutsideReferenceArea(stopPos[0], stopPos[1])) {
-                return;
-              }
+
               setSelectionPos(stopPos);
               setSelectedSegmentLines(null);
               setSelectedSegmentName(null);
@@ -6820,7 +6531,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           roadStopsDataRef.current = new Map(allMapStopsRef.current);
         }
 
-        const aiBox = referenceBoxRef.current || getBoxForStops(Array.from(roadStopsDataRef.current.values())) || targetSearchBox;
+        const aiBox = getBoxForStops(Array.from(roadStopsDataRef.current.values())) || targetSearchBox;
         const areaLines = Array.from(fetchedLinesCache.current.values() as Iterable<BusLine>)
           .filter(line => (!line.city || line.city === currentCity) && line.path?.length > 1 &&
             clipPathToBox(line.path, aiBox.minLng, aiBox.maxLng, aiBox.minLat, aiBox.maxLat).length > 0)
@@ -6912,7 +6623,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     } finally { setCityUploadBusy(false); }
   };
 
-  const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string, shouldCancel: () => boolean = () => false, forceRefresh = false, onCollected?: (complete: boolean) => void) => {
+  const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string, shouldCancel: () => boolean = () => false, forceRefresh = false, onCollected?: (complete: boolean) => void, searchServices: any = AMap) => {
     const startSearchVer = searchVersionRef.current;
     let complete = true;
     const existingCacheKeys = Array.from(fetchedLinesCache.current.keys()) as string[];
@@ -6937,7 +6648,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
       return true;
     });
-    
+
     if (linesToFetch.length > 0) {
       const newlyFetchedLines: BusLine[] = [];
       const newlyQueriedNames: string[] = [];
@@ -6950,7 +6661,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         await Promise.all(batch.map(name => new Promise<void>((resolve) => {
           let finished = false;
           const timeout = setTimeout(() => { finished = true; complete = false; resolve(); }, 8000);
-          const query = new AMap.LineSearch({ pageIndex: 1, city: city || '全国', pageSize: 100, extensions: 'all' });
+          const query = new searchServices.LineSearch({ pageIndex: 1, city: city || '全国', pageSize: 100, extensions: 'all' });
           query.search(name.replace(/[（(].*$/, '').replace(/#\d+$/, ''), (status: string, result: any) => {
             clearTimeout(timeout);
             if (finished || searchVersionRef.current !== startSearchVer || isClearedRef.current || isMinigameActiveRef.current || shouldCancel()) { resolve(); return; }
@@ -7037,26 +6748,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
     if (markerGroupRef.current) clearStopMarkerGroup(markerGroupRef.current);
     if (lineGroupRef.current) lineGroupRef.current.clearOverlays();
-    
-    if (referenceAreaOverlayRef.current) {
-      try {
-        referenceAreaOverlayRef.current.setMap(null);
-        if (mapRef.current) mapRef.current.remove(referenceAreaOverlayRef.current);
-      } catch (e) {
-        console.warn('Failed to remove reference area on clear', e);
-      }
-      referenceAreaOverlayRef.current = null;
-    }
-    if (referenceAreaTextRef.current) {
-      try {
-        referenceAreaTextRef.current.setMap(null);
-        if (mapRef.current) mapRef.current.remove(referenceAreaTextRef.current);
-      } catch (e) {
-        console.warn('Failed to remove reference area text on clear', e);
-      }
-      referenceAreaTextRef.current = null;
-    }
-    referenceBoxRef.current = null;
+
+
+
+
 
     if (selectionMarkerRef.current) {
       try {
@@ -7077,7 +6772,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         });
       } catch {}
     }
-    
+
     // Clear local runtime map overlays/refs (persistent IndexedDB line cache is managed separately)
     fetchedLinesCache.current.clear();
     queriedLineNamesRef.current.clear();
@@ -7153,10 +6848,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         );
         map.setBounds(bounds);
         const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
-        referenceBoxRef.current = { minLng: sw.lng, maxLng: ne.lng, minLat: sw.lat, maxLat: ne.lat };
+
         aggregateAndVisualize(Array.from(new Set(lines.map(line => line.name))), map, AMap);
       }
-      return `共 ${names.length} 条候选线路，成功检索 ${matched.length} 条，已显示到地图。${missing.length ? '\n未找到或请求失败：' + missing.join('、') : ''}\n地图检索仅核验线路存在性，不代表已验证全部筛选条件或已穷尽所有线路。`;
+      return `共 ${names.length} 条候选线路，成功检索 ${matched.length} 条，已显示到地图。${missing.length ? '\n未找到或请求失败：' + missing.join('、') : ''}`;
     } finally { setAISearchProgress(''); if (searchVersionRef.current === version) setIsSearching(false); }
   };
 
@@ -7176,7 +6871,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const cityWideRendering = true;
     const expandedLineNames: string[] = [];
     const cacheKeys = Array.from(fetchedLinesCache.current.keys()) as string[];
-    
+
     activeLineSet.forEach(name => {
       const matches = fetchedLinesCache.current.has(name) ? [name] : cacheKeys.filter(key => matchesReturnedLine(name, fetchedLinesCache.current.get(key)!));
       if (matches.length > 0) {
@@ -7245,16 +6940,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setStats(prev => ({ ...prev, lines: new Set(expandedLineNames.map(lineBaseIdentity)).size }));
 
     const allOverlays: any[] = [];
-    let box: any = referenceBoxRef.current;
-    if (showReferenceAreaRef.current) {
-      if (!box) {
-        const stopsList = Array.from(roadStopsDataRef.current.size > 0 ? roadStopsDataRef.current.values() : allMapStopsRef.current.values());
-        box = getBoxForStops(stopsList);
-        if (box) {
-          referenceBoxRef.current = box;
-        }
-      }
-    }
+
+
 
     const networkLayers: { color: string; overlay: any }[] = [];
     const visibleGroups = () => {
@@ -7267,7 +6954,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         const color = fetchedLinesCache.current.get(name)?.isUserSubmitted ? '#9C7A97' : '#52796F';
         if (!groups.has(color)) groups.set(color, []);
         for (const path of paths) {
-          const clipped = showReferenceAreaRef.current && box ? clipPathToBox(path, box.minLng, box.maxLng, box.minLat, box.maxLat) : [path];
+          const clipped = [path];
           for (const segment of clipped) groups.get(color)!.push(segment);
         }
       }
@@ -7312,7 +6999,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     map.on('zoomend', updateViewport);
     roadViewportCleanupRef.current = () => { map.off('moveend', updateViewport); map.off('zoomend', updateViewport); };
     activeBusLinePolylineRef.current = null;
-    drawReferenceArea(map, AMap);
+
 
     if (mapClickHandlerRef.current) {
       map.off('click', mapClickHandlerRef.current);
@@ -7325,9 +7012,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         return;
       }
       const clickLngLat = [e.lnglat.lng, e.lnglat.lat] as [number, number];
-      if (isPosOutsideReferenceArea(clickLngLat[0], clickLngLat[1])) {
-        return;
-      }
+
       const currentZoom = map.getZoom();
       const zoomFactor = Math.max(1, Math.pow(2, 16 - currentZoom));
       const SEARCH_DIST = 0.00018 * zoomFactor;
@@ -7337,12 +7022,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         foundSegments.sort((a, b) => a.dist - b.dist);
         const closest = foundSegments[0];
         const minDist = closest.dist;
-        
+
         if (minDist > SEARCH_DIST) return;
 
         const selectionThreshold = Math.max(minDist + 0.000045 * zoomFactor, minDist * 1.6);
         const linesSet = new Set<string>();
-        
+
         // Calculate direction of the closest segment to filter out opposite directions
         const v1x = closest.data.end[0] - closest.data.start[0];
         const v1y = closest.data.end[1] - closest.data.start[1];
@@ -7361,7 +7046,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         if (linesSet.size > 0) {
           const closestSegmentProjectedTrue = getProjection(clickLngLat, closest.data.start, closest.data.end);
           const closestSegmentProjectedVisual = getProjection(clickLngLat, closest.data.offsetStart, closest.data.offsetEnd);
-          
+
           setSelectionPos(closestSegmentProjectedVisual as [number, number]);
           setTopCard('stop');
           setSelectedStop(null);
@@ -7410,7 +7095,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             }
             if (!lookupCancelled()) setSelectedSegmentLines([...verifiedLines]);
           })().catch(error => console.warn('Road coverage cross-check failed', error));
-          
+
           if (geocoderRef.current) {
             // Shift the query point 30 meters along the line segment to avoid crossroad intersections
             // which often return the intersecting minor road name instead of the main road.
@@ -7441,7 +7126,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 const nearestRoad = result.regeocode.roads && result.regeocode.roads.length > 0 ? result.regeocode.roads[0].name : '';
                 const genericPoi = result.regeocode.pois && result.regeocode.pois.length > 0 ? result.regeocode.pois[0].name : '';
                 const fallbackName = nearestRoad || genericPoi || comp.street || comp.township || comp.district;
-                
+
                 setSelectedSegmentName(fallbackName || "当前位置");
                 setSelectedSegmentAddress(preciseLocation || result.regeocode.formattedAddress);
               } else {
@@ -7456,7 +7141,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
     map.on('click', onMapClick);
     mapClickHandlerRef.current = onMapClick;
-    drawReferenceArea(map, AMap);
+
   };
 
   useEffect(() => {
@@ -7512,39 +7197,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     };
   }, [showTimeline]);
 
-  useEffect(() => {
-    if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
-    const map = mapRef.current;
-    const AMap = (window as any).AMap;
-    const entries: TimelineOverlayEntry[] = [];
-    const box = showReferenceAreaRef.current ? referenceBoxRef.current : null;
-    const routes: RenderRoute[] = timelineLines.filter(line=>line.path?.length>1).map(line=>({name:line.name,path:line.path,displayPath:line.path}));
-    const index = new RouteRenderIndex(routes);
-    const overlays = new Map<string, ReturnType<typeof lazyTimelineRoute>>();
-    for (const line of timelineLines) {
-      const overlay=lazyTimelineRoute(map,AMap,{strokeColor:'#52796F',strokeWeight:lineThickness==='thin'?3:6,
-        strokeOpacity:.85,lineJoin:'round',lineCap:'round',zIndex:70,bubble:false},
-        ()=>{setSelectedSegmentLines([line.name]);setSelectedStop(null);setSelectedSegmentName(line.name);});
-      overlays.set(line.name,overlay);entries.push({line,overlay,visible:true});
-    }
-    const updateViewport=()=>{
-      const bounds=map.getBounds(),sw=bounds.getSouthWest(),ne=bounds.getNorthEast();
-      const dx=(ne.lng-sw.lng)*.15,dy=(ne.lat-sw.lat)*.15;
-      const visible=map.getZoom()<CITY_DETAIL_ZOOM?new Map<string,[number,number][][]>():index.visiblePaths({minLng:sw.lng-dx,maxLng:ne.lng+dx,minLat:sw.lat-dy,maxLat:ne.lat+dy});
-      for(const [name,overlay] of overlays){
-        const paths=visible.get(name)||[];
-        overlay.setPaths(box?paths.flatMap(path=>clipPathToBox(path,box.minLng,box.maxLng,box.minLat,box.maxLat)):paths);
-      }
-    };
-    timelineOverlaysRef.current=entries;
-    updateTimelineVisibility(entries,timelineMinuteRef.current);
-    updateViewport();map.on('moveend',updateViewport);map.on('zoomend',updateViewport);
-    return ()=>{
-      map.off('moveend',updateViewport);map.off('zoomend',updateViewport);
-      for(const overlay of overlays.values())overlay.destroy();
-      if(timelineOverlaysRef.current===entries)timelineOverlaysRef.current=[];
-    };
-  }, [showTimeline, timelineLines]);
+
 
   useEffect(() => {
     if (showTimeline) updateTimelineVisibility(timelineOverlaysRef.current, timelineMinute);
@@ -7637,7 +7290,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
 
     let info = fetchedLinesCache.current.get(lineStr);
-    
+
     if (!info) {
       const cleanLineStr = lineStr.replace('路', '').trim();
       const baseName = cleanLineStr.split('(')[0].trim();
@@ -7648,7 +7301,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       for (const [key, value] of fetchedLinesCache.current.entries()) {
         const cleanKey = key.replace('路', '').trim();
         const keyBaseName = cleanKey.split('(')[0].trim();
-        
+
         if (keyBaseName === baseName) {
            if (bracketText && !cleanKey.includes(bracketText)) {
              continue;
@@ -7666,7 +7319,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         end: (info.end_stop || '终点站').trim()
       };
     }
-    
+
     return { name: lineStr.trim(), start: '-', end: '-' };
   };
 
@@ -7725,7 +7378,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   // Background fetch for stop line counts when a bus line is active
   useEffect(() => {
     if (!stationLineStatsRef.current || !activeBusLine || !activeBusLine.via_stops || !(window as any).AMap) return;
-    
+
     // Check if we need to load any stats
     let needsFetch = false;
     for (const stop of activeBusLine.via_stops) {
@@ -7734,7 +7387,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         break;
       }
     }
-    
+
     if (!needsFetch) return; // All cached
 
     const stationSearch = new (window as any).AMap.StationSearch({
@@ -7745,18 +7398,18 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
     let currentUpdateTick = 0;
     let cancelled = false;
-    
+
     const runBatch = async () => {
       for (let i = 0; i < activeBusLine.via_stops.length; i++) {
         // Stop if map changes or we deactivate the line early
         if (cancelled || !stationLineStatsRef.current || !mapRef.current) break;
-        
+
         const stop = activeBusLine.via_stops[i];
         const key = `${stop.location.lng},${stop.location.lat}`;
         if (stopCountCacheRef.current.has(key)) continue;
 
         const originalName = stop.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '');
-        
+
         await new Promise<void>(resolve => {
            let finished = false;
            const timeout = setTimeout(() => {
@@ -7766,7 +7419,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                  resolve();
               }
            }, 2000);
-           
+
            try {
              stationSearch.search(originalName, (status: string, result: any) => {
                 if (finished) return;
@@ -7823,7 +7476,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
       if (!cancelled) setCacheUpdateTick(v => v + 1);
     };
-    
+
     runBatch();
     return () => { cancelled = true; };
   }, [activeBusLine, currentCity]);
@@ -7889,7 +7542,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           <div className="flex items-start justify-between gap-4 w-full h-[46px]">
             {/* Pure Material 3 Search Bar (without logo, slightly narrower) */}
             <div ref={searchContainerRef} className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative w-[180px] sm:w-[240px] md:w-[280px] rounded-full'}`}>
-              
+
               {/* Search Lead Icon */}
               <div className="flex items-center justify-center pl-4 pr-1.5 shrink-0 text-m3-primary">
                 <Search className="w-4.5 h-4.5 text-[#52796F]" />
@@ -7988,7 +7641,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
             {/* Quick Actions Container - Material Design 3 (Stations and Basemap moved to bottom hub) */}
             <div className={`flex items-center gap-2 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
-              
+
               {/* Custom Draw Mode Paintbrush FAB - hidden when showUserSubmittedData is disabled */}
               {showUserSubmittedData && (
                 <div className="pointer-events-auto shrink-0">
@@ -8116,7 +7769,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         <div className="relative w-full h-full">
           <CityOverviewLayer map={mapInstance} zoom={zoomLevel} enabled={!showTimeline && !showMinigameModal} detailReady={!!lastCityDataset && lastCityDataset.city.replace(/市$/, '') === currentCity.replace(/市$/, '') && !isSearching} />
           <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
-          
+
           {isBoxSelectMode && (
             <div 
               onMouseDown={handleBoxSelectMouseDown}
@@ -8164,7 +7817,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   stopCounter++;
                   const currentStopNum = stopCounter;
                   const isSelected = selectedPointIdx === idx;
-                  
+
                   return (
                     <div
                       key={pt.id || idx}
@@ -8189,7 +7842,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         }`}>
                           {currentStopNum}
                         </div>
-                        
+
                         <div className="flex flex-col min-w-0">
                           <span className={`text-[11px] font-black leading-tight tracking-tight truncate ${isSelected ? 'text-emerald-300' : 'text-slate-200'}`}>
                             {pt.name || `站点${currentStopNum}`}
@@ -8283,7 +7936,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
                 {/* Scrollable Contents */}
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4">
-                  
+
                   {/* Swapped List 1: Selected Stops now in Grid Button format */}
                   <div>
                     <div className="flex items-center gap-1.5 mb-2 px-1">
@@ -8402,86 +8055,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           </div>
         )}
 
-        {loading && (
-          <div className="absolute inset-0 bg-white/60 backdrop-blur-md z-30 flex items-center justify-center">
-            <div className="flex flex-col items-center justify-center">
-              <svg width="84" height="84" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0 drop-shadow-md">
-                <motion.path 
-                  d="M4 17H20" 
-                  stroke="#52796F" 
-                  strokeWidth="2.5" 
-                  strokeLinecap="round"
-                  fill="none"
-                  animate={{
-                    pathLength: [0, 1, 1, 1, 1],
-                    pathOffset: [0, 0, 0, 1, 1],
-                    opacity: [0, 1, 1, 0, 0]
-                  }}
-                  transition={{
-                    duration: 1.6,
-                    repeat: Infinity,
-                    ease: "easeInOut",
-                    times: [0, 0.2, 0.4, 0.6, 1.0]
-                  }}
-                />
-                <motion.path 
-                  d="M17 4V20" 
-                  stroke="#52796F" 
-                  strokeWidth="2.5" 
-                  strokeLinecap="round"
-                  fill="none"
-                  animate={{
-                    pathLength: [0, 0, 1, 1, 1, 1],
-                    pathOffset: [0, 0, 0, 0, 1, 1],
-                    opacity: [0, 0, 1, 1, 0, 0]
-                  }}
-                  transition={{
-                    duration: 1.6,
-                    repeat: Infinity,
-                    ease: "easeInOut",
-                    times: [0, 0.15, 0.35, 0.55, 0.75, 1.0]
-                  }}
-                />
-                <motion.path 
-                  d="M8 20V13L13 8H22" 
-                  stroke="#52796F" 
-                  strokeWidth="2.5" 
-                  strokeLinecap="round" 
-                  strokeLinejoin="round"
-                  fill="none"
-                  animate={{
-                    pathLength: [0, 0, 1, 1, 1, 1],
-                    pathOffset: [0, 0, 0, 0, 1, 1],
-                    opacity: [0, 0, 1, 1, 0, 0]
-                  }}
-                  transition={{
-                    duration: 1.6,
-                    repeat: Infinity,
-                    ease: "easeInOut",
-                    times: [0, 0.3, 0.5, 0.7, 0.9, 1.0]
-                  }}
-                />
-              </svg>
-              {useCustomApiKey && (
-                <motion.div 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 1 }}
-                  className="mt-4 flex flex-col items-center text-center px-4 select-none"
-                >
-                  <span className="text-xs text-slate-500 font-medium">正在使用自定义高德API加载地图...</span>
-                  <button
-                    type="button"
-                    onClick={triggerCustomApiFallback}
-                    className="mt-2 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-m3-primary text-xs font-bold rounded-lg transition-all cursor-pointer shadow-sm border border-slate-200"
-                  >
-                    若卡顿点击立即恢复公共API
-                  </button>
-                </motion.div>
-              )}
-            </div>
-          </div>
-        )}
+
 
 
 
@@ -8750,7 +8324,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       </button>
                     )}
                   </label>
-                  
+
                   {/* Grid of uploaded image previews */}
                   {submitDataSourceImages.length > 0 && (
                     <div className="grid grid-cols-5 gap-1.5 mb-1.5">
@@ -8792,7 +8366,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                           }
                           const sliceCount = Math.max(0, 5 - submitDataSourceImages.length);
                           const allowedFiles = files.slice(0, sliceCount);
-                          
+
                           try {
                             setLoading(true);
                             const promises = allowedFiles.map(file => compressImageToBase64(file as File));
@@ -8845,7 +8419,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 <Info className="w-5 h-5 text-emerald-400 shrink-0" />
                 <h3 className="text-base font-black tracking-tight text-slate-100">使用绘制功能提示</h3>
               </div>
-              
+
               <div className="flex flex-col gap-4 text-xs font-medium text-slate-300 leading-relaxed">
                 <div className="flex gap-2.5">
                   <span className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-slate-400 shrink-0 font-bold text-[10px]">1</span>
@@ -9438,7 +9012,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             <div className="flex-1 min-w-0">
                               <h3 className="text-sm font-black text-slate-900">{m.title}</h3>
                               <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{m.desc}</p>
-                              
+
                               {/* Best record */}
                               <div className="mt-2 flex items-center gap-2 text-[10px] font-bold text-slate-600">
                                 <span>最佳纪录:</span>
@@ -9526,9 +9100,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     )}
 
                     <div className="rounded-2xl border border-m3-outline-variant/40 bg-m3-primary-container/40 p-3 space-y-2">
-                      <p className="text-xs font-bold text-m3-on-primary-container">{isAdminVerified ? '管理员模式已启用，不受每日3局限制。' : initialAmapConfig.isCustom ? '当前使用自有高德API，不受每日3局限制。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局`}</p>
-                      <p className="text-[11px] leading-relaxed text-slate-500">为保障公共API使用，同一浏览器每天最多开始3局游戏，所有模式共用次数，按本地日期每日重置。开局即计1次，退出或重新挑战均不退还；复盘不消耗次数。填写自己的高德API并刷新生效后可不限局数游玩。</p>
-                      {!initialAmapConfig.isCustom && !isAdminVerified && <button type="button" onClick={openGameApiSettings} className="text-xs font-black text-m3-primary underline">填写自己的高德API</button>}
+                      <p className="text-xs font-bold text-m3-on-primary-container">{isAdminVerified ? '管理员模式已启用，不受每日3局限制。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局`}</p>
+                      <p className="text-[11px] leading-relaxed text-slate-500">为保障公共API使用，同一浏览器每天最多开始3局游戏，所有模式共用次数，按本地日期每日重置。开局即计1次，退出或重新挑战均不退还；复盘不消耗次数。全市检索的自有 API 配置不用于游戏。</p>
                     </div>
 
                     {/* Start & Review Buttons */}
@@ -9786,7 +9359,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式：不受每日3局限制</p>}
                     {!initialAmapConfig.isCustom && !isAdminVerified && <div className="w-full rounded-2xl bg-m3-primary-container/40 p-3 text-xs text-m3-on-primary-container leading-relaxed">
                       <p>{publicGameLimitReached ? '本浏览器今日3局公共API游戏次数已用完。' : `公共API今日剩余 ${Math.max(0, PUBLIC_GAME_DAILY_LIMIT - publicGamesUsed)}/3 局。`}</p>
-                      <button type="button" onClick={openGameApiSettings} className="mt-2 font-black underline">填写自己的高德API，继续游玩</button>
                     </div>}
 
                     <div className="flex gap-2.5 w-full pt-2">
@@ -10172,23 +9744,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             </button>
                           </div>
 
-                          <div className="flex items-center justify-between p-1">
-                            <div className="flex flex-col">
-                                <span className="text-xs font-bold text-slate-700">{t('showReferenceArea')}</span>
-                                <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">显示有效检索范围</span>
-                            </div>
-                            <button 
-                              type="button"
-                              onClick={() => setShowReferenceArea(prev => !prev)}
-                              className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 border-2 ${showReferenceArea ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
-                            >
-                              <motion.div 
-                                animate={{ x: showReferenceArea ? 22 : 0 }}
-                                transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-                                className={`rounded-full shadow-sm transition-colors duration-200 ${showReferenceArea ? 'w-4.5 h-4.5 bg-m3-on-primary' : 'w-3.5 h-3.5 bg-m3-outline'}`}
-                              />
-                            </button>
-                          </div>
+
 
                         </div>
 
@@ -10282,8 +9838,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       <div ref={customApiSectionRef} className="flex flex-col gap-3 p-1">
                         <div className="flex items-center justify-between">
                           <div className="flex flex-col">
-                            <span className="text-xs font-bold text-slate-700">使用自定义高德API</span>
-                            <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">使用您提供的专属API，而不是默认的公共API</span>
+                            <span className="text-xs font-bold text-slate-700">全市检索使用自有高德 API</span>
+                            <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">仅用于全市检索；普通搜索使用公共 API</span>
                           </div>
                           <button 
                             type="button"
@@ -10325,19 +9881,22 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                               />
                             </div>
                             <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
-                              <span>配置专属 Key 与安全密钥后生效。</span>
+                              <span>填写完整后，下次全市检索时生效。</span>
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (useCustomApiKey && citySearchApiStatus(true, customApiKey, customApiSecurityCode, initialAmapConfig) === 'missing') {
+                                  if (useCustomApiKey && citySearchApiStatus(true, customApiKey, customApiSecurityCode) === 'missing') {
                                     setApiErrorNotification('请先输入有效的高德API Key与安全密钥');
                                     return;
                                   }
-                                  window.location.reload();
+                                  localStorage.setItem('app_use_custom_api_key', String(useCustomApiKey));
+                                  localStorage.setItem('app_custom_api_key', customApiKey.trim());
+                                  localStorage.setItem('app_custom_api_security_code', customApiSecurityCode.trim());
+                                  setShowSettings(false);
                                 }}
                                 className="px-2.5 py-1 bg-m3-primary/10 hover:bg-m3-primary/20 text-m3-primary font-bold rounded-lg transition-all cursor-pointer"
                               >
-                                刷新页面生效
+                                保存配置
                               </button>
                             </div>
                           </div>
@@ -10576,7 +10135,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                           <rect x="13" y="22" width="1.5" height="1.5" />
                           <rect x="9" y="20" width="1.5" height="1.5" />
                         </svg>
-                        
+
                         <div className="absolute inset-0 flex items-center justify-center">
                           <div className="w-10 h-10 bg-[#07c160] rounded-full border-4 border-white shadow flex items-center justify-center">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="white" className="animate-pulse">
@@ -10587,7 +10146,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       </div>
                     )}
                   </div>
- 
+
                   {/* Operator Action Buttons */}
                   {isAdminVerified && (
                     <div className="mt-5 w-full flex items-center justify-center gap-2 pb-1">
@@ -10640,7 +10199,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
               {/* Separator */}
               <div className="hidden md:block h-px bg-m3-outline-variant/20 w-full" />
-              
+
               {/* Stats row with pulsing indicator */}
               <div className="flex items-center justify-between px-1 select-none">
                 <div className="flex gap-4">
@@ -10765,7 +10324,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         className="md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-3.5 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/30 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[220px] md:max-w-none md:w-auto md:h-[72px] border border-transparent shadow-xs"
                       >
                         <div className="hidden md:block absolute left-0 top-0 bottom-0 w-1 bg-m3-primary/0 md:group-hover:bg-m3-primary transition-all" />
-                        
+
                         <div className="flex flex-col items-center select-none shrink-0 w-[60px] md:w-[68px]">
                           <div className={`w-full h-8 md:h-[38px] md:bg-m3-surface-container-high md:text-m3-primary text-slate-800 font-extrabold flex items-center justify-center md:border md:border-m3-outline-variant/30 md:shadow-xs md:group-hover:bg-m3-primary md:group-hover:text-m3-on-primary md:rounded-xl transition-all bg-m3-surface-container-high/60 rounded-xl md:p-0 overflow-hidden px-1`}
                           >
@@ -10952,7 +10511,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     activeRawMarkersRef.current = roadStopMarkersRef.current;
                     allMapStopsRef.current = new Map(roadStopsDataRef.current);
                     if (mapInstance && (window as any).AMap) {
-                      drawReferenceArea(mapInstance, (window as any).AMap);
+
                     }
                     requestAnimationFrame(() => {
                       const bw = lineThickness === 'thin' ? 0.5 : 1.5;

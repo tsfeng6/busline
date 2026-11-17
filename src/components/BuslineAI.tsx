@@ -30,7 +30,7 @@ export function BuslineAI({ onClose, context, disabled, searchProgress, onApply 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, [messages, busy, error]);
   const send = async () => {
     if (busy || applying || disabled || (mode === 'summary' && !context)) return;
-    const question = input.trim() || (mode === 'summary' ? '请总结本次检索参考框内的公交线网。' : '');
+    const question = input.trim() || (mode === 'summary' ? '请总结本次检索结果中的公交线网。' : '');
     if (!question) return;
     const history = messages.map(({ role, content }) => ({ role, content }));
     setMessages(prev => [...prev, { role: 'user', content: question }]);
@@ -57,7 +57,7 @@ export function BuslineAI({ onClose, context, disabled, searchProgress, onApply 
       <div className="p-3 flex gap-2">
         {(['filter', 'summary'] as const).map(item => <button key={item} onClick={() => setMode(item)} disabled={busy || applying} className={`flex-1 rounded-full py-2 text-xs font-bold transition-colors ${mode === item ? 'bg-m3-primary text-white' : 'bg-m3-surface-container text-slate-600'}`}>{item === 'filter' ? '线路筛选' : '区域总结'}</button>)}
       </div>
-      <div className="px-4 pb-2 text-[11px] text-slate-500 leading-relaxed">{mode === 'summary' ? context ? `基于 ${context.city} 本次检索参考框内 ${context.lines.length} 条线路。` : '先在地图上完成普通检索，即可总结参考框内的公交线网。' : '例如：筛选北京市跨省公交线路。AI 提供候选，地图核验存在性；不保证完整覆盖或满足全部条件。'}</div>
+      <div className="px-4 pb-2 text-[11px] text-slate-500 leading-relaxed">{mode === 'summary' ? context ? `基于 ${context.city} 本次检索结果中 ${context.lines.length} 条线路。` : '先在地图上完成普通检索，即可总结检索结果中的公交线网。' : '例如：筛选北京市跨省公交线路。AI 提供候选，地图核验存在性。'}</div>
       <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 pb-3 space-y-3">
         {messages.length === 0 && <div className="rounded-2xl p-4 bg-m3-primary-container/40 text-sm text-m3-on-primary-container leading-relaxed">你好，我是 Busline AI。告诉我你想找的线路，或让我解读当前区域的公交线网。</div>}
         {messages.map((m, index) => <div key={index} className={`rounded-2xl px-3 py-2.5 text-xs leading-relaxed whitespace-pre-wrap break-words ${m.role === 'user' ? 'ml-8 bg-m3-primary text-white' : 'mr-2 bg-m3-surface-container text-slate-800'}`}>

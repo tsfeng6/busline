@@ -47,6 +47,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
     lazyStopMarker,clearStopMarkerGroup,markerGroupRef:ref({getOverlays(){return []},clearOverlays(){}}),allMapStopsRef:ref(new Map()),stopCountCacheRef:ref(new Map()),
     activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),roadStopsDataRef:ref(new Map()),
     filterIntervalBusRef:ref(false),filterAirportBusRef:ref(false),blockedKeywordsRef:ref([]),searchFilterVersionRef:ref(1),
+    getCitySearchServices:async(key:string,code:string)=>{assert.equal(key,'a'.repeat(32));assert.equal(code,'b'.repeat(32));return scope.window.AMap;},
     citySearchApiStatus,useCustomApiKey:false,customApiKey:'a'.repeat(32),customApiSecurityCode:'b'.repeat(32),initialAmapConfig:{isCustom:true,key:'a'.repeat(32),securityCode:'b'.repeat(32)},focusCustomApiRef:ref(false),
     enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>snapshot,
     citySnapshotFresh:()=>true,citySnapshotPreviewable:previewableCityDataset,resolveSearchCity,normalizeCityDataset,matchesReturnedLine,
@@ -101,9 +102,10 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
   assert.equal(started,0);assert.equal(watched,0);assert.equal(apiRequests,1);assert.deepEqual(rendered,[]);
   assert.ok(errors.some(args=>String(args).includes('Unexpected POI request')));
   // Missing or edited-but-not-loaded visitor credentials must block all live POI/line queries.
-  for(const mode of ['missing','reload','expired']) {
+  for(const mode of ['missing','incomplete','expired']) {
     errors.length=0;apiRequests=0;
-    scope.useCustomApiKey=mode==='reload';
+    scope.useCustomApiKey=mode==='incomplete';
+    scope.customApiSecurityCode=mode==='incomplete'?'':'b'.repeat(32);
     scope.loadSharedCity=async()=>mode==='expired'?{...snapshot,capturedAt:new Date(Date.now()-90*86400000).toISOString()}:null;
     scope.initialAmapConfig={isCustom:false,key:'public',securityCode:'public'};
     scope.manualResultCityRef.current='';
@@ -112,6 +114,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
   }
   // A completed collection offers upload before later Safari rendering/precise-platform work can fail.
   scope.useCustomApiKey=true;
+  scope.customApiSecurityCode='b'.repeat(32);
   scope.loadSharedCity=async()=>null;
   scope.initialAmapConfig={isCustom:true,key:scope.customApiKey,securityCode:scope.customApiSecurityCode};
   scope.manualResultCityRef.current='';
@@ -179,15 +182,12 @@ test('city auto-loading respects manual results and upload dialogs, and discards
 });
 
 
-test('live city discovery requires both visitor credentials to match the loaded SDK configuration',()=>{
- const key='a'.repeat(32),securityCode='b'.repeat(32),active={isCustom:true,key,securityCode};
- assert.equal(citySearchApiStatus(false,key,securityCode,active),'missing');
- assert.equal(citySearchApiStatus(true,key,'',active),'missing');
- assert.equal(citySearchApiStatus(true,'invalid',securityCode,active),'missing');
- assert.equal(citySearchApiStatus(true,key,securityCode,{...active,isCustom:false}),'reload');
- assert.equal(citySearchApiStatus(true,'c'.repeat(32),securityCode,active),'reload');
- assert.equal(citySearchApiStatus(true,key,'c'.repeat(32),active),'reload');
- assert.equal(citySearchApiStatus(true,' '+key+' ',securityCode,active),'ready');
+test('city collection requires both visitor credentials independently of the public map',()=>{
+ const key='a'.repeat(32),securityCode='b'.repeat(32);
+ assert.equal(citySearchApiStatus(false,key,securityCode),'missing');
+ assert.equal(citySearchApiStatus(true,key,''),'missing');
+ assert.equal(citySearchApiStatus(true,'invalid',securityCode),'missing');
+ assert.equal(citySearchApiStatus(true,' '+key+' ',securityCode),'ready');
 });
 
 test('line collection publishes its result before rendering, and cancelled searches never publish',async()=>{
@@ -205,4 +205,46 @@ test('line collection publishes its result before rendering, and cancelled searc
  events.length=0;scope.isClearedRef.current=true;
  await run([],{}, {}, '北京市',()=>false,false,()=>events.push('collected'));
  assert.deepEqual(events,[]);
+});
+
+test('private collection SDK messages are isolated from the public map and authenticate origin, source and channel',async()=>{
+ const raw=fs.readFileSync('src/utils/citySearchRealm.ts','utf8').replace('import.meta.env.BASE_URL',"'/'");
+ const code=ts.transpile(raw,{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS});
+ const handlers=new Set<any>(),frames:any[]=[],sent:any[]=[];
+ const publicSDK={key:'public-key'};
+ const window:any={location:{origin:'https://busline.cc'},AMap:publicSDK,addEventListener:(_:any,fn:any)=>handlers.add(fn),removeEventListener:(_:any,fn:any)=>handlers.delete(fn)};
+ const document:any={createElement:()=>{const events:any={};return {events,contentWindow:{postMessage:(data:any,origin:string)=>sent.push({data,origin})},setAttribute(){},addEventListener:(name:string,fn:any)=>events[name]=fn,remove(){}};},body:{appendChild:(frame:any)=>frames.push(frame)}};
+ const exports:any={};Function('exports','window','document','crypto','setTimeout','clearTimeout',code)(exports,window,document,crypto,setTimeout,clearTimeout);
+ const key='a'.repeat(32),security='b'.repeat(32),promise=exports.getCitySearchServices(key,security);
+ const frame=frames[0];assert.equal(frame.src,'/amap-search-frame.html');assert.ok(!frame.src.includes(key));frame.events.load();
+ const init=sent[0].data;assert.equal(init.key,key);assert.equal(init.securityCode,security);
+ const emit=(data:any,origin=window.location.origin,source=frame.contentWindow)=>{for(const handler of handlers)handler({data,origin,source});};
+ let ready=false;void promise.then(()=>ready=true);
+ emit({type:'ready',channel:init.channel},'https://foreign.example');await Promise.resolve();assert.equal(ready,false);
+ emit({type:'ready',channel:init.channel},window.location.origin,{});await Promise.resolve();assert.equal(ready,false);
+ emit({type:'ready',channel:init.channel});const services=await promise;
+ const query=new services.PlaceSearch({city:'北京市'});query.setPageIndex(2);
+ let result:any;query.search('',(status:any,value:any)=>{result={status,value};});
+ const request=sent.at(-1).data;assert.equal(request.options.pageIndex,2);assert.equal(request.service,'PlaceSearch');
+ emit({type:'result',channel:'wrong',id:request.id,status:'complete',result:{bad:true}});assert.equal(result,undefined);
+ emit({type:'result',channel:init.channel,id:request.id,status:'complete',result:{poiList:{pois:[]}}});
+ assert.deepEqual(result,{status:'complete',value:{poiList:{pois:[]}}});
+ assert.equal(window.AMap,publicSDK);assert.equal(window.AMap.key,'public-key');
+ assert.equal(window._AMapSecurityConfig,undefined);
+});
+
+test('isolated AMap frame preserves SDK coordinates without exposing them to another origin',async()=>{
+ const {runInNewContext}=await import('node:vm');
+ const html=fs.readFileSync('public/amap-search-frame.html','utf8'),script=html.match(/<script>([\s\S]*)<\/script>/)![1];
+ let receive:any,loaded:any;const messages:any[]=[],parent={postMessage:(data:any,origin:any)=>messages.push({data,origin})};
+ const sandbox:any={parent,location:{origin:'https://busline.cc'},addEventListener:(_:any,fn:any)=>receive=fn,
+  document:{createElement:()=>({}),head:{appendChild:(script:any)=>loaded=script}},
+  AMap:{LineSearch:class{search(_query:any,callback:any){callback('complete',{lineInfo:[{path:[{getLng:()=>116.123456789123,getLat:()=>39.987654321098}]}]});}}}};
+ sandbox.window=sandbox;runInNewContext(script,sandbox);
+ const init={type:'init',channel:'channel',key:'a'.repeat(32),securityCode:'b'.repeat(32)};
+ receive({source:parent,origin:'https://foreign.example',data:init});assert.equal(loaded,undefined);
+ receive({source:parent,origin:sandbox.location.origin,data:init});assert.ok(loaded.src.startsWith('https://webapi.amap.com/maps?'));loaded.onload();
+ receive({source:parent,origin:sandbox.location.origin,data:{type:'query',channel:'channel',id:1,service:'LineSearch',method:'search',args:['6路']}});
+ const result=messages.at(-1);assert.equal(result.origin,sandbox.location.origin);
+ assert.equal(result.data.result.lineInfo[0].path[0].lng,116.123456789123);assert.equal(result.data.result.lineInfo[0].path[0].lat,39.987654321098);
 });

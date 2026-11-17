@@ -27,7 +27,7 @@ export function CityDataPanel({ data, status, onRefresh, onUpload }: { data: Cit
           onClick={showHistory} className="p-2 rounded-full bg-m3-primary-container text-m3-on-primary-container disabled:opacity-35"><History className="w-5 h-5" /></button>
       </div>
     </div>
-    {data && <p className="text-xs text-slate-500">{data.city} · {data.lines.length} 个线路方向 · {new Date(data.capturedAt).toLocaleString('zh-CN')}<br />本次成功获取的线路，不代表已核实全市全部线路。</p>}
+    {data && <p className="text-xs text-slate-500">{data.city} · {data.lines.length} 个线路方向 · {new Date(data.capturedAt).toLocaleString('zh-CN')}</p>}
     {open && <div role="dialog" aria-modal="true" aria-label="城市线路历史" className="fixed inset-0 z-[150] bg-slate-900/40 flex items-center justify-center p-4">
       <div className="bg-m3-surface rounded-3xl p-5 w-full max-w-lg max-h-[75vh] overflow-auto shadow-xl">
         <div className="flex items-center justify-between mb-4"><h3 className="font-bold">{data?.city} · 历史快照</h3><button aria-label="关闭城市线路历史" onClick={() => setOpen(false)}><X className="w-5 h-5" /></button></div>

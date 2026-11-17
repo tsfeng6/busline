@@ -68,3 +68,17 @@ test('each overview zoom has geographically correct XYZ tiles; missing tiles nee
  assert.equal(validTileIndex({...index,keys:['13/999999/0']}),false);
  for(const file of tiles.files(index.base))assert.deepEqual([...file.content.subarray(0,8)],[137,80,78,71,13,10,26,10]);
 });
+
+test('HD XYZ tiles retain original bounds at 512px and have antialiased transparent edges',async()=>{
+ const {CityOverviewTiles,TILE_PIXEL_RATIO}=await import('../scripts/city-overview-tiles');
+ const {inflateSync}=await import('node:zlib');
+ const tiles=new CityOverviewTiles();tiles.add({lines:[{path:[[116.1234,39.9876],[116.151,40.001]]}]});
+ assert.equal(TILE_PIXEL_RATIO,2);let partial=false,clear=false,solid=false;
+ for(const file of tiles.files('tiles/xyz-v1')){
+  assert.equal(file.content.readUInt32BE(16),512);assert.equal(file.content.readUInt32BE(20),512);
+  const compressed:Buffer[]=[];for(let at=8;at<file.content.length;){const size=file.content.readUInt32BE(at);if(file.content.toString('ascii',at+4,at+8)==='IDAT')compressed.push(file.content.subarray(at+8,at+8+size));at+=size+12;}
+  const rows=inflateSync(Buffer.concat(compressed));
+  for(let y=0;y<512;y++)for(let x=0;x<512;x++){const alpha=rows[y*(512*4+1)+1+x*4+3];if(alpha===0)clear=true;else if(alpha===255)solid=true;else partial=true;}
+ }
+ assert.ok(clear&&solid&&partial);
+});

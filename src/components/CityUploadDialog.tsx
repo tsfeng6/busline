@@ -8,7 +8,6 @@ export function CityUploadDialog({data,busy,progress,error,onSubmit,onClose}:{da
       <div className="rounded-2xl p-3 w-fit bg-m3-primary-container text-m3-primary mb-5"><Upload className="w-6 h-6" /></div>
       <h2 id="city-upload-title" className="text-xl font-bold text-slate-800">是否将此结果提交到远端？</h2>
       <p className="mt-3 text-sm text-slate-500 leading-relaxed">{data.city} · {data.lines.length} 个线路方向<br/>本地检索已完成。提交后可供其他用户查看；暂不提交也能继续使用地图。</p>
-      {!data.retrievalComplete&&<p className="mt-3 text-xs text-amber-700">本次检索未完整完成，提交后会显示为尚未完整的数据。</p>}
       {busy&&<p role="status" className="mt-4 text-sm text-m3-primary flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin"/>正在上传 · {progress}%</p>}
       {error&&<p role="alert" className="mt-4 text-sm text-m3-error">{error}</p>}
       <div className="mt-7 flex justify-end gap-3">
