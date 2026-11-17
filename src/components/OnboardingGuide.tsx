@@ -1,3 +1,4 @@
+import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from '../utils/citySearchApi';
 import { DaxingMapPreview } from './DaxingMapPreview';
 import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -216,8 +217,8 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
 
   // Step 1 ~ 5: Onboarding Wizard Cards
   const handleNext = () => {
-    if (step === 4 && useCustomApiKey && customApiKey.trim().length < 5) {
-      setApiErrorHint('请填写有效的高德 Web端 API Key，或选择使用公共API');
+    if (step === 4 && useCustomApiKey && citySearchApiStatus(true, customApiKey, customApiSecurityCode, {isCustom:false,key:'',securityCode:''}) === 'missing') {
+      setApiErrorHint('请填写有效的高德 Web端 API Key 和 Security Code，或暂时关闭自定义 API，仅查看共享线路');
       return;
     }
     if(step>=5)onFinishOnboarding();else setStep(step + 1);
@@ -389,7 +390,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
                     您是否愿意提供自定义的API以检索？
                   </h2>
                   <p className="text-[11px] font-medium text-slate-500 leading-relaxed">
-                    使用提供的高德API以检索，而不是公共API，公共的API在当月限额达到后，巴士线路图不可用
+                    查看已有共享线路无需填写；城市缺少数据或需要重新检索时，须填写您自己的高德 API Key 与 Security Code。
                   </p>
                 </div>
 
@@ -431,6 +432,7 @@ export const OnboardingGuide: React.FC<OnboardingGuideProps> = ({
                     </button>
                   </div>
 
+                  <p className="text-[11px] text-slate-500 leading-relaxed">{AMAP_API_PRIVACY_NOTICE}</p>
                   {useCustomApiKey && (
                     <div className="space-y-2.5 pt-2 border-t border-m3-outline-variant/20">
                       <div>

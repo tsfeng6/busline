@@ -11,8 +11,6 @@ export interface UploadStore {
 type Env=Record<string,string|undefined>;
 type Session={id:string;city:string;bytes:number;parts:number;sha256:string;format:string;tokenHash:string;expires:number};
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-// Temporary upload gate: only a one-way verifier is kept in server code. Override to rotate it.
-const defaultUploadKeyHash='fbd209dc807d3e0ca4be652fe6d5992123a4a7af3a2160533c68aee5752d105f';
 const terminal=new Set(['completed','retained','failed']);
 const fail=(status:number,message:string)=>Object.assign(Error(message),{status});
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
@@ -98,7 +96,7 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
       return new Response(part,{headers:{'Content-Type':'application/octet-stream','Cache-Control':'no-store'}});
     }
     if(!allowed.includes(origin))throw fail(403,'此来源不允许访问上传入口。');
-    if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,x-city-upload-token,x-city-upload-key','Access-Control-Max-Age':'600'}});
+    if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,x-city-upload-token','Access-Control-Max-Age':'600'}});
     if(request.method==='GET'&&/^\/jobs\/[^/]+$/.test(path)){
       const id=path.split('/')[2];if(!uuid.test(id))throw fail(400,'任务编号无效。');
       const job=await get(jobKey(id));if(!job)throw fail(404,'任务不存在。');
@@ -108,10 +106,6 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
       return json({id:job.id,city:job.city,state:job.state,message:job.message,createdAt:job.createdAt,updatedAt:job.updatedAt,result:job.result});
     }
     if(path==='/uploads'&&request.method==='POST'){
-      const supplied=request.headers.get('x-city-upload-key')||'';
-      const expected=env.UPLOAD_ACCESS_KEY_SHA256||defaultUploadKeyHash;
-      if(!/^[a-f0-9]{64}$/.test(expected))throw fail(503,'上传密钥配置无效。');
-      if(!supplied||supplied.length>256||!equal(hash(supplied),expected))throw fail(401,'上传密钥错误，请重新输入。');
       const input=await jsonBody(request,1024);try{cityDataKey(input.city);}catch{throw fail(400,'城市名称无效。');}
       const size=input.bytes,parts=input.parts;
       if(!Number.isInteger(size)||size<2||size>MAX_CITY_BYTES||parts!==Math.ceil(size/CITY_CHUNK_BYTES)||!/^[a-f0-9]{64}$/.test(input.sha256||'')||![CITY_UPLOAD_FORMAT,CITY_RECORD_FORMAT,'json'].includes(input.format||'json'))throw fail(400,'上传信息无效或超过1GB（1GiB）。');

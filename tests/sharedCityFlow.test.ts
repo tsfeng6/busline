@@ -1,3 +1,4 @@
+import { citySearchApiStatus } from '../src/utils/citySearchApi';
 import {CITY_DETAIL_ZOOM} from '../src/utils/cityOverview';
 import { lazyStopMarker, clearStopMarkerGroup } from '../src/utils/lazyStopMarker';
 import test from 'node:test';
@@ -46,6 +47,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
     lazyStopMarker,clearStopMarkerGroup,markerGroupRef:ref({getOverlays(){return []},clearOverlays(){}}),allMapStopsRef:ref(new Map()),stopCountCacheRef:ref(new Map()),
     activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),roadStopsDataRef:ref(new Map()),
     filterIntervalBusRef:ref(false),filterAirportBusRef:ref(false),blockedKeywordsRef:ref([]),searchFilterVersionRef:ref(1),
+    citySearchApiStatus,useCustomApiKey:false,customApiKey:'a'.repeat(32),customApiSecurityCode:'b'.repeat(32),initialAmapConfig:{isCustom:true,key:'a'.repeat(32),securityCode:'b'.repeat(32)},focusCustomApiRef:ref(false),
     enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>snapshot,
     citySnapshotFresh:()=>true,citySnapshotPreviewable:previewableCityDataset,resolveSearchCity,normalizeCityDataset,matchesReturnedLine,
     updateTerminalNamesCache(){},syncStopMarkersToMap(){},getStopColor:()=> '#52796F',isLineNameBlockedRef:()=>false,
@@ -53,7 +55,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
     fetchAndDrawLines:()=>{throw Error('Shared city must bypass live line discovery');},
     getBoxForStops:()=>({minLng:115,maxLng:117,minLat:38,maxLat:40}),clipPathToBox:(path:any)=>[path],
     getLatLng:(p:any)=>[p.lng,p.lat],drawReferenceArea(){},
-    isAdminVerified:false,adminPasswordUsed:'',
+    checkAmapQuotaError(){},isAdminVerified:false,adminPasswordUsed:'',
   };
   const proxy = new Proxy(scope, {
     has(target,key) { return key in target || (typeof key==='string' && key.startsWith('set')); },
@@ -87,6 +89,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
   assert.deepEqual(rendered,['6路(甲--乙)']);
   assert.equal(apiRequests,0);
   rendered=[];
+  scope.useCustomApiKey=true;
   scope.loadSharedCity=async()=>null;
   scope.actionsCityUpdatesEnabled=true;
   scope.cityJobWatchRef=ref(null);
@@ -97,6 +100,39 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
   await run();
   assert.equal(started,0);assert.equal(watched,0);assert.equal(apiRequests,1);assert.deepEqual(rendered,[]);
   assert.ok(errors.some(args=>String(args).includes('Unexpected POI request')));
+  // Missing or edited-but-not-loaded visitor credentials must block all live POI/line queries.
+  for(const mode of ['missing','reload','expired']) {
+    errors.length=0;apiRequests=0;
+    scope.useCustomApiKey=mode==='reload';
+    scope.loadSharedCity=async()=>mode==='expired'?{...snapshot,capturedAt:new Date(Date.now()-90*86400000).toISOString()}:null;
+    scope.initialAmapConfig={isCustom:false,key:'public',securityCode:'public'};
+    scope.manualResultCityRef.current='';
+    await run();
+    assert.equal(apiRequests,0);assert.deepEqual(errors,[]);assert.equal(scope.focusCustomApiRef.current,true);
+  }
+  // A completed collection offers upload before later Safari rendering/precise-platform work can fail.
+  scope.useCustomApiKey=true;
+  scope.loadSharedCity=async()=>null;
+  scope.initialAmapConfig={isCustom:true,key:scope.customApiKey,securityCode:scope.customApiSecurityCode};
+  scope.manualResultCityRef.current='';
+  map.getZoom=()=>12;
+  scope.window.AMap.PlaceSearch=class {
+    setPageIndex(){}
+    search(_:any,callback:any){callback('complete',{poiList:{pois:snapshot.stops,count:1}});}
+  };
+  scope.setPendingCityUpload=(data:any)=>{scope.pendingCityUploadRef.current=data;scope.pendingCityUpload=data;};
+  scope.fetchAndDrawLines=async(_names:any,_map:any,_amap:any,_city:any,_cancel:any,_force:any,onCollected:any)=>{
+    for(const line of snapshot.lines)scope.fetchedLinesCache.current.set(line.name,{...line,city:'北京'});
+    onCollected(true);
+    throw Error('simulated Safari rendering failure');
+  };
+  errors.length=0;
+  await run();
+  assert.ok(scope.pendingCityUpload);
+  assert.equal(scope.pendingCityUpload.city,'北京市');
+  assert.equal(scope.pendingCityUpload.lines.length,1);
+  assert.ok(errors.some(args=>String(args).includes('simulated Safari rendering failure')));
+
 });
 
 test('city auto-loading respects manual results and upload dialogs, and discards late network responses', async () => {
@@ -140,4 +176,33 @@ test('city auto-loading respects manual results and upload dialogs, and discards
     else {assert.equal(rendered.length,0);if(['missing','expired','unavailable'].includes(scenario))assert.equal(notices[0].kind,scenario);else assert.equal(notices.length,0);}
     cleanup?.();
   }
+});
+
+
+test('live city discovery requires both visitor credentials to match the loaded SDK configuration',()=>{
+ const key='a'.repeat(32),securityCode='b'.repeat(32),active={isCustom:true,key,securityCode};
+ assert.equal(citySearchApiStatus(false,key,securityCode,active),'missing');
+ assert.equal(citySearchApiStatus(true,key,'',active),'missing');
+ assert.equal(citySearchApiStatus(true,'invalid',securityCode,active),'missing');
+ assert.equal(citySearchApiStatus(true,key,securityCode,{...active,isCustom:false}),'reload');
+ assert.equal(citySearchApiStatus(true,'c'.repeat(32),securityCode,active),'reload');
+ assert.equal(citySearchApiStatus(true,key,'c'.repeat(32),active),'reload');
+ assert.equal(citySearchApiStatus(true,' '+key+' ',securityCode,active),'ready');
+});
+
+test('line collection publishes its result before rendering, and cancelled searches never publish',async()=>{
+ const ast=ts.createSourceFile('App.tsx',fs.readFileSync('src/App.tsx','utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ let declaration:ts.VariableDeclaration|undefined;
+ const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='fetchAndDrawLines')declaration=node;ts.forEachChild(node,visit);};
+ visit(ast);assert.ok(declaration);
+ const code=ts.transpile(`const ${declaration.getText(ast)};`,{target:ts.ScriptTarget.ES2022});
+ const ref=(current:any)=>({current});const events:string[]=[];
+ const scope={searchVersionRef:ref(1),isClearedRef:ref(false),isMinigameActiveRef:ref(false),fetchedLinesCache:ref(new Map()),setTimeout,
+  aggregateAndVisualize:async()=>{events.push('render');throw Error('render failure');}};
+ const run=Function('scope',`with(scope){${code};return fetchAndDrawLines;}`)(scope);
+ await assert.rejects(run([],{}, {}, '北京市',()=>false,false,()=>events.push('collected')),/render failure/);
+ assert.deepEqual(events,['collected','render']);
+ events.length=0;scope.isClearedRef.current=true;
+ await run([],{}, {}, '北京市',()=>false,false,()=>events.push('collected'));
+ assert.deepEqual(events,[]);
 });

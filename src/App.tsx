@@ -1,3 +1,4 @@
+import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
 import {MapActivityIndicator} from './components/MapActivityIndicator';
 import { CityOverviewLayer } from './components/CityOverviewLayer';
 import { CITY_DETAIL_ZOOM } from './utils/cityOverview';
@@ -6458,6 +6459,23 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         setSharedCityStatus('暂无可用共享线路，正在检索。');
       }
 
+      // Shared data stays readable without visitor credentials; live city discovery must use their SDK key.
+      if (!usedSharedCity) {
+        const apiStatus = citySearchApiStatus(useCustomApiKey, customApiKey, customApiSecurityCode, initialAmapConfig);
+        if (apiStatus !== 'ready') {
+          const message = apiStatus === 'missing'
+            ? '此城市需要重新检索，请先填写您自己的高德 Web端 API Key 和 Security Code，并刷新页面生效。'
+            : '高德 API 配置已修改，请先刷新页面使配置生效，再重新检索。';
+          setSharedCityStatus(message);
+          setApiErrorNotification(message);
+          focusCustomApiRef.current = true;
+          setUseCustomApiKey(true);
+          setSettingsTab('general');
+          setShowSettings(true);
+          return;
+        }
+      }
+
       // Remote availability never gates a local search. No upload starts before explicit confirmation.
       if (!usedSharedCity) {
         manualResultCityRef.current = currentCity.replace(/市$/, '');
@@ -6636,7 +6654,31 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           await aggregateAndVisualize(sharedDataset!.lines.filter(line => !isLineNameBlockedRef(line.name)
             && (!filterIntervalBusRef.current || !line.name.includes('区间'))).map(line => line.name), map, AMap);
         } else {
-          const linesComplete = await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity, () => false, refreshLineData);
+          const prepareUpload = (complete: boolean) => {
+            if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
+            if (!complete) wasTruncated = true;
+            try {
+              const dataset = normalizeCityDataset({ schemaVersion: 1, city: currentCity, scope: 'city',
+                coverage: 'observed', capturedAt: new Date().toISOString(), retrievalComplete: !wasTruncated,
+                filtered: filtersAtStart || filterVersionAtStart !== searchFilterVersionRef.current
+                  || filterIntervalBusRef.current || filterAirportBusRef.current || blockedKeywordsRef.current.length > 0,
+                stops: pois,
+                lines: [...fetchedLinesCache.current.values()].filter(line => !line.isUserSubmitted
+                  && (!line.city || line.city.replace(/市$/, '') === currentCity.replace(/市$/, ''))),
+              });
+              setLastCityDataset(dataset);
+              if (dataset.filtered) setSharedCityStatus('本次开启了线路过滤，仅在本地展示，不发布为全市共享数据。');
+              else {
+                setSharedCityStatus('本地检索完成；尚未提交到远端。');
+                setCityUploadError('');
+                setCityUploadProgress(0);
+                setPendingCityUpload(dataset);
+              }
+            } catch {
+              setSharedCityStatus('本次检索结果未通过快照校验，无法提交；已获得的线路仍可在本地查看。');
+            }
+          };
+          const linesComplete = await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity, () => false, refreshLineData, prepareUpload);
           if (!linesComplete) wasTruncated = true;
         }
         if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
@@ -6789,25 +6831,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             }).map(stop => stop.name) }));
         if (areaLines.length) setAIRegionContext({ city: currentCity, bounds: { ...aiBox }, lines: areaLines });
 
-        if (!usedSharedCity) {
-          try {
-          const dataset = normalizeCityDataset({ schemaVersion: 1, city: currentCity, scope: 'city',
-            coverage: 'observed', capturedAt: new Date().toISOString(), retrievalComplete: !wasTruncated,
-            filtered: filtersAtStart || filterVersionAtStart !== searchFilterVersionRef.current
-              || filterIntervalBusRef.current || filterAirportBusRef.current || blockedKeywordsRef.current.length > 0,
-            stops: pois,
-            lines: [...fetchedLinesCache.current.values()].filter(line => !line.isUserSubmitted && line.city === currentCity),
-          });
-          setLastCityDataset(dataset);
-          if (dataset.filtered) setSharedCityStatus('本次开启了线路过滤，仅可导出，不发布为全市共享数据。');
-          else {
-            setSharedCityStatus('本地检索完成；尚未提交到远端。');
-            setCityUploadError('');
-            setCityUploadProgress(0);
-            setPendingCityUpload(dataset);
-          }
-          } catch { setSharedCityStatus('地图已生成，本次数据未通过快照校验。'); }
-        }
 
         if (enableLineCacheRef.current && !usedRegionCache) {
           const linesToSave: BusLine[] = [];
@@ -6840,7 +6863,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       console.error('Search error:', error);
       setIsSearching(false);
     } finally {
-      if(searchVersionRef.current===thisSearchVer)setSearchActivity(null);
+      if(searchVersionRef.current===thisSearchVer){setSearchActivity(null);setIsSearching(false);}
     }
   };
 
@@ -6875,12 +6898,12 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
   };
 
-  const submitCityUpload = async (accessKey: string) => {
+  const submitCityUpload = async () => {
     if (!pendingCityUpload || cityUploadBusy) return;
     const dataset = pendingCityUpload;
     setCityUploadBusy(true); setCityUploadError(''); setCityUploadProgress(0);
     try {
-      const job = await uploadCitySnapshot(gatewayBase, dataset, setCityUploadProgress, undefined, accessKey);
+      const job = await uploadCitySnapshot(gatewayBase, dataset, setCityUploadProgress);
       setPendingCityUpload(null);
       setCityUpdateJob(job); setSharedCityStatus(job.message);
       void watchCityActionJob(job, true);
@@ -6889,7 +6912,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     } finally { setCityUploadBusy(false); }
   };
 
-  const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string, shouldCancel: () => boolean = () => false, forceRefresh = false) => {
+  const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string, shouldCancel: () => boolean = () => false, forceRefresh = false, onCollected?: (complete: boolean) => void) => {
     const startSearchVer = searchVersionRef.current;
     let complete = true;
     const existingCacheKeys = Array.from(fetchedLinesCache.current.keys()) as string[];
@@ -6975,6 +6998,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     if (searchVersionRef.current !== startSearchVer || isClearedRef.current || isMinigameActiveRef.current || shouldCancel()) {
       return;
     }
+    onCollected?.(complete);
+    await new Promise<void>(resolve => setTimeout(resolve, 0));
     await aggregateAndVisualize(lineNames, map, AMap);
     return complete;
   };
@@ -7243,7 +7268,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         if (!groups.has(color)) groups.set(color, []);
         for (const path of paths) {
           const clipped = showReferenceAreaRef.current && box ? clipPathToBox(path, box.minLng, box.maxLng, box.minLat, box.maxLat) : [path];
-          groups.get(color)!.push(...clipped);
+          for (const segment of clipped) groups.get(color)!.push(segment);
         }
       }
       return groups;
@@ -8075,7 +8100,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       </header>
 
       <CityUploadDialog data={pendingCityUpload} busy={cityUploadBusy} progress={cityUploadProgress} error={cityUploadError}
-        onSubmit={accessKey => void submitCityUpload(accessKey)} onClose={() => { if (!cityUploadBusy) setPendingCityUpload(null); }} />
+        onSubmit={() => void submitCityUpload()} onClose={() => { if (!cityUploadBusy) setPendingCityUpload(null); }} />
       {!loading && !showMinigameModal && onboardingStep===0 && <MapActivityIndicator raised={showMoreInfo} mode={searchActivity==='manual'||(isSearching&&searchActivity!=='auto')?'search':cityLoading||searchActivity==='auto'?'city':null} />}
       <CityUpdateStatus job={cityUpdateJob} onClose={() => { cityJobWatchRef.current?.abort(); setCityUpdateJob(null); }} />
       {cityDataNotice && !cityUpdateJob && !isSearching && <div role="status" className="absolute top-24 left-4 sm:left-6 z-30 max-w-sm rounded-2xl bg-m3-surface/95 border border-m3-outline-variant/40 p-4 shadow-lg flex items-center gap-3">
@@ -10272,6 +10297,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             />
                           </button>
                         </div>
+                        <p className="text-[11px] leading-relaxed text-slate-500">{AMAP_API_PRIVACY_NOTICE}</p>
                         {useCustomApiKey && (
                           <div className="flex flex-col gap-2.5 pt-1">
                             <div>
@@ -10303,9 +10329,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (useCustomApiKey && !customApiKey.trim()) {
-                                    setUseCustomApiKey(false);
-                                    localStorage.setItem('app_use_custom_api_key', 'false');
+                                  if (useCustomApiKey && citySearchApiStatus(true, customApiKey, customApiSecurityCode, initialAmapConfig) === 'missing') {
                                     setApiErrorNotification('请先输入有效的高德API Key与安全密钥');
                                     return;
                                   }
