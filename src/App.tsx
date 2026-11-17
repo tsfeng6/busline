@@ -1,3 +1,4 @@
+import {MapActivityIndicator} from './components/MapActivityIndicator';
 import { CityOverviewLayer } from './components/CityOverviewLayer';
 import { CITY_DETAIL_ZOOM } from './utils/cityOverview';
 import { lazyTimelineRoute } from './utils/lazyTimelineRoute';
@@ -1921,6 +1922,8 @@ export default function App() {
   };
 
   const [isSearching, setIsSearching] = useState(false);
+  const [searchActivity,setSearchActivity]=useState<'auto'|'manual'|null>(null);
+  const [cityLoading,setCityLoading]=useState(false);
   const [showEmptySearchNotice, setShowEmptySearchNotice] = useState(false);
   const customApiSectionRef = useRef<HTMLDivElement>(null);
   const focusCustomApiRef = useRef(false);
@@ -6312,6 +6315,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setShowEmptySearchNotice(false);
     const searchStartedAt = performance.now();
 
+    setSearchActivity(sharedOverride?'auto':'manual');
     setIsSearching(true);
     setSharedCityStatus(sharedCityDataEnabled ? '正在检查共享城市线路…' : '');
     try {
@@ -6835,6 +6839,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     } catch (error) {
       console.error('Search error:', error);
       setIsSearching(false);
+    } finally {
+      if(searchVersionRef.current===thisSearchVer)setSearchActivity(null);
     }
   };
 
@@ -6974,6 +6980,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
   const handleClear = () => {
+    setSearchActivity(null);
+    setCityLoading(false);
     manualResultCityRef.current = '';
     setPendingCityUpload(null);
     cityJobWatchRef.current?.abort();
@@ -7438,20 +7446,23 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const startedAtSearchVersion = searchVersionRef.current;
     const timer = setTimeout(async () => {
       if (cancelled || pendingCityUploadRef.current || startedAtSearchVersion !== searchVersionRef.current || manualResultCityRef.current === key) return;
+      setCityLoading(true);
+      try {
       const {data, status} = await inspectSharedCity(currentCity);
       if (cancelled || pendingCityUploadRef.current || isMinigameActiveRef.current || startedAtSearchVersion !== searchVersionRef.current || manualResultCityRef.current === key) return;
       cityAutoChecksRef.current.set(key, Date.now());
       if (data && (citySnapshotFresh(data) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(data)))) {
         setCityDataNotice(null);
-        void handleSearch(false, data);
+        await handleSearch(false, data);
       } else {
         // Do not show the previous city's map as if it belonged to this city.
         if (sharedMapDataRef.current || (lastCityDataset && lastCityDataset.city.replace(/市$/, '') !== key)) handleClear();
         if (data) setLastCityDataset(data);
         setCityDataNotice({ city: currentCity, kind: data ? 'expired' : status === 'unavailable' ? 'unavailable' : 'missing' });
       }
+      } finally { if(!cancelled)setCityLoading(false); }
     }, 700);
-    return () => { cancelled = true; clearTimeout(timer); };
+    return () => { cancelled = true; clearTimeout(timer); setCityLoading(false); };
   }, [mapInstance, currentCity, zoomLevel, isSearching, showMinigameModal, onboardingStep, activeBusLine, pendingCityUpload, cityUploadBusy, cityUpdateJob?.id, cityUpdateJob?.state]);
 
   useEffect(()=>{
@@ -8065,6 +8076,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       <CityUploadDialog data={pendingCityUpload} busy={cityUploadBusy} progress={cityUploadProgress} error={cityUploadError}
         onSubmit={() => void submitCityUpload()} onClose={() => { if (!cityUploadBusy) setPendingCityUpload(null); }} />
+      {!loading && !showMinigameModal && onboardingStep===0 && <MapActivityIndicator raised={showMoreInfo} mode={searchActivity==='manual'||(isSearching&&searchActivity!=='auto')?'search':cityLoading||searchActivity==='auto'?'city':null} />}
       <CityUpdateStatus job={cityUpdateJob} onClose={() => { cityJobWatchRef.current?.abort(); setCityUpdateJob(null); }} />
       {cityDataNotice && !cityUpdateJob && !isSearching && <div role="status" className="absolute top-24 left-4 sm:left-6 z-30 max-w-sm rounded-2xl bg-m3-surface/95 border border-m3-outline-variant/40 p-4 shadow-lg flex items-center gap-3">
         <div className="text-xs text-slate-600"><p className="font-bold text-slate-800 mb-1">{cityDataNotice.city}</p>

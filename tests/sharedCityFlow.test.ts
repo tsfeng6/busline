@@ -119,7 +119,7 @@ test('city auto-loading respects manual results and upload dialogs, and discards
       sharedMapDataRef:{current:false},lastCityDataset:null,cityAutoChecksRef:{current:new Map()},isMinigameActiveRef:{current:false},
       citySnapshotPreviewable:previewableCityDataset,actionsCityUpdatesEnabled:false,inspectSharedCity:async()=>scenario==='missing'?{data:null,status:'missing'}:scenario==='unavailable'?{data:null,status:'unavailable'}:{data:snapshot,status:'ready'},
       citySnapshotFresh:(value:any)=>value.capturedAt===data.capturedAt,
-      handleSearch:(...args:any[])=>rendered.push(args),setCityDataNotice:(notice:any)=>notices.push(notice),setLastCityDataset(){},handleClear(){},
+      setCityLoading:()=>{},handleSearch:(...args:any[])=>rendered.push(args),setCityDataNotice:(notice:any)=>notices.push(notice),setLastCityDataset(){},handleClear(){},
       setTimeout:(job:()=>Promise<void>)=>{jobs.push(job);return 1;},clearTimeout(){},
     };
     let resolveRead:((value:any)=>void)|undefined;
