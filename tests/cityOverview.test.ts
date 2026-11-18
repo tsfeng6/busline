@@ -82,3 +82,21 @@ test('HD XYZ tiles retain original bounds at 512px and have antialiased transpar
  }
  assert.ok(clear&&solid&&partial);
 });
+
+test('disk-backed tile generation stays bounded and preserves every pixel across evictions and overlapping cities',async()=>{
+ const {CityOverviewTiles}=await import('../scripts/city-overview-tiles');
+ const root=mkdtempSync(join(tmpdir(),'busline-tile-spill-test-'));
+ try{
+  const memory=new CityOverviewTiles(),disk=new CityOverviewTiles({cacheDirectory:root,maxResidentTiles:1});
+  const cities=[
+   {lines:[{path:[[116.1234,39.9876],[116.151,40.001]] as [number,number][]}]},
+   {lines:[{path:[[121.49,31.23],[121.51,31.25]] as [number,number][]}]},
+   {lines:[{path:[[116.1235,39.9877],[116.16,40.002]] as [number,number][]}]},
+  ];
+  for(const city of cities){memory.add(city);disk.add(city);assert.ok(disk.residentBytes<=512*512);}
+  assert.ok(disk.keys.length>20);assert.deepEqual(disk.keys,memory.keys);
+  const expected=new Map([...memory.files('tiles')].map(file=>[file.path,file.content]));
+  for(let pass=0;pass<2;pass++)for(const file of disk.files('tiles'))assert.deepEqual(file.content,expected.get(file.path));
+  assert.ok(disk.residentBytes<=512*512);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});

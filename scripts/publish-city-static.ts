@@ -1,7 +1,8 @@
 import {provinceForCity,savedCountySeats} from '../src/utils/localTransit';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isCityParts, validateCityPart, CITY_FILE_BYTES } from '../src/utils/cityStorage';
@@ -24,7 +25,9 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   };
   let bytes = 0, cities = 0, historySnapshots = 0;
   const overviews:CityOverview[]=[];
-  const tiles=new CityOverviewTiles();
+  const tileCache=await mkdtemp(join(tmpdir(),'busline-tile-work-'));
+  const tiles=new CityOverviewTiles({cacheDirectory:tileCache,maxResidentTiles:128});
+  try {
   const copied = new Set<string>();
   const copy = async (path: string, content: string | Uint8Array) => {
     if (copied.has(path)) return;
@@ -67,6 +70,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
     await snapshot(prefix, file, currentId); cities++;
     const latest=await resolveCityParts(JSON.parse(source(file)),async part=>JSON.parse(source(`${prefix}/${part}`)));
     tiles.add(latest);
+    console.log(`Prepared ${latest.city}: ${tiles.keys.length} tiles; resident raster ${(tiles.residentBytes/1024/1024).toFixed(1)} MiB`);
     const thumbnail=cityThumbnail(latest);
     if(thumbnail){const name=`thumbnails/${city}-geo-v3.png`;await copy(`city-data/v1/${name}`,cityOverviewPNG(thumbnail.raster));overviews.push({...thumbnail.meta,province:provinceForCity(latest.city),countySeats:savedCountySeats(latest),thumbnail:`thumbnails/${encodeURIComponent(city)}-geo-v3.png`});}
     if (files.has(historyPath)) {
@@ -84,6 +88,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   await mkdir(join(output, 'city-data/v1'), { recursive: true });
   await writeFile(join(output, 'city-data/v1/publication.json'), JSON.stringify({ commit, cities, historySnapshots, bytes, publishedAt: new Date().toISOString() }));
   return { cities, historySnapshots, bytes, commit };
+  } finally {await rm(tileCache,{recursive:true,force:true});}
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
