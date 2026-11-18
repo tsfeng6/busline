@@ -36,7 +36,7 @@ export function cityThumbnail(data:{city:string;capturedAt:string;lines:{path:[n
 
 export type OverviewTileIndex={base:string;revision:string;minZoom:number;maxZoom:number;keys:string[]};
 export function validTileIndex(value:any):value is OverviewTileIndex{
- return value?.base==='tiles/xyz-v1'&&/^[a-f0-9]{40}$/.test(value?.revision||'')&&value.minZoom===2&&value.maxZoom===13&&Array.isArray(value.keys)&&value.keys.length<=25000&&value.keys.every((key:any)=>{
+ return value?.base==='tiles/xyz-v1'&&/^[a-f0-9]{40}$/.test(value?.revision||'')&&value.minZoom===2&&value.maxZoom===13&&Array.isArray(value.keys)&&value.keys.length<=100000&&value.keys.every((key:any)=>{
   if(typeof key!=='string'||!/^\d+\/\d+\/\d+$/.test(key))return false;
   const [z,x,y]=key.split('/').map(Number);return z>=2&&z<=13&&x>=0&&y>=0&&x<2**z&&y<2**z;
  });

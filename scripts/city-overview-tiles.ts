@@ -26,7 +26,7 @@ export class CityOverviewTiles{
    this.tiles.delete(oldest);
   }
   const existed=this.tileKeys.has(key);
-  if(!existed&&this.tileKeys.size>=25000)throw Error('City tile publication budget exceeded');
+  if(!existed&&this.tileKeys.size>=100000)throw Error('City tile publication budget exceeded');
   const pixels=existed?readFileSync(this.cachePath(key)):new Uint8Array(RASTER_SIZE*RASTER_SIZE);
   if(pixels.length!==RASTER_SIZE*RASTER_SIZE)throw Error('Invalid tile working file');
   tile={pixels,dirty:!existed};this.tiles.set(key,tile);this.tileKeys.add(key);return tile;
