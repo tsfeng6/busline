@@ -90,13 +90,67 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   return { cities, historySnapshots, bytes, commit };
   } finally {await rm(tileCache,{recursive:true,force:true});}
 }
+// ---- 发布步骤的仓库解析：Vercel 构建环境没有 `origin` 远程 ----
+
+export function resolveRepoUrl(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): { url: string; via: string } {
+  for (const remote of ['origin', 'upstream']) {
+    try {
+      const url = execFileSync('git', ['remote', 'get-url', remote], { cwd, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+      if (url) return { url, via: remote };
+    } catch { /* try the next remote */ }
+  }
+  const owner = (env.VERCEL_GIT_REPO_OWNER || '').trim();
+  const slug = (env.VERCEL_GIT_REPO_SLUG || '').trim();
+  if (owner && slug) return { url: `https://github.com/${owner}/${slug}.git`, via: 'vercel-env' };
+  return { url: 'https://github.com/tsfeng6/busline.git', via: 'default' };
+}
+
+export function authenticatedUrl(url: string, token: string | undefined): string {
+  if (!token) return url;
+  return url.replace(/^https:\/\//, `https://x-access-token:${encodeURIComponent(token)}@`);
+}
+
+export function redact(text: string, token: string | undefined): string {
+  return token ? text.split(token).join('[REDACTED]') : text;
+}
+
+function describeGitError(stderr: string, phase: '查询' | '拉取'): string {
+  const line = stderr.split('\n').map((s) => s.trim()).find(Boolean) || stderr;
+  if (/authentication failed|could not read username|not authorized|permission denied|invalid username|403/i.test(stderr)) {
+    return `权限错误（GitHub 认证失败）：${line}`;
+  }
+  if (/repository.*not found|not found|does not appear to be a git repository|404/i.test(stderr)) {
+    return `仓库不存在或名称错误：${line}`;
+  }
+  if (/could not resolve host|unable to access|failed to connect|timed out|connection (reset|refused)|network/i.test(stderr)) {
+    return `网络错误（无法连接 GitHub）：${line}`;
+  }
+  return `${phase} busline-data 分支失败：${line}`;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const token = process.env.GITHUB_TOKEN || undefined;
+  const { url, via } = resolveRepoUrl();
+  const remote = authenticatedUrl(url, token);
+  console.log(`Publishing shared city snapshots from ${url} (busline-data, resolved via ${via})`);
   try {
-    execFileSync('git', ['ls-remote', '--exit-code', '--heads', 'origin', 'busline-data'], { stdio: 'pipe' });
-    execFileSync('git', ['fetch', '--depth=1', '--filter=blob:none', 'origin', 'busline-data'], { stdio: 'inherit' });
+    execFileSync('git', ['ls-remote', '--exit-code', '--heads', remote, 'busline-data'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error: any) {
+    if (error?.status === 2) { console.log('No shared city data branch yet.'); process.exit(0); }
+    console.error(describeGitError(redact(String(error?.stderr || ''), token), '查询'));
+    process.exit(1);
+  }
+  try {
+    // Full shallow fetch by explicit URL: `git show` then needs no lazy blob fetch from a promisor remote.
+    execFileSync('git', ['fetch', '--depth=1', remote, 'busline-data'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error: any) {
+    console.error(describeGitError(redact(String(error?.stderr || ''), token), '拉取'));
+    process.exit(1);
+  }
+  try {
     console.log(await mirrorCitySnapshots('FETCH_HEAD'));
   } catch (error: any) {
-    if (error.status === 2) console.log('No shared city data branch yet.');
-    else { console.error('Unable to publish shared city snapshots:', error.message); process.exitCode = 1; }
+    console.error('Unable to publish shared city snapshots:', redact(error.message, token));
+    process.exit(1);
   }
 }

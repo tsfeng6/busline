@@ -15,7 +15,7 @@
     "lint": "tsc --noEmit",
     "city-data:update": "tsx scripts/update-city-data.ts",
     "lint:gateway": "tsc -p cloudflare/city-gateway/tsconfig.json",
-    "test:city-data": "node --import tsx --test tests/cityData.test.ts tests/sharedCityFlow.test.ts tests/cityActions.test.ts tests/staticCityData.test.ts tests/mapMemory.test.ts tests/cityOverview.test.ts tests/localTransit.test.ts",
+    "test:city-data": "node --import tsx --test tests/cityData.test.ts tests/sharedCityFlow.test.ts tests/cityActions.test.ts tests/staticCityData.test.ts tests/mapMemory.test.ts tests/cityOverview.test.ts tests/localTransit.test.ts tests/publishCityStatic.test.ts",
     "test:edgeone": "node --import tsx --test tests/edgeOneGateway.test.ts",
     "lint:edgeone": "tsc -p edgeone/city-gateway/tsconfig.json"
   },
