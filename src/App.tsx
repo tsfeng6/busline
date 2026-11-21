@@ -9,6 +9,8 @@ import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearch
 import {MapActivityIndicator} from './components/MapActivityIndicator';
 import { CityOverviewLayer } from './components/CityOverviewLayer';
 import { CITY_DETAIL_ZOOM } from './utils/cityOverview';
+import { cityDataCache, cityPrefetcher, enqueueNeighborPrefetch, cancelNeighborPrefetch } from './utils/spatialLoader';
+import { citiesInViewport, expandBounds, neighborsOf, type Bounds } from './utils/viewportCities';
 import { lazyTimelineRoute } from './utils/lazyTimelineRoute';
 import { lazyStopMarker, viewportStopMarkers, syncLazyMarkers, clearStopMarkerGroup } from './utils/lazyStopMarker';
 import { RouteRenderIndex, offsetRoutePath, type RenderRoute } from './utils/routeRenderIndex';
@@ -873,6 +875,7 @@ export default function App() {
   useEffect(() => () => cityJobWatchRef.current?.abort(), []);
   const [cityDataNotice, setCityDataNotice] = useState<{city: string; kind: 'missing' | 'expired' | 'busy' | 'unavailable'} | null>(null);
   const cityAutoChecksRef = useRef(new Map<string, number>());
+  const spatialViewportRef = useRef<string[]>([]);
   const manualResultCityRef = useRef('');
   const sharedMapDataRef = useRef(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
@@ -6113,7 +6116,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       if (cancelled || pendingCityUploadRef.current || startedAtSearchVersion !== searchVersionRef.current || manualResultCityRef.current === key) return;
       setCityLoading(true);
       try {
-      const {data, status} = await inspectSharedCity(currentCity);
+      const cached = cityDataCache.peek(currentCity, { pin: true });
+      const {data, status} = cached && (citySnapshotFresh(cached) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(cached)))
+        ? { data: cached, status: 'ready' }
+        : await inspectSharedCity(currentCity);
       if (cancelled || pendingCityUploadRef.current || isMinigameActiveRef.current || startedAtSearchVersion !== searchVersionRef.current || manualResultCityRef.current === key) return;
       cityAutoChecksRef.current.set(key, Date.now());
       if (data && (citySnapshotFresh(data) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(data)))) {
@@ -6129,6 +6135,51 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }, 700);
     return () => { cancelled = true; clearTimeout(timer); setCityLoading(false); };
   }, [mapInstance, currentCity, zoomLevel, isSearching, showMinigameModal, onboardingStep, activeBusLine, pendingCityUpload, cityUploadBusy, cityUpdateJob?.id, cityUpdateJob?.state]);
+
+  // 空间加载原型：视野城市识别 + 邻接城市后台预取（增量接入，不改变现有整城加载流程）。
+  useEffect(() => {
+    if (!mapInstance || !sharedCityDataEnabled || zoomLevel < CITY_DETAIL_ZOOM) return;
+    if (isSearching || showMinigameModal) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => {
+      if (cancelled || !mapInstance) return;
+      const bounds = mapInstance.getBounds?.();
+      if (!bounds || typeof bounds.getSouthWest !== 'function') return;
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const viewport: Bounds = [sw.lng, sw.lat, ne.lng, ne.lat];
+      void (async () => {
+        let catalog: { city: string; bounds: Bounds }[];
+        try {
+          catalog = (await loadPublishedCities()).map(item => ({ city: item.city.replace(/市$/, ''), bounds: item.bounds }));
+        } catch { return; }
+        if (cancelled) return;
+        const inView = citiesInViewport(catalog, viewport);
+        for (const city of spatialViewportRef.current) if (!inView.includes(city)) cityDataCache.unpin(city);
+        for (const city of inView) cityDataCache.pin(city);
+        spatialViewportRef.current = inView;
+        cityPrefetcher.enqueue(inView, 'viewport');
+        cityPrefetcher.enqueue(citiesInViewport(catalog, expandBounds(viewport, 0.5)), 'buffer');
+        const currentKey = (currentCity || '').replace(/市$/, '');
+        if (currentKey && currentKey !== '全国') {
+          enqueueNeighborPrefetch(neighborsOf(currentKey, catalog));
+        }
+      })();
+    };
+    timer = setTimeout(refresh, 800);
+    const onMove = () => { if (timer) clearTimeout(timer); timer = setTimeout(refresh, 800); };
+    mapInstance.on('moveend', onMove);
+    mapInstance.on('zoomend', onMove);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      mapInstance.off('moveend', onMove);
+      mapInstance.off('zoomend', onMove);
+      cityPrefetcher.cancel();
+      cancelNeighborPrefetch();
+    };
+  }, [mapInstance, currentCity, zoomLevel, isSearching, showMinigameModal]);
 
   useEffect(()=>{
     if(!mapInstance)return;

@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "node --import tsx scripts/publish-city-static.ts && npm run build:vite",
+  "outputDirectory": "dist"
+}
