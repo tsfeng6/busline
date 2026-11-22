@@ -34,6 +34,15 @@ test('transient static read failures retry the same file and stay distinct from 
   assert.equal(count,2);
   await assert.rejects(()=>readCityJSON('/city-data/v1/北京/latest.json',async()=>{throw Error('offline');}),(e:any)=>e.status===503);
 });
+test('a bounded mobile read retries and reports a network failure instead of waiting indefinitely', async () => {
+  let attempts = 0;
+  const stalled: typeof fetch = async (_input, init) => new Promise<Response>((_resolve, reject) => {
+    attempts++;
+    init?.signal?.addEventListener('abort', () => reject(Object.assign(Error('aborted'), { name: 'AbortError' })), { once: true });
+  });
+  await assert.rejects(() => readCityJSON('/city-data/v1/北京/latest.json', stalled, { timeoutMs: 5 }), (error: any) => error.status === 503);
+  assert.equal(attempts, 2);
+});
 test('static publication pins a data commit and copies latest/index files without huge historical snapshots or source files',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'busline-static-'));
   try{

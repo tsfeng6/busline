@@ -85,15 +85,26 @@ export async function resolveCityStorage(
   value: any,
   readJSON: (path: string) => Promise<any>,
   readBvpk: (part: CityBvpkPart) => Promise<CityPart>,
+  { partConcurrency = 1, onPart }: { partConcurrency?: number; onPart?: (completed: number, total: number) => void } = {},
 ) {
   const manifest = cityBvpkManifest(value);
   if (!manifest) {
     if (value?.storage !== undefined && !isCityParts(value)) throw Error('不支持的城市数据格式。');
     return resolveCityParts(value, readJSON);
   }
+  const parts = new Array<CityPart>(manifest.parts.length);
+  let next = 0, completed = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, Math.floor(partConcurrency)), manifest.parts.length) }, async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= manifest.parts.length) return;
+      parts[index] = await readBvpk(manifest.parts[index]);
+      onPart?.(++completed, manifest.parts.length);
+    }
+  });
+  await Promise.all(workers);
   const data: CityDataset = { ...manifest.header, lines: [], stops: [] };
-  for (const descriptor of manifest.parts) {
-    const part = await readBvpk(descriptor);
+  for (const part of parts) {
     for (const line of part.lines) data.lines.push(line);
     for (const stop of part.stops) data.stops.push(stop);
   }

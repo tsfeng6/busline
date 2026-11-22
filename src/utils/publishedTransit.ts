@@ -2,6 +2,7 @@ import {validCityOverview} from './cityOverview';
 import {provinceForCity,type PublishedCity} from './localTransit';
 import {cityDataCache} from './spatialLoader';
 import type {CityDataset} from './cityDataset';
+import {loadSharedCityForGame} from './sharedCityClient';
 let catalogTask:Promise<PublishedCity[]>|undefined;
 let catalogAt=0,revision='';
 export function loadPublishedCities(refresh=false):Promise<PublishedCity[]>{
@@ -16,8 +17,12 @@ export function loadPublishedCities(refresh=false):Promise<PublishedCity[]>{
  })().catch(error=>{catalogTask=undefined;throw error;});
  return catalogTask;
 }
-export async function loadGameCity(city:string):Promise<CityDataset>{
- const data=await cityDataCache.get(city);
- if(!data)throw Error('该城市的已保存线路暂时不可用，请选择其他城市。');
- return data;
+export async function loadGameCity(city:string,onPart?:(completed:number,total:number)=>void):Promise<CityDataset>{
+ const cached=cityDataCache.peek(city);if(cached)return cached;
+ try{
+  const data=await loadSharedCityForGame(city,onPart);cityDataCache.remember(data);return data;
+ }catch(error:any){
+  if(error?.status===404)throw Error('该城市的已保存线路暂时不可用，请选择其他城市。');
+  throw Error('读取城市线路超时或网络不稳定，请检查网络后重试。',{cause:error});
+ }
 }

@@ -1,4 +1,4 @@
-import { readCityJSON, sharedCityStaticURL } from './sharedCityRead';
+import { readCityJSON, sharedCityStaticURL, type CityReadOptions } from './sharedCityRead';
 import { CityUpdateJobClient } from './cityUpdateJobs';
 import { cityDataKey, normalizeCityDataset, usableCityDataset, previewableCityDataset, type CityDataset, type CitySnapshotMeta } from './cityDataset';
 
@@ -9,8 +9,8 @@ export const cityUpdateJobs = new CityUpdateJobClient(gatewayBase);
 export const sharedCityDataEnabled = import.meta.env.VITE_CITY_DATA_ENABLED === 'true';
 export const citySnapshotFresh = usableCityDataset;
 export const citySnapshotPreviewable = previewableCityDataset;
-async function read(city: string, suffix = '', version = '', expectedSnapshotId?: string) {
-  return readCityJSON(sharedCityStaticURL(city, suffix, version, import.meta.env.BASE_URL || '/'), undefined, { expectedSnapshotId });
+async function read(city: string, suffix = '', version = '', expectedSnapshotId?: string, options: CityReadOptions = {}) {
+  return readCityJSON(sharedCityStaticURL(city, suffix, version, import.meta.env.BASE_URL || '/'), undefined, { ...options, expectedSnapshotId });
 }
 type CityCheck = { data: CityDataset | null; status: 'ready' | 'missing' | 'unavailable' };
 const cityLoads = new Map<string, Promise<CityCheck>>();
@@ -35,6 +35,13 @@ export async function inspectSharedCity(city: string, version = '', expectedSnap
 }
 export async function loadSharedCity(city: string, version = '', expectedSnapshotId?: string): Promise<CityDataset | null> {
   return (await inspectSharedCity(city, version, expectedSnapshotId)).data;
+}
+/** Game reads need fast feedback on constrained mobile networks, unlike background map loads. */
+export async function loadSharedCityForGame(city: string, onPart?: (completed: number, total: number) => void): Promise<CityDataset> {
+  if (!sharedCityDataEnabled) throw Error('网站共享线路当前未启用。');
+  const data = normalizeCityDataset(await read(city, '', '', undefined, { timeoutMs: 12000, partConcurrency: 4, onPart }));
+  if (cityDataKey(data.city) !== cityDataKey(city)) throw Error('共享线路城市不匹配。');
+  return data;
 }
 export async function acquireCityRefresh(city: string): Promise<{ token: string; expiresAt: number }> {
   const response = await fetch(`${apiBase}/api/city-data/${encodeURIComponent(city)}/refresh`, {

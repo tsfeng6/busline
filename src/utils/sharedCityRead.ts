@@ -11,17 +11,31 @@ export function sharedCityStaticURL(city: string, suffix = '', version = '', bas
   return version ? `${path}?v=${encodeURIComponent(version)}` : path;
 }
 
+export type CityReadOptions = {
+  decompress?: BrotliDecode;
+  expectedSnapshotId?: string;
+  timeoutMs?: number;
+  partConcurrency?: number;
+  onPart?: (completed: number, total: number) => void;
+};
+
 export async function readCityJSON(
   url: string,
   transport: typeof fetch = (input, init) => globalThis.fetch(input, init),
-  { decompress = decodeBrowserBrotli, expectedSnapshotId }: { decompress?: BrotliDecode; expectedSnapshotId?: string } = {},
+  { decompress = decodeBrowserBrotli, expectedSnapshotId, timeoutMs = 60000, partConcurrency = 1, onPart }: CityReadOptions = {},
 ) {
   if ((!url.startsWith('/') && !url.startsWith('./')) || url.startsWith('//') || url.includes('\\')) throw Error('共享数据必须使用网站同源路径。');
   const request = async <T>(path: string, parse: (response: Response) => Promise<T>, immutable = false) => {
     for (let attempt = 0; ; attempt++) {
       try {
         const cache = immutable ? (attempt ? 'reload' : 'force-cache') : 'no-cache';
-        const response = await transport(path, { signal: AbortSignal.timeout(60000), cache, redirect: 'error' });
+        // AbortSignal.timeout is absent on older Safari. A controller keeps reads
+        // bounded on mobile networks without depending on that newer API.
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        let response: Response;
+        try { response = await transport(path, { signal: controller.signal, cache, redirect: 'error' }); }
+        finally { clearTimeout(timer); }
         if (!response.ok) throw Object.assign(Error('共享线路文件暂时无法读取。'), { status: response.status });
         return await parse(response);
       } catch (error: any) {
@@ -58,5 +72,6 @@ export async function readCityJSON(
         const hash = await crypto.subtle.digest('SHA-256', new Uint8Array(bytes));
         return Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
       }), true),
+    { partConcurrency, onPart },
   );
 }
