@@ -57,7 +57,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
     fetchAndDrawLines:()=>{throw Error('Shared city must bypass live line discovery');},
     getBoxForStops:()=>({minLng:115,maxLng:117,minLat:38,maxLat:40}),clipPathToBox:(path:any)=>[path],
     getLatLng:(p:any)=>[p.lng,p.lat],drawReferenceArea(){},
-    checkAmapQuotaError(){},isAdminVerified:false,adminPasswordUsed:'',
+    clearPriorityCoverage(){},checkAmapQuotaError(){},isAdminVerified:false,adminPasswordUsed:'',
   };
   const proxy = new Proxy(scope, {
     has(target,key) { return key in target || (typeof key==='string' && key.startsWith('set')); },
@@ -95,7 +95,6 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
   scope.loadSharedCity=async()=>null;
   scope.actionsCityUpdatesEnabled=true;
   scope.cityJobWatchRef=ref(null);
-  scope.cityAutoChecksRef=ref(new Map());
   let started=0,watched=0;
   scope.cityUpdateJobs={start:async(city:string)=>{started++;return {id:crypto.randomUUID(),city,state:'queued',message:'等待更新'};}};
   scope.watchCityActionJob=()=>{watched++;};
@@ -136,49 +135,48 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
 
 });
 
-test('city auto-loading respects manual results and upload dialogs, and discards late network responses', async () => {
-  const source=fs.readFileSync('src/App.tsx','utf8');
-  const ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+test('map browsing reads only city summaries and discards results from the previous city', async () => {
+  const source = fs.readFileSync('src/App.tsx', 'utf8');
+  const ast = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let arrow: ts.Node | undefined;
-  const visit=(node:ts.Node)=>{
-    if(ts.isCallExpression(node)&&node.expression.getText(ast)==='useEffect'&&node.arguments[0]?.getText(ast).includes('cityAutoChecksRef.current.get(key)')) arrow=node.arguments[0];
-    ts.forEachChild(node,visit);
+  const visit = (node: ts.Node) => {
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useEffect'
+      && node.arguments[0]?.getText(ast).includes('setPublishedCitySummary(city')) arrow = node.arguments[0];
+    ts.forEachChild(node, visit);
   };
-  visit(ast); assert.ok(arrow);
-  const code=ts.transpile(`const effect = ${arrow.getText(ast)};`,{target:ts.ScriptTarget.ES2022});
-  const data=normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),retrievalComplete:true,filtered:false,
-    stops:[{id:'s',name:'站点',address:'6路',location:{lng:116,lat:39}}],lines:[{id:'l',name:'6路(甲--乙)',city:'北京市',path:[[116,39],[116.1,39.1]],via_stops:[]}]});
-  for(const scenario of ['ready','missing','expired','unavailable','zoomed-out','city-overview','cancelled','manual-result','submission-dialog','uploading','late-response','new-search','late-dialog','onboarding-modal','map-tour']) {
-    const notices:any[]=[], rendered:any[]=[], jobs:(()=>Promise<void>)[]=[];
-    const snapshot=scenario==='expired'?{...data,capturedAt:new Date(Date.now()-90*86400000).toISOString()}:data;
-    const scope:any={CITY_DETAIL_ZOOM,sharedCityDataEnabled:true,mapInstance:{},isSearching:false,showMinigameModal:false,onboardingStep:scenario==='onboarding-modal'?2:scenario==='map-tour'?4:0,
-      activeBusLine:null,cityUpdateJob:null,pendingCityUploadRef:{current:scenario==='submission-dialog'?snapshot:null},pendingCityUpload:scenario==='submission-dialog'?snapshot:null,cityUploadBusy:scenario==='uploading',manualResultCityRef:{current:scenario==='manual-result'?'北京':''},searchVersionRef:{current:1},zoomLevel:scenario==='zoomed-out'?8:scenario==='city-overview'?12:13,currentCity:'北京市',Date,
-      sharedMapDataRef:{current:false},lastCityDataset:null,cityAutoChecksRef:{current:new Map()},isMinigameActiveRef:{current:false},
-      citySnapshotPreviewable:previewableCityDataset,actionsCityUpdatesEnabled:false,inspectSharedCity:async()=>scenario==='missing'?{data:null,status:'missing'}:scenario==='unavailable'?{data:null,status:'unavailable'}:{data:snapshot,status:'ready'},
-      citySnapshotFresh:(value:any)=>value.capturedAt===data.capturedAt,
-      setCityLoading:()=>{},cityDataCache:{peek:()=>null},handleSearch:(...args:any[])=>rendered.push(args),setCityDataNotice:(notice:any)=>notices.push(notice),setLastCityDataset(){},handleClear(){},
-      setTimeout:(job:()=>Promise<void>)=>{jobs.push(job);return 1;},clearTimeout(){},
+  visit(ast);
+  assert.ok(arrow);
+  const code = ts.transpile(`const effect = ${arrow.getText(ast)};`, { target: ts.ScriptTarget.ES2022 });
+  for (const scenario of ['published', 'missing', 'zoomed-out', 'cancelled'] as const) {
+    const summaries: unknown[] = [], notices: unknown[] = [], jobs: Array<() => void> = [];
+    const city = { city: '北京市', lineDirections: 1000 };
+    let complete: (value: unknown) => void = () => {};
+    const scope = {
+      CITY_DETAIL_ZOOM, sharedCityDataEnabled: true, mapInstance: {}, showMinigameModal: false, onboardingStep: 0,
+      showSettings: false, zoomLevel: scenario === 'zoomed-out' ? 8 : 15, currentCity: '北京市',
+      loadPublishedCities: () => new Promise(resolve => { complete = resolve; }),
+      loadSharedCity: () => { throw Error('Viewport browsing must not load a full snapshot'); },
+      setPublishedCitySummary: (value: unknown) => summaries.push(value), setCityDataNotice: (value: unknown) => notices.push(value),
+      setTimeout: (job: () => void) => { jobs.push(job); return 1; }, clearTimeout() {},
     };
-    let resolveRead:((value:any)=>void)|undefined;
-    if(['late-response','new-search','late-dialog'].includes(scenario))scope.inspectSharedCity=()=>new Promise(resolve=>{resolveRead=resolve;});
-    const cleanup=Function('scope',`with(scope){${code};return effect();}`)(scope);
-    if(scenario==='cancelled') cleanup?.();
-    for(const job of jobs) {
-      const waiting=job();
-      if(resolveRead){
-        if(scenario==='late-dialog')scope.pendingCityUploadRef.current=snapshot;
-        else scope.searchVersionRef.current++;
-        if(scenario==='late-response')scope.manualResultCityRef.current='北京';
-        resolveRead({data:snapshot,status:'ready'});
-      }
-      await waiting;
+    const cleanup = Function('scope', `with(scope){${code};return effect();}`)(scope);
+    jobs.forEach(job => job());
+    if (scenario === 'cancelled') cleanup();
+    complete(scenario === 'missing' ? [] : [city]);
+    await Promise.resolve();
+    if (scenario === 'published') {
+      assert.deepEqual(summaries, [city]);
+      assert.deepEqual(notices, [null]);
+    } else if (scenario === 'missing') {
+      assert.deepEqual(summaries, [null]);
+      assert.deepEqual(notices, [{ city: '北京市', kind: 'missing' }]);
+    } else {
+      assert.deepEqual(summaries, []);
+      assert.deepEqual(notices, scenario === 'zoomed-out' ? [null] : []);
     }
-    if(scenario==='ready'||scenario==='map-tour') {assert.equal(rendered.length,1); assert.equal(rendered[0][0],false);assert.equal(rendered[0][1],data);}
-    else {assert.equal(rendered.length,0);if(['missing','expired','unavailable'].includes(scenario))assert.equal(notices[0].kind,scenario);else assert.equal(notices.length,0);}
     cleanup?.();
   }
 });
-
 
 test('city collection requires both visitor credentials independently of the public map',()=>{
  const key='a'.repeat(32),securityCode='b'.repeat(32);

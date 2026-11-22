@@ -96,21 +96,46 @@ test('county mask replacement and removal do not leave overlays on the normal ma
  run(center,3000);run([116.01,39],3000);assert.equal(added,2);assert.equal(removed,1);run();assert.equal(removed,2);assert.equal(scope.countyMaskRef.current,null);
 });
 
-test('both connectivity search entry points draw routes without changing map center or zoom',async()=>{
- const source=fs.readFileSync('src/App.tsx','utf8'),ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),declarations=new Map<string,ts.VariableDeclaration>();
- const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&['showStopConnectivity','executeStationConnectivity'].includes(node.name.getText(ast)))declarations.set(node.name.getText(ast),node);ts.forEachChild(node,visit);};visit(ast);
- let drawn=0,camera=0;const line=data().lines[0];
- const scope:any={window:{AMap:{LineSearch:class{search(_name:string,callback:any){callback('complete',{lineInfo:[line]});}}}},currentCity:'北京市',
-  lineGroupRef:{current:{clearOverlays(){}}},markerGroupRef:{current:{}},mapRef:{current:{setFitView(){camera++;},setZoom(){camera++;},setCenter(){camera++;}}},
-  clearStopMarkerGroup(){},setTimeout,clearTimeout,parseLineInfo:(name:string)=>({name}),checkAmapQuotaError(){},isLineNameBlockedRef:()=>false,
-  renderBusLine:(...args:any[])=>{assert.equal(args[5],false);drawn++;},fetch:async()=>({json:async()=>({summary:'summary'})})};
- const proxy=new Proxy(scope,{has:(target,key)=>key in target||(typeof key==='string'&&key.startsWith('set')),get:(target,key)=>key in target?target[key]:typeof key==='string'&&key.startsWith('set')?()=>{}:undefined});
- for(const name of ['showStopConnectivity','executeStationConnectivity']){
-  const declaration=declarations.get(name);assert.ok(declaration);const code=ts.transpile(`const ${declaration.getText(ast)};`,{target:ts.ScriptTarget.ES2022});
-  const run=Function('scope',`with(scope){${code};return ${name};}`)(proxy);
-  if(name==='showStopConnectivity')await run(['1路']);else await run({name:'海淀区政府',lines:['1路']},new Set(),false,0);
- }
- assert.equal(drawn,2);assert.equal(camera,0);
+test('box and station connectivity draw complete priority routes without changing camera or zoom', async () => {
+  const source = fs.readFileSync('src/App.tsx', 'utf8');
+  const ast = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const declarations = new Map<string, ts.VariableDeclaration>();
+  const names = ['drawPriorityRoute', 'showStopConnectivity', 'executeStationConnectivity'];
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) declarations.set(node.name.getText(ast), node);
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  for (const name of names) assert.ok(declarations.has(name));
+  const code = ts.transpile(names.map(name => `const ${declarations.get(name)!.getText(ast)};`).join('\n'), { target: ts.ScriptTarget.ES2022 });
+  const line = data().lines[0];
+  const drawn: any[] = [], cities: string[] = [];
+  let camera = 0;
+  const scope: any = {
+    window: { AMap: { Polyline: class { constructor(public options: unknown) {} } } },
+    currentCity: '北京市', lineThickness: 'thick', lineGroupRef: { current: {} }, markerGroupRef: { current: {} },
+    mapRef: { current: { setFitView() { camera++; }, setZoom() { camera++; }, setCenter() { camera++; } } },
+    priorityCoverageRef: { current: { addOverlay: (overlay: any) => drawn.push(overlay.options) } },
+    coverageVersionRef: { current: 0 }, searchVersionRef: { current: 0 }, isMinigameActiveRef: { current: false },
+    boxSelectedStops: [{ city: '保定市', lines: ['1路'] }, { city: '廊坊市', lines: ['1路'] }],
+    clearPriorityCoverage() { scope.coverageVersionRef.current++; },
+    cityDataCache: { get: async () => data() },
+    coverageLines: async (city: string) => { cities.push(city); return [line]; },
+    normalizeStopName: (name: string) => name, getLatLng: (point: unknown) => point, setTimeout,
+    fetch: async () => ({ json: async () => ({ summary: 'summary' }) }),
+  };
+  const proxy = new Proxy(scope, {
+    has: (target, key) => key in target || (typeof key === 'string' && key.startsWith('set')),
+    get: (target, key) => key in target ? target[key] : typeof key === 'string' && key.startsWith('set') ? () => {} : undefined,
+  });
+  const run = Function('scope', `with(scope){${code};return {showStopConnectivity,executeStationConnectivity};}`)(proxy);
+  await run.showStopConnectivity(['1路']);
+  await run.executeStationConnectivity({ city: '北京市', name: '海淀区政府', lines: ['1路'] }, new Set(), false, 0);
+  assert.deepEqual(cities, ['保定市', '廊坊市', '北京市']);
+  assert.equal(drawn.length, 3);
+  assert.ok(drawn.every(overlay => overlay.zIndex >= 75));
+  for (const overlay of drawn) assert.deepEqual(overlay.path, line.path);
+  assert.equal(camera, 0);
 });
 
 test('published game catalog reads only same-origin static data and refreshes cached cities after a publication',async()=>{
