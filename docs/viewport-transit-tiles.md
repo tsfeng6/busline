@@ -74,4 +74,5 @@ location.reload();
 - 交界样本：`15/26957/12465`（包 `15/3369/1558` 的 slot 13）解出 4 条线路、3 个站点，来源城市包含北京市、保定市、廊坊市。
 - 自动化：本机 Node v24.22.1 执行 `node --import tsx --test tests/*.test.ts` 为 136 项、通过 129、跳过 7、失败 0；`npm run lint`、`npm run lint:gateway`、`npm run lint:edgeone`、`npm run build` 均通过。CI 固定 Node 22，PR #6 的同一测试命令已通过。
 - 浏览器实测（生产与本地构建）：15 级视野下 CustomLayer Canvas 有绘制像素，Worker 会请求对应 `.pack`（DevTools 不会列出 Worker 内部的 fetch）。
+- 检索实测（2026-11-22）：生产公共 AMap Key 返回 `USER_DAILY_QUERY_OVER_LIMIT`；换用独立测试 Key 构建本地版本后，线路“1路”与地名“天安门”的建议、结果均正常。代码已补充 AutoComplete / PlaceSearch 的配额错误提示。
 - 未验证：真实低端手机与触屏体验、受登录保护的 Vercel 分支预览、长时间缓存与弱网抖动下的恢复表现。
