@@ -66,3 +66,12 @@ location.reload();
 ```
 
 自动化测试和数据发布验证覆盖数据、调度和构建。实际地图观感、低端手机顺畅度及线上交互由用户验收。
+
+## 验证记录（2026-11-22）
+
+- 主线合并：PR #6（`01f9375`）的测试、类型检查、生产构建和 GitHub Pages 部署均通过。
+- 发布数据：`gh-pages` 的 `city-data/v1/transit.json` 为 schema 1、revision `3c1408868f07054edecfdff7223561a189772913`、9028 个网络包；生产 `https://busline.cc/city-data/v1/transit.json` 返回同一 revision。
+- 交界样本：`15/26957/12465`（包 `15/3369/1558` 的 slot 13）解出 4 条线路、3 个站点，来源城市包含北京市、保定市、廊坊市。
+- 自动化：本机 Node v24.22.1 执行 `node --import tsx --test tests/*.test.ts` 为 136 项、通过 129、跳过 7、失败 0；`npm run lint`、`npm run lint:gateway`、`npm run lint:edgeone`、`npm run build` 均通过。CI 固定 Node 22，PR #6 的同一测试命令已通过。
+- 浏览器实测（生产与本地构建）：15 级视野下 CustomLayer Canvas 有绘制像素，Worker 会请求对应 `.pack`（DevTools 不会列出 Worker 内部的 fetch）。
+- 未验证：真实低端手机与触屏体验、受登录保护的 Vercel 分支预览、长时间缓存与弱网抖动下的恢复表现。
