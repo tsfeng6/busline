@@ -12,6 +12,20 @@ const apiError = (status: number, message: string) => Object.assign(new Error(me
 const routePath = (city: string) => `city-data/v1/${cityDataKey(city)}`;
 const encodePath = (value: string) => value.split('/').map(encodeURIComponent).join('/');
 
+/** Run `fn` over `items` with bounded concurrency, preserving result order. */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 /** Atomic two-file commits, optimistic ref updates and bounded conflict retries. */
 export class GithubCityStore {
   constructor(private settings: Config, private transport: Transport = fetch) {
@@ -90,15 +104,14 @@ export class GithubCityStore {
             filtered: data.filtered, lineDirections: data.lines.length, stops: data.stops.length, snapshotId: id }) },
         ] : []),
       ];
-      const treeEntries: { path: string; mode: string; type: string; sha: string | null }[] = [];
-      for (const file of (function* () { yield* cityStorageFiles(data, prefix, id, promoted); yield* files; })()) {
-        const blob = await this.api('/git/blobs', 'POST', { content: file.content, encoding: 'utf-8' });
-        treeEntries.push({ path: file.path, mode: '100644', type: 'blob', sha: blob.sha });
-      }
+      const newFiles = [...(function* () { yield* cityStorageFiles(data, prefix, id, promoted); yield* files; })()];
+      const blobs = await mapLimit(newFiles, 8, (file) => this.api('/git/blobs', 'POST', { content: file.content, encoding: 'utf-8' }));
+      const treeEntries: { path: string; mode: string; type: string; sha: string | null }[] = newFiles.map((file, index) => ({ path: file.path, mode: '100644', type: 'blob', sha: blobs[index].sha }));
       const liveParts = new Set<string>();
       const preserveParts = (manifest: any) => { if (isCityParts(manifest)) for (const part of manifest.parts) liveParts.add(validateCityPart(part)); };
       if (!promoted) preserveParts(oldFile);
-      for (const record of retained) if (record.id !== id) preserveParts(await this.file(`${prefix}/history/${record.id}.json`, head.object.sha));
+      const retainedManifests = await mapLimit(retained.filter(record => record.id !== id), 8, (record) => this.file(`${prefix}/history/${record.id}.json`, head.object.sha));
+      for (const manifest of retainedManifests) preserveParts(manifest);
       for (const entry of treeEntries) if (entry.path.startsWith(`${prefix}/parts/`)) liveParts.add(entry.path.slice(prefix.length + 1));
       for (const record of removed) {
         if (!/^[\dTZ-]+-[a-f0-9]{12}$/.test(record.id)) throw apiError(400, '历史版本无效。');

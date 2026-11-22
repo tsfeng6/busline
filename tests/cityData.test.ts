@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { previewableCityDataset, normalizeCityDataset, cityDataKey, cityDatasetExpiresAt, usableCityDataset } from '../src/utils/cityDataset';
-import { GithubCityStore, handleCityDataRequest } from '../src/server/cityData';
+import { GithubCityStore, handleCityDataRequest, mapLimit } from '../src/server/cityData';
 
 function fixture(count = 10, complete = true) {
   return { schemaVersion: 1, city: '北京市', scope: 'city', coverage: 'observed',
@@ -61,6 +61,19 @@ function githubMock() {
   const store = new GithubCityStore({ repo: 'tsfeng6/busline', branch: 'busline-data', token: 'fake-test-token', enabled: true }, transport);
   return { store, writes, transport, conflict: () => { conflict = true; }, files: () => trees.get(commits.get(head).tree.sha)! };
 }
+
+test('mapLimit preserves order and bounds concurrency', async () => {
+  let active = 0, peak = 0;
+  const results = await mapLimit([1, 2, 3, 4, 5, 6, 7, 8], 3, async (n) => {
+    active++; peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active--;
+    return n * 10;
+  });
+  assert.deepEqual(results, [10, 20, 30, 40, 50, 60, 70, 80]);
+  assert.ok(peak <= 3);
+  assert.deepEqual(await mapLimit([], 2, async () => 1), []);
+});
 
 test('snapshot validation strips credentials and preserves transport metadata', () => {
   const data = normalizeCityDataset(fixture());
