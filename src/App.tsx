@@ -1644,7 +1644,7 @@ export default function App() {
         infocode === '10044'
       ) {
         setApiErrorNotification(
-          '高德查询配额已达上限，请稍后再试；全市检索请检查您自己的 API 配额。'
+          '高德公共查询配额已达上限。可在设置中填写您自己的 Web端 (JS API) Key 与安全密钥，或稍后再试。'
         );
         return true;
       }
@@ -4427,6 +4427,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const timeout = setTimeout(() => resolve([]), 8000);
       autoCompleteRef.current.search(val, (status: string, result: any) => {
         clearTimeout(timeout);
+        checkAmapQuotaError(status, result);
         if (status === 'complete' && result.tips) {
           resolve(result.tips);
         } else {
@@ -4450,6 +4451,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const timeout = setTimeout(() => resolve([]), 8000);
       lineSearch.search(val, (status: string, result: any) => {
         clearTimeout(timeout);
+        checkAmapQuotaError(status, result);
         if (result?.lineInfo) {
           result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
         }
@@ -4619,6 +4621,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
     ps.search(query, (status: string, result: any) => {
       setLoading(false);
+      if (checkAmapQuotaError(status, result)) return;
       if (status === 'complete' && result.poiList && result.poiList.pois.length > 0) {
         handleManualSearch(result.poiList.pois[0]);
       }

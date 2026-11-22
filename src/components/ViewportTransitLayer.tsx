@@ -150,7 +150,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
             stops.set(key, { ...stop, lines, location: { lng, lat }, key, isBusStop: true });
             const color = settings.stationMode === 'terminal' ? '#52525b'
               : settings.stationLineStats && lines.length ? lines.length <= 2 ? '#5e8271' : lines.length <= 6 ? '#c29b63' : '#b56666' : '#3576bc';
-            const radius = settings.stationMode === 'terminal' ? 4 : map.getZoom() >= 15 ? 2.6 : 1.65;
+            const radius = settings.stationMode === 'terminal' ? 8 : map.getZoom() >= 15 ? 6 : 4;
             const path = stationPaths.get(color) ?? new Path2D();
             path.moveTo(px + radius, py);
             path.arc(px, py, radius, 0, 2 * Math.PI);
