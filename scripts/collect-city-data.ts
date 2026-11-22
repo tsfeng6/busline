@@ -6,6 +6,10 @@ import type { BusLine } from '../src/types';
 
 type Options = {
   fetcher?: typeof fetch; wait?: () => Promise<void>; searchPages?: number; lineRequests?: number;
+  /** Bound only independent line-name searches; pagination for one name stays ordered. */
+  lineConcurrency?: number;
+  /** Minimum delay between REST request starts. Kept global so concurrent workers do not burst. */
+  requestSpacingMs?: number;
   seed?: CityDataset;
   onProgress?: (message: string) => Promise<void>;
 };
@@ -36,32 +40,69 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   cityDataKey(requestedCity);
   if (!key) throw new Error('未配置 Web 服务类型的高德 Key。');
   const transport = options.fetcher || fetch;
-  const wait = options.wait || (() => new Promise(resolve => setTimeout(resolve, 400)));
   const searchPages = Math.max(1, Math.min(1200, options.searchPages || 400));
   const maxLineRequests = Math.max(1, Math.min(3000, options.lineRequests || 1500));
+  const lineConcurrency = Math.max(1, Math.min(6, options.lineConcurrency ?? (options.wait ? 1 : 3)));
+  // The former 400ms serial pause made a large city spend at least ten minutes just
+  // waiting between 1,500 line requests. A shared 300ms start cadence keeps the
+  // provider rate bounded while allowing slow responses to overlap.
+  const requestSpacingMs = Math.max(0, Math.min(2000, options.requestSpacingMs ?? (options.wait ? 0 : 300)));
   const counts = { district: 0, poi: 0, line: 0 };
+  const startedAt = Date.now();
+  let retries = 0, inFlight = 0, maxInFlight = 0, nextRequestAt = 0;
   let retrievalComplete = true;
   const failedQueries = new Set<string>();
   const interruptions: {query:string;message:string}[] = [];
+  const pace = async () => {
+    const now = Date.now();
+    const scheduled = Math.max(now, nextRequestAt);
+    nextRequestAt = scheduled + requestSpacingMs;
+    if (scheduled > now) await new Promise(resolve => setTimeout(resolve, scheduled - now));
+    if (options.wait) await options.wait();
+  };
   const request = async (path: string, params: Record<string,string>, bucket: keyof typeof counts) => {
-    await wait(); counts[bucket]++;
+    // Reserve before awaiting the rate gate, otherwise parallel workers can all
+    // pass a request-budget check at the same time.
+    counts[bucket]++;
+    await pace();
     const url = new URL(`https://restapi.amap.com${path}`);
     for (const [name, value] of Object.entries({...params, key, output:'JSON'})) url.searchParams.set(name,value);
-    let response: Response;
-    try { response = await transport(url, { signal: AbortSignal.timeout(15000) }); }
-    catch { throw new Error('数据源网络请求失败，请稍后重试。'); }
-    if (!response.ok) throw new Error(`数据源暂时不可用（HTTP ${response.status}）。`);
-    let result: any;
-    try { result = await response.json(); } catch { throw new Error('数据源返回格式异常。'); }
-    if (String(result.status) !== '1') {
+    const retry = async (attempt: number) => {
+      retries++;
+      // Retries consume provider quota too, and use the same shared gate rather
+      // than immediately adding a burst behind a transient failure.
+      counts[bucket]++;
+      await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+      await pace();
+    };
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let response: Response;
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      try { response = await transport(url, { signal: AbortSignal.timeout(15000) }); }
+      catch {
+        if (attempt < 2) { await retry(attempt); continue; }
+        throw new Error('数据源网络请求失败，请稍后重试。');
+      } finally { inFlight--; }
+      if (!response.ok) {
+        if ((response.status === 429 || response.status >= 500) && attempt < 2) {
+          await retry(attempt); continue;
+        }
+        throw new Error(`数据源暂时不可用（HTTP ${response.status}）。`);
+      }
+      let result: any;
+      try { result = await response.json(); } catch { throw new Error('数据源返回格式异常。'); }
+      if (String(result.status) === '1') return result;
       const code = text(result.infocode).replace(/[^0-9]/g,'').slice(0,8);
+      if (code === '10004' && attempt < 2) {
+        await retry(attempt); continue;
+      }
       // Never log request URLs, raw provider messages or key-bearing errors.
       const message=['10003','10044'].includes(code)
         ? `高德对应服务日调用额度已超限（${code}）；网站每日名额已解除，但需等待高德额度恢复或调整其配额。`
         : `数据源拒绝请求${code ? `（${code}）` : ''}，可能涉及权限、额度或请求限制。`;
       throw Object.assign(new Error(message),{fatal:true});
     }
-    return result;
+    throw new Error('数据源网络请求失败，请稍后重试。');
   };
   await options.onProgress?.('正在确认城市。');
   const districts = await request('/v3/config/district', { keywords: requestedCity, subdistrict:'2', extensions:'all' }, 'district');
@@ -116,14 +157,14 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   const cachedDirections=lines.size;
   const queue = [...queries.values()];
   await options.onProgress?.(`发现 ${stops.size} 个站点、${queue.length} 个候选名称；已复用 ${cachedDirections} 个线路方向。`);
-  lineLoop: for (let index=0;index<queue.length;index++) {
+  let nextLineIndex = 0, completedLineQueries = 0, fatalLineError = false;
+  const collectLineQuery = async (index: number) => {
     const query = queue[index].normalize('NFKC').replace(/[(#].*$/,'').trim();
-    if (!query) { continue; }
-    if(cachedQueries.has(lineBaseIdentity(query)))continue;
+    if (!query || cachedQueries.has(lineBaseIdentity(query))) return;
     let matched = false, exactMatch = false;
     const scopes = [scope, ...queryScopes.get(lineBaseIdentity(query)) || []];
     for (const searchScope of scopes) {
-      if (exactMatch && searchScope !== scope) break;
+      if (fatalLineError || (exactMatch && searchScope !== scope)) break;
       let received = 0, expected = Infinity;
       const seenPages = new Set<string>();
       for (let page=1;page<=10;page++) {
@@ -132,7 +173,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
         try { result=await request('/v3/bus/linename',{city:searchScope,keywords:query,offset:'100',page:String(page),extensions:'all'},'line'); }
         catch (error:any) {
           retrievalComplete=false;failedQueries.add(query);interruptions.push({query,message:error.message});
-          if(error.fatal){queue.slice(index+1).forEach(name=>failedQueries.add(name));break lineLoop;}
+          if(error.fatal){fatalLineError=true;break;}
           break;
         }
         const buslines=array(result.buslines);
@@ -157,8 +198,20 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
       }
     }
     if (!matched || !exactMatch) { retrievalComplete=false;failedQueries.add(query); }
-    if (counts.line>=maxLineRequests && index + 1 < queue.length) { retrievalComplete=false;queue.slice(index+1).forEach(name=>failedQueries.add(name));break; }
-    if ((index+1)%30===0) await options.onProgress?.(`候选名称处理 ${index+1}/${queue.length}；已取得 ${lines.size} 个线路方向。`);
+    completedLineQueries++;
+    if (completedLineQueries % 30 === 0) await options.onProgress?.(`候选名称处理 ${completedLineQueries}/${queue.length}；已取得 ${lines.size} 个线路方向。`);
+  };
+  const worker = async () => {
+    while (!fatalLineError && counts.line < maxLineRequests) {
+      const index = nextLineIndex++;
+      if (index >= queue.length) return;
+      await collectLineQuery(index);
+    }
+  };
+  await Promise.all(Array.from({length:lineConcurrency},worker));
+  if (fatalLineError || counts.line >= maxLineRequests && nextLineIndex < queue.length) {
+    retrievalComplete=false;
+    for (let index=nextLineIndex;index<queue.length;index++) failedQueries.add(queue[index]);
   }
   if (!retrievalComplete && options.seed && !options.seed.filtered && cityDataKey(options.seed.city) === cityDataKey(city)) {
     for (const line of options.seed.lines) if (!lines.has(line.id || line.name)) lines.set(line.id || line.name, line);
@@ -177,5 +230,6 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   }
   const dataset=normalizeCityDataset({schemaVersion:1,city,scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),
     retrievalComplete,filtered:false,stops:[...stops.values()],lines:[...lines.values()]});
-  return { dataset, report:{counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length,discoveryComplete,cachedDirections,successfulDirections:lines.size,distinctLineNames:new Set([...lines.values()].map(line=>lineBaseIdentity(line.name))).size} };
+  return { dataset, report:{counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length,discoveryComplete,cachedDirections,successfulDirections:lines.size,distinctLineNames:new Set([...lines.values()].map(line=>lineBaseIdentity(line.name))).size,
+    timing:{elapsedMs:Date.now()-startedAt,retries,maxInFlight,lineConcurrency,requestSpacingMs}} };
 }

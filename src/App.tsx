@@ -866,6 +866,7 @@ export default function App() {
 
   const [isSearching, setIsSearching] = useState(false);
   const [searchActivity,setSearchActivity]=useState<'auto'|'manual'|null>(null);
+  const [searchProgress,setSearchProgress]=useState<{value:number;label:string}|null>(null);
   const [showEmptySearchNotice, setShowEmptySearchNotice] = useState(false);
   const customApiSectionRef = useRef<HTMLDivElement>(null);
   const focusCustomApiRef = useRef(false);
@@ -5015,6 +5016,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const searchStartedAt = performance.now();
 
     setSearchActivity(sharedOverride?'auto':'manual');
+    setSearchProgress({value:5,label:'正在确认检索范围…'});
     setIsSearching(true);
     setSharedCityStatus(sharedCityDataEnabled ? '正在检查共享城市线路…' : '');
     try {
@@ -5051,6 +5053,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
 
       setCurrentCity(currentCity);
+      setSearchProgress({value:12,label:`正在准备${currentCity}检索…`});
       const bounds = map.getBounds();
       const sw = bounds.getSouthWest();
       const ne = bounds.getNorthEast();
@@ -5203,6 +5206,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
 
       if (!usedRegionCache && enableCityWideSearch) {
+        setSearchProgress({value:18,label:'正在分区发现公交站点…'});
         const discovered = await discoverCityStops(searchServices, currentCity,
           () => searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current,
           checkAmapQuotaError, {
@@ -5211,6 +5215,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           });
         allPois = discovered.pois;
         wasTruncated = !discovered.complete;
+        setSearchProgress({value:35,label:`已发现 ${allPois.length} 个站点，正在整理候选线路…`});
       } else if (!usedRegionCache) {
         const placeSearch = new searchServices.PlaceSearch({
           type: '公交车站',
@@ -5379,6 +5384,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           }
         }
         if (usedSharedCity) {
+          setSearchProgress({value:88,label:'正在加载共享线路…'});
           await aggregateAndVisualize(sharedDataset!.lines.filter(line => !isLineNameBlockedRef(line.name)
             && (!filterIntervalBusRef.current || !line.name.includes('区间'))).map(line => line.name), map, AMap);
         } else {
@@ -5406,7 +5412,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               setSharedCityStatus('本次检索结果未通过快照校验，无法提交；已获得的线路仍可在本地查看。');
             }
           };
-          const linesComplete = await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity, () => false, refreshLineData, prepareUpload, searchServices, lineScopes);
+          const linesComplete = await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity, () => false, refreshLineData, prepareUpload, searchServices, lineScopes,
+            (done, total) => setSearchProgress({value:35 + Math.round(55 * done / Math.max(1,total)),label:`正在补全线路 ${done}/${total}…`}));
           if (!linesComplete) wasTruncated = true;
         }
         if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) {
@@ -5574,12 +5581,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           refreshLineCacheStats();
         }
       }
+      setSearchProgress({value:100,label:'检索完成，正在显示线路…'});
       setIsSearching(false);
     } catch (error) {
       console.error('Search error:', error);
       setIsSearching(false);
     } finally {
-      if(searchVersionRef.current===thisSearchVer){setSearchActivity(null);setIsSearching(false);}
+      if(searchVersionRef.current===thisSearchVer){setSearchActivity(null);setSearchProgress(null);setIsSearching(false);}
     }
   };
 
@@ -5634,7 +5642,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     } finally { setCityUploadBusy(false); }
   };
 
-  const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string, shouldCancel: () => boolean = () => false, forceRefresh = false, onCollected?: (complete: boolean) => void, searchServices: any = AMap, lineScopes = new Map<string, Set<string>>()) => {
+  const fetchAndDrawLines = async (lineNames: string[], map: any, AMap: any, city: string, shouldCancel: () => boolean = () => false, forceRefresh = false, onCollected?: (complete: boolean) => void, searchServices: any = AMap, lineScopes = new Map<string, Set<string>>(), onProgress?: (done: number, total: number) => void) => {
     const startSearchVer = searchVersionRef.current;
     let complete = true;
     const cachedQueries = new Set<string>();
@@ -5698,6 +5706,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             newlyFetchedLines.push(lineObj);
           }
         }));
+        onProgress?.(Math.min(i + batch.length, linesToFetch.length), linesToFetch.length);
       }
       cachedLinesVersionRef.current++;
       updateTerminalNamesCache();
@@ -6771,7 +6780,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         onSelect={({ city, line }) => void handleManualSearch({ name: line.name, routeId: line.id, sourceCity: city, type: 'busline' })} />}
       <CityUploadDialog data={pendingCityUpload} busy={cityUploadBusy} progress={cityUploadProgress} error={cityUploadError}
         onSubmit={() => void submitCityUpload()} onClose={() => { if (!cityUploadBusy) setPendingCityUpload(null); }} />
-      {!loading && !showMinigameModal && onboardingStep===0 && <MapActivityIndicator raised={showMoreInfo} mode={searchActivity==='manual'||(isSearching&&searchActivity!=='auto')?'search':searchActivity==='auto'?'city':null} />}
+      {!loading && !showMinigameModal && onboardingStep===0 && <MapActivityIndicator raised={showMoreInfo} progress={searchProgress} mode={searchActivity==='manual'||(isSearching&&searchActivity!=='auto')?'search':searchActivity==='auto'?'city':null} />}
       <CityUpdateStatus job={cityUpdateJob} onClose={() => { cityJobWatchRef.current?.abort(); setCityUpdateJob(null); }} />
       {cityDataNotice && !cityUpdateJob && !isSearching && <div role="status" className="absolute top-24 left-4 sm:left-6 z-30 max-w-sm rounded-2xl bg-m3-surface/95 border border-m3-outline-variant/40 p-4 shadow-lg flex items-center gap-3">
         <div className="text-xs text-slate-600"><p className="font-bold text-slate-800 mb-1">{cityDataNotice.city}</p>
