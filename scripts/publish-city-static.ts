@@ -13,6 +13,8 @@ import {cityOverviewPNG} from './city-overview-png';
 import { cityThumbnail, type CityOverview } from '../src/utils/cityOverview';
 import { cityBvpkManifest, cityBvpkPartPath, resolveCityStorage } from '../src/utils/cityBvpk';
 import { readNodeCityBvpkPart, verifyNodeCityBvpkPart } from './city-bvpk-files';
+import { TransitTilePublisher } from './transit-tiles';
+import { TRANSIT_TILE_BASE, type TransitTileIndex } from '../src/utils/transitTiles';
 import { cityStorageFiles } from './city-storage-files';
 
 interface CityLayer { id: string; overview: CityOverview; thumbnail: Buffer; coverage: Buffer; }
@@ -59,6 +61,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   const overviews:CityOverview[]=[];
   const tileCache=await mkdtemp(join(tmpdir(),'busline-tile-work-'));
   const tiles=new CityOverviewTiles({cacheDirectory:tileCache,maxResidentTiles:128});
+  const transit=new TransitTilePublisher(join(tileCache,'transit'));
   const cachedLayers=layersDir?loadLayers(layersDir):new Map<string,CityLayer>();
   const newLayers=new Map<string,CityLayer>();
   try {
@@ -119,6 +122,9 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       await copy(metaPath, text);
     }
     const active = await snapshot(prefix, file, currentId); cities++;
+    const latest = await resolveCityStorage(active, async part => JSON.parse(source(`${prefix}/${part}`)),
+      descriptor => readNodeCityBvpkPart(descriptor, async part => sourceBytes(`${prefix}/${part}`)));
+    transit.add(latest);
     const cached=cachedLayers.get(city);
     if(cached&&currentId&&cached.id===currentId){
       reused++;
@@ -126,8 +132,6 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       await copy(`city-data/v1/thumbnails/${city}-geo-v3.png`,cached.thumbnail);
       overviews.push(cached.overview);
     }else{
-      const latest = await resolveCityStorage(active, async part => JSON.parse(source(`${prefix}/${part}`)),
-        descriptor => readNodeCityBvpkPart(descriptor, async part => sourceBytes(`${prefix}/${part}`)));
       const cityTiles=new CityOverviewTiles({cacheDirectory:join(tileCache,city),maxResidentTiles:128});
       cityTiles.add(latest);
       tiles.mergeLayer(cityTiles);
@@ -152,6 +156,12 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   }
   const tileBase='tiles/xyz-v1';
   for(const file of tiles.files(`city-data/v1/${tileBase}`))await copy(file.path,file.content);
+  const groups: TransitTileIndex['groups'] = {};
+  for (const file of transit.files()) {
+    await copy(file.path, file.content);
+    groups[file.key] = file.descriptor;
+  }
+  await copy('city-data/v1/transit.json', JSON.stringify({ schemaVersion: 1, base: TRANSIT_TILE_BASE, revision: commit, groups }));
   await copy('city-data/v1/overview.json',JSON.stringify({schemaVersion:3,cities:overviews,tiles:{base:tileBase,pixelRatio:TILE_PIXEL_RATIO,revision:commit,minZoom:TILE_MIN_ZOOM,maxZoom:TILE_MAX_ZOOM,keys:tiles.keys}}));
   await mkdir(join(output, 'city-data/v1'), { recursive: true });
   await writeFile(join(output, 'city-data/v1/publication.json'), JSON.stringify({ commit, cities, historySnapshots, bytes, publishedAt: new Date().toISOString() }));

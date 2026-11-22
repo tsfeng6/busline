@@ -1,8 +1,10 @@
-name: Test city snapshot storage
+name: Test city data and maps
 
 on:
   push:
-    branches: [codex/city-bvpk]
+    branches: [main, codex/city-bvpk, codex/viewport-transit-tiles]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
