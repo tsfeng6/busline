@@ -143,8 +143,8 @@ test('published game catalog reads only same-origin static data and refreshes ca
  const source=fs.readFileSync('src/utils/publishedTransit.ts','utf8').replace('import.meta.env.BASE_URL',"'/'"),code=ts.transpile(source,{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS});
  let reads=0,downloads=0,revision='a'.repeat(40);const snapshot=data(),exports:any={};
  const city={city:snapshot.city,center,bounds:[115,38,117,40],thumbnail:'thumbnails/北京-geo-v3.png',lineDirections:3,capturedAt:snapshot.capturedAt,countySeats:savedCountySeats(snapshot)};
- const cityDataCache=new CityDataCache(async city=>{assert.equal(city,snapshot.city);downloads++;return snapshot;});
- const require=(name:string)=>name==='./cityOverview'?{validCityOverview}:name==='./localTransit'?{provinceForCity}:{cityDataCache};
+ const cityDataCache=new CityDataCache(async()=>{throw Error('Game reads use the bounded loader');});
+ const require=(name:string)=>name==='./cityOverview'?{validCityOverview}:name==='./localTransit'?{provinceForCity}:name==='./sharedCityClient'?{loadSharedCityForGame:async(city:string)=>{assert.equal(city,snapshot.city);downloads++;return snapshot;}}:{cityDataCache};
  const globalThis={fetch:async(url:string)=>{assert.ok(url.startsWith('/city-data/v1/overview.json'));assert.ok(!url.includes('amap'));reads++;return {ok:true,json:async()=>({cities:[city],tiles:{revision}})};}};
  Function('exports','require','globalThis','AbortSignal',code)(exports,require,globalThis,AbortSignal);
  const catalog=await exports.loadPublishedCities();assert.equal(catalog[0].province,'北京市');assert.equal(catalog[0].countySeats[0].source,'government-stop');

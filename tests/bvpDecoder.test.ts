@@ -18,6 +18,25 @@ test('BVPK1 header parse rejects wrong magic', () => {
   const bytes = new Uint8Array(13); bytes.set([66, 65, 68, 67, 88]); // "BADCX"
   assert.equal(parseBvpkHeader(bytes).valid, false);
 });
+test('BVPK1 parts can be read concurrently without changing their published order', async () => {
+  const manifest: any = {
+    storage: 'city-bvpk1', snapshotId: '2026-11-22T00-00-00-000Z-abcdef123456',
+    header: { schemaVersion: 1, city: '北京市', scope: 'city', coverage: 'observed', capturedAt: '2026-11-22T00:00:00.000Z', retrievalComplete: true, filtered: false },
+    parts: [0, 1, 2].map(index => ({ sha256: String(index + 1).repeat(64), bytes: 15, lineCount: 1, stopCount: 1 })),
+  };
+  let active = 0, peak = 0;
+  const progress: number[] = [];
+  const data = await resolveCityStorage(manifest, async () => { throw Error('Unexpected legacy read'); }, async (part: any) => {
+    active++; peak = Math.max(peak, active);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    active--;
+    const id = part.sha256[0];
+    return { lines: [{ id, name: `${id}路`, path: [[116, 39], [116.01, 39.01]] }], stops: [{ id, name: `${id}站`, address: '', location: { lng: 116, lat: 39 } }] };
+  }, { partConcurrency: 2, onPart: completed => progress.push(completed) });
+  assert.equal(peak, 2);
+  assert.deepEqual(progress, [1, 2, 3]);
+  assert.deepEqual(data.lines.map(line => line.id), ['1', '2', '3']);
+});
 
 test('real Jinzhou BVP1 decodes bit-exactly against restored JSON', { skip: !have && 'jinzhou fixtures not present' }, () => {
   const bvp = new Uint8Array(readFileSync(resolve(dir, 'city.paths.bvp')));

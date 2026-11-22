@@ -681,7 +681,7 @@ export default function App() {
         const pool=shuffle(seats.filter(item=>seats.length===1||item.name!==prevAnswer));
         let selected: ReturnType<typeof createOfflineQuestion> | undefined;
         for (const seat of pool) {
-          const data=await loadGameCity(seat.city);
+          const data=await loadGameCity(seat.city,(completed,total)=>{if(gameSessionIdRef.current===sessionId)setGameLoadingText(`正在读取线路数据（${completed}/${total}）…`);});
           if (gameSessionIdRef.current !== sessionId) return;
           try { selected=createOfflineQuestion(mode,diff,data,seats.map(item=>item.name),qNum,prevAnswer,seat);break; } catch { /* Try only other saved county anchors; never query a provider. */ }
         }
@@ -690,7 +690,7 @@ export default function App() {
       } else {
         const pool=mode==='city'?catalog.filter(item=>catalog.length===1||item.city!==prevAnswer):catalog.filter(item=>item.city===city);
         const chosen=shuffle(pool)[0];if(!chosen)throw Error('请选择网站已有线路图的城市。');
-        const data=await loadGameCity(chosen.city);
+        const data=await loadGameCity(chosen.city,(completed,total)=>{if(gameSessionIdRef.current===sessionId)setGameLoadingText(`正在读取线路数据（${completed}/${total}）…`);});
         if (gameSessionIdRef.current !== sessionId) return;
         question=createOfflineQuestion(mode,diff,data,catalog.map(item=>item.city),qNum,prevAnswer);
       }
@@ -7973,6 +7973,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     <>
                       <Loader2 className="w-10 h-10 animate-spin text-m3-primary" />
                       <p className="text-sm font-black tracking-wide">{gameLoadingText}</p>
+                      <button type="button" onClick={returnToMinigameMenu} className="mt-2 rounded-xl border border-white/35 px-4 py-2 text-xs font-black text-white transition-colors hover:bg-white/10">取消并返回菜单</button>
                     </>
                   )}
                 </motion.div>
