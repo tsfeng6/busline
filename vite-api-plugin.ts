@@ -101,79 +101,103 @@ function loadGeometry(): GeometryCache | null {
   return geometryCache;
 }
 
-// ---- 锦州 BVP1/BVPK1 实验数据：仅开发环境；只读原始文件，几何解码在浏览器端用真实 TS 解码器完成 ----
-const JINZHOU_DIR = path.join(process.cwd(), '.geometry-experiment/jinzhou/outputs');
-const JINZHOU_FILES: Record<string, string> = {
+// ---- BVP1/BVPK1 实验数据（锦州/北京）：仅开发环境；原始文件只读；几何由浏览器真实 TS 解码；Brotli 走浏览器原生 Content-Encoding ----
+const BVP_CITIES: Record<string, string> = {
+  jinzhou: path.join(process.cwd(), '.geometry-experiment/jinzhou/outputs'),
+  beijing: path.join(process.cwd(), '.geometry-experiment/beijing/package/outputs'),
+};
+const BVP_FILES: Record<string, string> = {
   'meta.json': 'city.meta.json', 'paths.bvp': 'city.paths.bvp', 'city.bvpk': 'city.bvpk',
   'restored.json': 'city.restored.json', 'paths.bvp.br': 'city.paths.bvp.br', 'meta.json.br': 'city.meta.json.br',
 };
-type JinzhouIndex = { lines: Array<{ routeIndex: number; id: string; name: string; startStop: string; endStop: string }> };
-let jinzhouMetaCache: { key: string; meta: any } | null = null;
-function loadJinzhouMeta(): any | null {
-  const p = path.join(JINZHOU_DIR, JINZHOU_FILES['meta.json']);
-  if (!fs.existsSync(p)) return null;
-  const key = String(fs.statSync(p).mtimeMs);
-  if (jinzhouMetaCache && jinzhouMetaCache.key === key) return jinzhouMetaCache.meta;
-  const meta = JSON.parse(fs.readFileSync(p, 'utf8'));
-  jinzhouMetaCache = { key, meta };
-  return meta;
+const bvpMetaCache = new Map<string, { key: string; meta: any }>();
+function bvpDir(city: string): string | null { return BVP_CITIES[city] || null; }
+function bvpRead(city: string, name: string): Buffer | null {
+  const dir = bvpDir(city); const file = BVP_FILES[name]; if (!dir || !file) return null;
+  const p = path.join(dir, file); return fs.existsSync(p) ? fs.readFileSync(p) : null;
 }
-
-function handleJinzhou(rest: string, search: URLSearchParams, res: any): void {
-  const readFileObject = (name: string): Buffer | null => {
-    const file = JINZHOU_FILES[name]; if (!file) return null;
-    const p = path.join(JINZHOU_DIR, file);
-    return fs.existsSync(p) ? fs.readFileSync(p) : null;
-  };
-  if (rest === 'file') {
-    const name = search.get('name') || '';
-    const bytes = readFileObject(name);
-    if (!bytes) { res.statusCode = 404; res.end(JSON.stringify({ error: `缺少实验文件：${name}` })); return; }
-    res.setHeader('Content-Type', name.endsWith('.json') ? 'application/json;charset=utf-8' : 'application/octet-stream');
-    res.end(bytes); return;
+function loadBvpMeta(city: string): any | null {
+  const dir = bvpDir(city); if (!dir) return null;
+  const filePath = path.join(dir, BVP_FILES['meta.json']); if (!fs.existsSync(filePath)) return null;
+  const key = String(fs.statSync(filePath).mtimeMs); const c = bvpMetaCache.get(city);
+  if (c && c.key === key) return c.meta;
+  const meta = JSON.parse(fs.readFileSync(filePath, 'utf8')); bvpMetaCache.set(city, { key, meta }); return meta;
+}
+const bvpRestoredCache = new Map<string, { key: string; lines: any[] }>();
+function loadBvpRestored(city: string): any[] | null {
+  const dir = bvpDir(city); if (!dir) return null;
+  const fp = path.join(dir, BVP_FILES['restored.json']); if (!fs.existsSync(fp)) return null;
+  const key = String(fs.statSync(fp).mtimeMs); const c = bvpRestoredCache.get(city); if (c && c.key === key) return c.lines;
+  const lines = JSON.parse(fs.readFileSync(fp, 'utf8')).lines; bvpRestoredCache.set(city, { key, lines }); return lines;
+}
+function readVarint(buf: Buffer, start: number): [number, number] { let n = 0, shift = 1, p = start; for (;;) { const b = buf[p++]; n += (b & 127) * shift; if (!(b & 128)) return [n, p]; shift *= 128; } }
+function putVarint(n: number): number[] { const out: number[] = []; do { let b = n % 128; n = Math.floor(n / 128); out.push(n > 0 ? b + 128 : b); } while (n > 0); return out; }
+type BvpSharding = { shardCount: number; routeToShard: number[]; shardRawSizes: number[]; shardsBr: Buffer[] };
+const bvpShardCache = new Map<string, BvpSharding>();
+function buildSharding(city: string): BvpSharding | null {
+  const cached = bvpShardCache.get(city); if (cached) return cached;
+  const bvp = bvpRead(city, 'paths.bvp'); if (!bvp || bvp.subarray(0, 4).toString('latin1') !== 'BVP1') return null;
+  let p = 4; const [count, afterCount] = readVarint(bvp, p); p = afterCount;
+  const lengths: number[] = []; for (let i = 0; i < count; i++) { const [len, np] = readVarint(bvp, p); lengths.push(len); p = np; }
+  const frames: Buffer[] = []; for (const len of lengths) { frames.push(bvp.subarray(p, p + len)); p += len; }
+  const K = Math.min(16, count || 1); const routeToShard: number[] = []; const groups: Buffer[][] = Array.from({ length: K }, () => []);
+  for (let i = 0; i < count; i++) { const s = Math.min(K - 1, Math.floor((i * K) / (count || 1))); routeToShard.push(s); groups[s].push(frames[i]); }
+  const shardsBr: Buffer[] = []; const shardRawSizes: number[] = [];
+  for (let s = 0; s < K; s++) {
+    const g = groups[s]; const parts: Buffer[] = [Buffer.from('BVP1', 'latin1'), Buffer.from(putVarint(g.length))];
+    for (const f of g) parts.push(Buffer.from(putVarint(f.length)));
+    for (const f of g) parts.push(f);
+    const blob = Buffer.concat(parts); shardRawSizes.push(blob.length); shardsBr.push(brotliCompressSync(blob));
   }
-  if (rest === 'index') {
-    const meta = loadJinzhouMeta();
-    if (!meta) { res.statusCode = 503; res.end(JSON.stringify({ error: '缺少锦州实验包（city.meta.json）' })); return; }
-    const index: JinzhouIndex = { lines: meta.lines.map((line: any, i: number) => ({ routeIndex: i, id: line.id, name: line.name, startStop: line.start_stop || '', endStop: line.end_stop || '' })) };
-    res.end(JSON.stringify(index)); return;
+  const result: BvpSharding = { shardCount: K, routeToShard, shardRawSizes, shardsBr };
+  bvpShardCache.set(city, result); return result;
+}
+function handleBvp(city: string, rest: string, search: URLSearchParams, res: any): void {
+  if (!bvpDir(city)) { res.statusCode = 404; res.end(JSON.stringify({ error: `未知城市 ${city}` })); return; }
+  if (rest === 'file') { const name = search.get('name') || ''; const bytes = bvpRead(city, name); if (!bytes) { res.statusCode = 404; res.end(JSON.stringify({ error: `缺少实验文件：${name}` })); return; } res.setHeader('Content-Type', name.endsWith('.json') ? 'application/json;charset=utf-8' : 'application/octet-stream'); res.end(bytes); return; }
+  if (rest === 'index') { const meta = loadBvpMeta(city); if (!meta) { res.statusCode = 503; res.end(JSON.stringify({ error: '缺少实验包（city.meta.json）' })); return; } res.end(JSON.stringify({ lines: meta.lines.map((l: any, i: number) => ({ routeIndex: i, id: l.id, name: l.name, startStop: l.start_stop || '', endStop: l.end_stop || '' })) })); return; }
+  if (rest === 'original-line') {
+    const idx = Number(search.get('routeIndex')); const lines = loadBvpRestored(city);
+    if (!lines || !Number.isInteger(idx) || idx < 0 || idx >= lines.length) { res.statusCode = 404; res.end(JSON.stringify({ error: '线路不存在' })); return; }
+    const l = lines[idx]; res.end(JSON.stringify({ id: l.id, name: l.name, startStop: l.start_stop, endStop: l.end_stop, stops: Array.isArray(l.via_stops) ? l.via_stops.length : 0, path: l.path })); return;
   }
   if (rest === 'info') {
-    const sizes: Record<string, number> = {};
-    for (const name of ['meta.json', 'paths.bvp', 'city.bvpk', 'restored.json', 'paths.bvp.br', 'meta.json.br']) {
-      const p = path.join(JINZHOU_DIR, JINZHOU_FILES[name] || ''); if (fs.existsSync(p)) sizes[name] = fs.statSync(p).size;
-    }
+    const sizes: Record<string, number> = {}; for (const name of Object.keys(BVP_FILES)) { const b = bvpRead(city, name); if (b) sizes[name] = b.length; }
     let metaBrotliMs = 0, geomBrotliMs = 0, bvpk: any = null;
-    const metaBr = readFileObject('meta.json.br'), geomBr = readFileObject('paths.bvp.br');
+    const metaBr = bvpRead(city, 'meta.json.br'), geomBr = bvpRead(city, 'paths.bvp.br');
     if (metaBr) { const t = performance.now(); brotliDecompressSync(metaBr); metaBrotliMs = performance.now() - t; }
     if (geomBr) { const t = performance.now(); brotliDecompressSync(geomBr); geomBrotliMs = performance.now() - t; }
-    const bvpkBytes = readFileObject('city.bvpk');
-    if (bvpkBytes) {
-      const magic = bvpkBytes.subarray(0, 5).toString('latin1');
-      const metaLen = bvpkBytes.readUInt32LE(5), geomLen = bvpkBytes.readUInt32LE(9);
-      bvpk = { magic, metaLength: metaLen, geomLength: geomLen, totalLength: bvpkBytes.length, valid: magic === 'BVPK1' && 13 + metaLen + geomLen === bvpkBytes.length };
-    }
-    res.end(JSON.stringify({ sizes, metaBrotliMs, geomBrotliMs, bvpk, note: 'Brotli 解压在 Node 侧测时（浏览器无原生 Brotli 解压 API）' })); return;
+    const bvpkBytes = bvpRead(city, 'city.bvpk');
+    if (bvpkBytes) { const magic = bvpkBytes.subarray(0, 5).toString('latin1'); const metaLen = bvpkBytes.readUInt32LE(5), geomLen = bvpkBytes.readUInt32LE(9); bvpk = { magic, metaLength: metaLen, geomLength: geomLen, totalLength: bvpkBytes.length, valid: magic === 'BVPK1' && 13 + metaLen + geomLen === bvpkBytes.length }; }
+    res.end(JSON.stringify({ sizes, metaBrotliMs, geomBrotliMs, bvpk, note: 'Brotli 计时为 Node 侧参考' })); return;
   }
-  if (rest === 'bvpk-blocks') {
-    const bytes = readFileObject('city.bvpk');
+  if (rest === 'bvpk') { const bytes = bvpRead(city, 'city.bvpk'); if (!bytes) { res.statusCode = 404; res.end(JSON.stringify({ error: '缺少 city.bvpk' })); return; } res.setHeader('Content-Type', 'application/octet-stream'); res.end(bytes); return; }
+  if (rest === 'bvpk-block') {
+    const which = search.get('which') || 'geom'; const bytes = bvpRead(city, 'city.bvpk');
     if (!bytes) { res.statusCode = 404; res.end(JSON.stringify({ error: '缺少 city.bvpk' })); return; }
-    try {
-      const magic = bytes.subarray(0, 5).toString('latin1');
-      if (magic !== 'BVPK1' || bytes.length < 13) throw new Error('无效 BVPK1 头');
-      const metaLen = bytes.readUInt32LE(5), geomLen = bytes.readUInt32LE(9);
-      if (13 + metaLen + geomLen !== bytes.length) throw new Error('BVPK1 长度不一致');
-      const metaRaw = brotliDecompressSync(bytes.subarray(13, 13 + metaLen));
-      const geom = brotliDecompressSync(bytes.subarray(13 + metaLen, 13 + metaLen + geomLen));
-      res.end(JSON.stringify({ header: { magic, metaLength: metaLen, geomLength: geomLen, totalLength: bytes.length, valid: true }, meta: JSON.parse(metaRaw.toString('utf8')), geomBase64: geom.toString('base64'), note: '两块 Brotli 在 Node 侧解压；几何仍由浏览器用真实 TS 解码器解析' }));
-    } catch (error: any) { res.statusCode = 400; res.end(JSON.stringify({ error: error.message })); }
-    return;
+    const magic = bytes.subarray(0, 5).toString('latin1'); const metaLen = bytes.length >= 13 ? bytes.readUInt32LE(5) : 0, geomLen = bytes.length >= 13 ? bytes.readUInt32LE(9) : 0;
+    if (magic !== 'BVPK1' || 13 + metaLen + geomLen !== bytes.length) { res.statusCode = 400; res.end(JSON.stringify({ error: 'BVPK1 容器无效' })); return; }
+    const block = which === 'meta' ? bytes.subarray(13, 13 + metaLen) : bytes.subarray(13 + metaLen, 13 + metaLen + geomLen);
+    res.setHeader('Content-Type', which === 'meta' ? 'application/json;charset=utf-8' : 'application/octet-stream');
+    res.setHeader('Content-Encoding', 'br'); res.setHeader('X-Block-Compressed-Bytes', String(block.length)); res.end(block); return;
   }
-  res.statusCode = 404; res.end(JSON.stringify({ error: '没有这个锦州几何接口。' }));
+  if (rest === 'shard-info') { const s = buildSharding(city); if (!s) { res.statusCode = 503; res.end(JSON.stringify({ error: '缺少 city.paths.bvp' })); return; } const whole = bvpRead(city, 'paths.bvp.br'); res.end(JSON.stringify({ shardCount: s.shardCount, routeToShard: s.routeToShard, shardRawSizes: s.shardRawSizes, wholeBrBytes: whole ? whole.length : 0 })); return; }
+  if (rest.startsWith('shard/')) {
+    const idx = Number(rest.slice('shard/'.length).replace(/\.br$/, '')); const s = buildSharding(city);
+    if (!s || !Number.isInteger(idx) || idx < 0 || idx >= s.shardCount) { res.statusCode = 404; res.end(JSON.stringify({ error: '分片不存在' })); return; }
+    res.setHeader('Content-Type', 'application/octet-stream'); res.setHeader('Content-Encoding', 'br'); res.setHeader('X-Shard-Raw-Bytes', String(s.shardRawSizes[idx])); res.end(s.shardsBr[idx]); return;
+  }
+  res.statusCode = 404; res.end(JSON.stringify({ error: '没有这个 BVP 几何接口。' }));
 }
 
 function handleGeometryDebug(pathname: string, search: URLSearchParams, res: any): void {
-  if (pathname.startsWith('/__debug/geometry/jinzhou/')) { handleJinzhou(pathname.slice('/__debug/geometry/jinzhou/'.length), search, res); return; }
+  if (pathname.startsWith('/__debug/geometry/bvp/')) {
+    const sub = pathname.slice('/__debug/geometry/bvp/'.length);
+    const slash = sub.indexOf('/');
+    const city = slash < 0 ? sub : sub.slice(0, slash);
+    const rest = slash < 0 ? '' : sub.slice(slash + 1);
+    handleBvp(decodeURIComponent(city), rest, search, res); return;
+  }
   const data = loadGeometry();
   if (!data) { res.statusCode = 503; res.end(JSON.stringify({ error: '实验数据不存在：请把 raw.json / delta.json 放到 .geometry-experiment/' })); return; }
   if (pathname === '/__debug/geometry/index') { res.end(JSON.stringify({ lines: data.index })); return; }

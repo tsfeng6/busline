@@ -43,3 +43,29 @@ test('real Jinzhou BVPK1 header is valid and length-consistent', { skip: !exists
   assert.equal(header.geomLength, 101575);
   assert.equal(header.totalLength, 144553);
 });
+
+const bjDir = resolve('.geometry-experiment/beijing/package/outputs');
+const haveBj = existsSync(resolve(bjDir, 'city.paths.bvp')) && existsSync(resolve(bjDir, 'city.restored.json'));
+test('real Beijing BVP1 decodes bit-exactly (903 lines / 502,911 points)', { skip: !haveBj && 'beijing fixtures not present' }, () => {
+  const bvp = new Uint8Array(readFileSync(resolve(bjDir, 'city.paths.bvp')));
+  const restored = JSON.parse(readFileSync(resolve(bjDir, 'city.restored.json'), 'utf8'));
+  const index = indexCityGeometry(bvp);
+  assert.equal(index.spans.length, 903);
+  assert.equal(restored.lines.length, 903);
+  let points = 0, mismatch = 0;
+  for (let i = 0; i < index.spans.length; i++) {
+    const decoded = decodeRoute(index, i); const original = restored.lines[i].path;
+    assert.equal(decoded.length, original.length);
+    for (let j = 0; j < decoded.length; j++) { if (decoded[j][0] !== original[j][0] || decoded[j][1] !== original[j][1]) mismatch++; points++; }
+  }
+  assert.equal(points, 502911);
+  assert.equal(mismatch, 0);
+});
+test('real Beijing BVPK1 header is valid', { skip: !existsSync(resolve(bjDir, 'city.bvpk')) && 'beijing bvpk not present' }, () => {
+  const header = parseBvpkHeader(new Uint8Array(readFileSync(resolve(bjDir, 'city.bvpk'))));
+  assert.equal(header.magic, 'BVPK1');
+  assert.equal(header.valid, true);
+  assert.equal(header.metaLength, 530758);
+  assert.equal(header.geomLength, 761927);
+  assert.equal(header.totalLength, 1292698);
+});

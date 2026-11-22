@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { JinzhouBvpPanel } from './JinzhouBvpPanel';
+import { BvpPanel } from './BvpPanel';
 
 // 开发期线路几何压缩对比面板（仅 import.meta.env.DEV + ?debugGeometry=1 时挂载）。
 // 数据由 vite 开发中间件 /__debug/geometry/* 提供，不进入生产构建。
@@ -26,7 +26,7 @@ export function GeometryDebugPanel({ map }: { map: any }) {
   const [selected, setSelected] = useState<LineDebug | null>(null);
   const [error, setError] = useState('');
   const [visible, setVisible] = useState<Record<string, boolean>>({ original: true, deltaRestored: true, direction720: true, rdp: true });
-  const [dataset, setDataset] = useState<'fuxin' | 'jinzhou'>('fuxin');
+  const [dataset, setDataset] = useState<'fuxin' | 'jinzhou' | 'beijing'>('fuxin');
   const overlaysRef = useRef<any[]>([]);
   const polyRef = useRef<Record<string, any>>({});
 
@@ -96,10 +96,11 @@ export function GeometryDebugPanel({ map }: { map: any }) {
     <div className="fixed top-2 right-2 z-[300] w-[340px] max-w-[calc(100vw-16px)] max-h-[92vh] overflow-auto rounded-2xl bg-slate-900/95 text-white text-xs p-3 shadow-2xl border border-slate-700 pointer-events-auto">
       <h3 className="font-bold text-sm mb-2">线路几何压缩对比 <span className="text-[10px] text-emerald-400">DEV</span></h3>
       <div className="flex gap-1 mb-2">
-        <button onClick={() => setDataset('fuxin')} className={`flex-1 rounded-lg py-1 font-bold ${dataset === 'fuxin' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-300'}`}>阜新(实验)</button>
-        <button onClick={() => setDataset('jinzhou')} className={`flex-1 rounded-lg py-1 font-bold ${dataset === 'jinzhou' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-300'}`}>锦州 BVP1</button>
+        <button onClick={() => setDataset('fuxin')} className={`flex-1 rounded-lg py-1 font-bold text-[11px] ${dataset === 'fuxin' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-300'}`}>阜新</button>
+        <button onClick={() => setDataset('jinzhou')} className={`flex-1 rounded-lg py-1 font-bold text-[11px] ${dataset === 'jinzhou' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-300'}`}>锦州</button>
+        <button onClick={() => setDataset('beijing')} className={`flex-1 rounded-lg py-1 font-bold text-[11px] ${dataset === 'beijing' ? 'bg-sky-600 text-white' : 'bg-slate-800 text-slate-300'}`}>北京</button>
       </div>
-      {dataset === 'jinzhou' && <JinzhouBvpPanel map={map} />}
+      {dataset !== 'fuxin' && <BvpPanel map={map} city={dataset} />}
       {dataset === 'fuxin' && (<>
       <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="按线路名称或 ID 搜索…"
         className="w-full mb-2 rounded-lg bg-slate-800 px-2 py-1.5 outline-none border border-slate-600 focus:border-sky-400" />
