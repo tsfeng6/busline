@@ -8,6 +8,7 @@ import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
 import {MapActivityIndicator} from './components/MapActivityIndicator';
 import { CityOverviewLayer } from './components/CityOverviewLayer';
+import { GeometryDebugPanel } from './components/GeometryDebugPanel';
 import { CITY_DETAIL_ZOOM } from './utils/cityOverview';
 import { cityDataCache, cityPrefetcher, enqueueNeighborPrefetch, cancelNeighborPrefetch } from './utils/spatialLoader';
 import { citiesInViewport, expandBounds, neighborsOf, type Bounds } from './utils/viewportCities';
@@ -6487,8 +6488,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     return () => { cancelled = true; };
   }, [activeBusLine, currentCity]);
 
+  const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
   return (
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
+      {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
       {/* Global API Quota / Error Banner */}
       <AnimatePresence>
         {(apiErrorNotification || showEmptySearchNotice) && (

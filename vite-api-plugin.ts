@@ -2,6 +2,8 @@ import { handleCityDataRequest } from './src/server/cityData';
 import { runBuslineAI } from './src/server/buslineAI';
 import fs from 'fs';
 import path from 'path';
+import { brotliCompressSync } from 'node:zlib';
+import { decodeDeltaE6, encodeDirections, decodeDirections, rdpSimplify, deviationStats, encodeVarintDelta, pathLengthMeters, type Point } from './src/utils/geometryEncoding';
 
 // Conversions for Firestore REST API JSON structure
 function fromFirestore(doc: any): any {
@@ -76,6 +78,56 @@ function toValue(value: any): any {
   return undefined;
 }
 
+// ---- 线路几何压缩对比：仅开发环境（configureServer 仅在 dev 运行）----
+const GEOMETRY_DEBUG_DIR = process.env.GEOMETRY_DEBUG_DIR || path.join(process.cwd(), '.geometry-experiment');
+type GeometryCache = { key: string; index: any[]; rawById: Map<string, Point[]>; deltaById: Map<string, any> };
+let geometryCache: GeometryCache | null = null;
+
+function loadGeometry(): GeometryCache | null {
+  const rawPath = path.join(GEOMETRY_DEBUG_DIR, 'raw.json');
+  const deltaPath = path.join(GEOMETRY_DEBUG_DIR, 'delta.json');
+  if (!fs.existsSync(rawPath) || !fs.existsSync(deltaPath)) return null;
+  const key = `${fs.statSync(rawPath).mtimeMs}:${fs.statSync(deltaPath).mtimeMs}`;
+  if (geometryCache && geometryCache.key === key) return geometryCache;
+  const raw = JSON.parse(fs.readFileSync(rawPath, 'utf8'));
+  const delta = JSON.parse(fs.readFileSync(deltaPath, 'utf8'));
+  const rawById = new Map<string, Point[]>(raw.lines.map((line: any) => [line.id, line.path]));
+  const deltaById = new Map<string, any>(delta.lines.map((line: any) => [line.id, line.path]));
+  const index = delta.lines.map((line: any) => ({
+    id: line.id, name: line.name, startStop: line.start_stop || '', endStop: line.end_stop || '',
+    points: 1 + (line.path?.deltas?.length || 0) / 2, hasRaw: rawById.has(line.id),
+  }));
+  geometryCache = { key, index, rawById, deltaById };
+  return geometryCache;
+}
+
+function handleGeometryDebug(pathname: string, search: URLSearchParams, res: any): void {
+  const data = loadGeometry();
+  if (!data) { res.statusCode = 503; res.end(JSON.stringify({ error: '实验数据不存在：请把 raw.json / delta.json 放到 .geometry-experiment/' })); return; }
+  if (pathname === '/__debug/geometry/index') { res.end(JSON.stringify({ lines: data.index })); return; }
+  if (pathname === '/__debug/geometry/line') {
+    const id = search.get('id') || '';
+    const original = data.rawById.get(id), deltaPath = data.deltaById.get(id);
+    if (!original || !deltaPath) { res.statusCode = 404; res.end(JSON.stringify({ error: '未找到该线路' })); return; }
+    const epsilon = Math.max(0.5, Number(search.get('eps')) || 10);
+    const deltaRestored = decodeDeltaE6(deltaPath);
+    const direction720 = decodeDirections(encodeDirections(original));
+    const rdp = rdpSimplify(original, epsilon);
+    const varintBytes = encodeVarintDelta(deltaPath);
+    const brotliBytes = brotliCompressSync(Buffer.from(varintBytes));
+    const bounds = original.reduce((a, p) => [Math.min(a[0], p[0]), Math.min(a[1], p[1]), Math.max(a[2], p[0]), Math.max(a[3], p[1])], [Infinity, Infinity, -Infinity, -Infinity]);
+    const line = data.index.find((item: any) => item.id === id);
+    res.end(JSON.stringify({
+      id, name: line?.name, startStop: line?.startStop, endStop: line?.endStop, bounds, epsilon,
+      layers: { original, deltaRestored, direction720, rdp },
+      stats: { delta: deviationStats(original, deltaRestored), direction720: deviationStats(original, direction720), rdp: deviationStats(original, rdp) },
+      sizes: { points: original.length, rawJson: JSON.stringify(original).length, deltaJson: JSON.stringify(deltaPath).length, varint: varintBytes.length, brotli: brotliBytes.length, rdpPoints: rdp.length, lengthMeters: Math.round(pathLengthMeters(original)) },
+    }));
+    return;
+  }
+  res.statusCode = 404; res.end(JSON.stringify({ error: '没有这个几何调试接口。' }));
+}
+
 export function viteApiPlugin() {
   const DATA_DIR = path.join(process.cwd(), 'data');
   const PENDING_DIR = path.join(DATA_DIR, 'pending');
@@ -112,6 +164,11 @@ export function viteApiPlugin() {
     configureServer(server: any) {
       server.middlewares.use(async (req: any, res: any, next: any) => {
         const urlStr = req.url || '';
+        if (urlStr.startsWith('/__debug/geometry/')) {
+          const geometryUrl = new URL(urlStr, 'http://localhost');
+          res.setHeader('Content-Type', 'application/json');
+          return handleGeometryDebug(geometryUrl.pathname, geometryUrl.searchParams, res);
+        }
         if (!urlStr.startsWith('/api/')) {
           return next();
         }
