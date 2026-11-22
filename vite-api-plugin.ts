@@ -2,7 +2,7 @@ import { handleCityDataRequest } from './src/server/cityData';
 import { runBuslineAI } from './src/server/buslineAI';
 import fs from 'fs';
 import path from 'path';
-import { brotliCompressSync } from 'node:zlib';
+import { brotliCompressSync, brotliDecompressSync } from 'node:zlib';
 import { decodeDeltaE6, encodeDirections, decodeDirections, rdpSimplify, deviationStats, encodeVarintDelta, pathLengthMeters, type Point } from './src/utils/geometryEncoding';
 
 // Conversions for Firestore REST API JSON structure
@@ -101,7 +101,79 @@ function loadGeometry(): GeometryCache | null {
   return geometryCache;
 }
 
+// ---- 锦州 BVP1/BVPK1 实验数据：仅开发环境；只读原始文件，几何解码在浏览器端用真实 TS 解码器完成 ----
+const JINZHOU_DIR = path.join(process.cwd(), '.geometry-experiment/jinzhou/outputs');
+const JINZHOU_FILES: Record<string, string> = {
+  'meta.json': 'city.meta.json', 'paths.bvp': 'city.paths.bvp', 'city.bvpk': 'city.bvpk',
+  'restored.json': 'city.restored.json', 'paths.bvp.br': 'city.paths.bvp.br', 'meta.json.br': 'city.meta.json.br',
+};
+type JinzhouIndex = { lines: Array<{ routeIndex: number; id: string; name: string; startStop: string; endStop: string }> };
+let jinzhouMetaCache: { key: string; meta: any } | null = null;
+function loadJinzhouMeta(): any | null {
+  const p = path.join(JINZHOU_DIR, JINZHOU_FILES['meta.json']);
+  if (!fs.existsSync(p)) return null;
+  const key = String(fs.statSync(p).mtimeMs);
+  if (jinzhouMetaCache && jinzhouMetaCache.key === key) return jinzhouMetaCache.meta;
+  const meta = JSON.parse(fs.readFileSync(p, 'utf8'));
+  jinzhouMetaCache = { key, meta };
+  return meta;
+}
+
+function handleJinzhou(rest: string, search: URLSearchParams, res: any): void {
+  const readFileObject = (name: string): Buffer | null => {
+    const file = JINZHOU_FILES[name]; if (!file) return null;
+    const p = path.join(JINZHOU_DIR, file);
+    return fs.existsSync(p) ? fs.readFileSync(p) : null;
+  };
+  if (rest === 'file') {
+    const name = search.get('name') || '';
+    const bytes = readFileObject(name);
+    if (!bytes) { res.statusCode = 404; res.end(JSON.stringify({ error: `缺少实验文件：${name}` })); return; }
+    res.setHeader('Content-Type', name.endsWith('.json') ? 'application/json;charset=utf-8' : 'application/octet-stream');
+    res.end(bytes); return;
+  }
+  if (rest === 'index') {
+    const meta = loadJinzhouMeta();
+    if (!meta) { res.statusCode = 503; res.end(JSON.stringify({ error: '缺少锦州实验包（city.meta.json）' })); return; }
+    const index: JinzhouIndex = { lines: meta.lines.map((line: any, i: number) => ({ routeIndex: i, id: line.id, name: line.name, startStop: line.start_stop || '', endStop: line.end_stop || '' })) };
+    res.end(JSON.stringify(index)); return;
+  }
+  if (rest === 'info') {
+    const sizes: Record<string, number> = {};
+    for (const name of ['meta.json', 'paths.bvp', 'city.bvpk', 'restored.json', 'paths.bvp.br', 'meta.json.br']) {
+      const p = path.join(JINZHOU_DIR, JINZHOU_FILES[name] || ''); if (fs.existsSync(p)) sizes[name] = fs.statSync(p).size;
+    }
+    let metaBrotliMs = 0, geomBrotliMs = 0, bvpk: any = null;
+    const metaBr = readFileObject('meta.json.br'), geomBr = readFileObject('paths.bvp.br');
+    if (metaBr) { const t = performance.now(); brotliDecompressSync(metaBr); metaBrotliMs = performance.now() - t; }
+    if (geomBr) { const t = performance.now(); brotliDecompressSync(geomBr); geomBrotliMs = performance.now() - t; }
+    const bvpkBytes = readFileObject('city.bvpk');
+    if (bvpkBytes) {
+      const magic = bvpkBytes.subarray(0, 5).toString('latin1');
+      const metaLen = bvpkBytes.readUInt32LE(5), geomLen = bvpkBytes.readUInt32LE(9);
+      bvpk = { magic, metaLength: metaLen, geomLength: geomLen, totalLength: bvpkBytes.length, valid: magic === 'BVPK1' && 13 + metaLen + geomLen === bvpkBytes.length };
+    }
+    res.end(JSON.stringify({ sizes, metaBrotliMs, geomBrotliMs, bvpk, note: 'Brotli 解压在 Node 侧测时（浏览器无原生 Brotli 解压 API）' })); return;
+  }
+  if (rest === 'bvpk-blocks') {
+    const bytes = readFileObject('city.bvpk');
+    if (!bytes) { res.statusCode = 404; res.end(JSON.stringify({ error: '缺少 city.bvpk' })); return; }
+    try {
+      const magic = bytes.subarray(0, 5).toString('latin1');
+      if (magic !== 'BVPK1' || bytes.length < 13) throw new Error('无效 BVPK1 头');
+      const metaLen = bytes.readUInt32LE(5), geomLen = bytes.readUInt32LE(9);
+      if (13 + metaLen + geomLen !== bytes.length) throw new Error('BVPK1 长度不一致');
+      const metaRaw = brotliDecompressSync(bytes.subarray(13, 13 + metaLen));
+      const geom = brotliDecompressSync(bytes.subarray(13 + metaLen, 13 + metaLen + geomLen));
+      res.end(JSON.stringify({ header: { magic, metaLength: metaLen, geomLength: geomLen, totalLength: bytes.length, valid: true }, meta: JSON.parse(metaRaw.toString('utf8')), geomBase64: geom.toString('base64'), note: '两块 Brotli 在 Node 侧解压；几何仍由浏览器用真实 TS 解码器解析' }));
+    } catch (error: any) { res.statusCode = 400; res.end(JSON.stringify({ error: error.message })); }
+    return;
+  }
+  res.statusCode = 404; res.end(JSON.stringify({ error: '没有这个锦州几何接口。' }));
+}
+
 function handleGeometryDebug(pathname: string, search: URLSearchParams, res: any): void {
+  if (pathname.startsWith('/__debug/geometry/jinzhou/')) { handleJinzhou(pathname.slice('/__debug/geometry/jinzhou/'.length), search, res); return; }
   const data = loadGeometry();
   if (!data) { res.statusCode = 503; res.end(JSON.stringify({ error: '实验数据不存在：请把 raw.json / delta.json 放到 .geometry-experiment/' })); return; }
   if (pathname === '/__debug/geometry/index') { res.end(JSON.stringify({ lines: data.index })); return; }
