@@ -1,6 +1,7 @@
 import {mercatorY} from '../src/utils/cityOverview';
 import {cityOverviewPNG} from './city-overview-png';
 import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {gzipSync,gunzipSync} from 'node:zlib';
 import {dirname,join} from 'node:path';
 export const TILE_MIN_ZOOM=2,TILE_MAX_ZOOM=13,TILE_SIZE=256,TILE_PIXEL_RATIO=2;
 const RASTER_SIZE=TILE_SIZE*TILE_PIXEL_RATIO;
@@ -69,5 +70,28 @@ export class CityOverviewTiles{
   for(const key of this.tileKeys){const pixels=this.tiles.get(key)?.pixels??readFileSync(this.cachePath(key));
    yield {path:`${prefix}/${key}.png`,content:cityOverviewPNG({width:RASTER_SIZE,height:RASTER_SIZE,pixels,alpha:true})};
   }
+ }
+ /** Raw coverage for a single tile (resident or disk-backed). */
+ rawPixels(key:string){return this.tiles.get(key)?.pixels??readFileSync(this.cachePath(key));}
+ private mergeTile(key:string,source:Uint8Array){
+  const entry=this.pixels(key),target=entry.pixels;let changed=false;
+  for(let i=0;i<source.length;i++)if(source[i]>target[i]){target[i]=source[i];changed=true;}
+  if(changed)entry.dirty=true;
+ }
+ /** Max-merge another (disk-backed) layer into this instance, tile by tile. */
+ mergeLayer(other:CityOverviewTiles){for(const key of other.keys)this.mergeTile(key,other.rawPixels(key));}
+ /** Serialize this layer's coverage to gzip: 4-byte tile count, then per tile [keyLen][key][raw pixels]. */
+ serializeLayer():Buffer{
+  const keys=this.keys,parts:Buffer[]=[Buffer.alloc(4)];parts[0].writeUInt32BE(keys.length,0);
+  for(const key of keys){const keyBuf=Buffer.from(key,'utf8'),len=Buffer.alloc(4);len.writeUInt32BE(keyBuf.length,0);parts.push(len,keyBuf,Buffer.from(this.rawPixels(key)));}
+  return gzipSync(Buffer.concat(parts));
+ }
+ /** Merge a serialized layer (cached gzip) into this instance. */
+ mergeSerializedLayer(buffer:Buffer){
+  const raw=gunzipSync(buffer);let offset=0;const count=raw.readUInt32BE(offset);offset+=4;
+  for(let i=0;i<count;i++){const keyLen=raw.readUInt32BE(offset);offset+=4;
+   const key=raw.subarray(offset,offset+keyLen).toString('utf8');offset+=keyLen;
+   const source=raw.subarray(offset,offset+RASTER_SIZE*RASTER_SIZE);offset+=RASTER_SIZE*RASTER_SIZE;
+   this.mergeTile(key,source);}
  }
 }

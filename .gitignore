@@ -12,3 +12,4 @@ coverage/
 city-update-report.json
 
 public/city-data/
+.city-layers/

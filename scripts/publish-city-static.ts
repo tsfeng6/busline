@@ -2,6 +2,7 @@ import {provinceForCity,savedCountySeats} from '../src/utils/localTransit';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -13,9 +14,38 @@ import { cityThumbnail, type CityOverview } from '../src/utils/cityOverview';
 import { resolveCityParts } from '../src/utils/cityStorage';
 import { cityStorageFiles } from './city-storage-files';
 
+interface CityLayer { id: string; overview: CityOverview; thumbnail: Buffer; coverage: Buffer; }
+
+function loadLayers(layersDir: string): Map<string, CityLayer> {
+  const layers = new Map<string, CityLayer>();
+  if (!existsSync(layersDir)) return layers;
+  for (const entry of readdirSync(layersDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = join(layersDir, entry.name);
+    const metaPath = join(dir, 'meta.json'), covPath = join(dir, 'coverage.gz'), thumbPath = join(dir, 'thumb.png');
+    if (!existsSync(metaPath) || !existsSync(covPath) || !existsSync(thumbPath)) continue;
+    try {
+      const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
+      if (typeof meta.id !== 'string' || !meta.overview || typeof meta.overview.city !== 'string') continue;
+      layers.set(entry.name, { id: meta.id, overview: meta.overview, thumbnail: readFileSync(thumbPath), coverage: readFileSync(covPath) });
+    } catch { /* skip corrupt layer */ }
+  }
+  return layers;
+}
+
+async function saveLayers(layersDir: string, layers: Map<string, CityLayer>): Promise<void> {
+  for (const [key, layer] of layers) {
+    const dir = join(layersDir, key);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'coverage.gz'), layer.coverage);
+    await writeFile(join(dir, 'thumb.png'), layer.thumbnail);
+    await writeFile(join(dir, 'meta.json'), JSON.stringify({ id: layer.id, overview: layer.overview }));
+  }
+}
+
 const snapshotId = /^[\dTZ-]+-[a-f0-9]{12}$/;
 /** Publish latest AND indexed history, including all referenced immutable pieces. No live gateway is needed to read. */
-export async function mirrorCitySnapshots(ref: string, output = 'public', repo = process.cwd()) {
+export async function mirrorCitySnapshots(ref: string, output = 'public', repo = process.cwd(), layersDir?: string) {
   const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 35 * 1024 * 1024 });
   const commit = git(['rev-parse', '--verify', ref]).trim();
   const files = new Set(git(['ls-tree', '-r', '-z', '--name-only', commit, '--', 'city-data/v1']).split('\0').filter(Boolean));
@@ -23,10 +53,12 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
     if (!files.has(path)) throw Error(`Missing shared city file: ${path}`);
     return git(['show', `${commit}:${path}`]);
   };
-  let bytes = 0, cities = 0, historySnapshots = 0;
+  let bytes = 0, cities = 0, historySnapshots = 0, reused = 0;
   const overviews:CityOverview[]=[];
   const tileCache=await mkdtemp(join(tmpdir(),'busline-tile-work-'));
   const tiles=new CityOverviewTiles({cacheDirectory:tileCache,maxResidentTiles:128});
+  const cachedLayers=layersDir?loadLayers(layersDir):new Map<string,CityLayer>();
+  const newLayers=new Map<string,CityLayer>();
   try {
   const copied = new Set<string>();
   const copy = async (path: string, content: string | Uint8Array) => {
@@ -68,11 +100,27 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       await copy(metaPath, text);
     }
     await snapshot(prefix, file, currentId); cities++;
-    const latest=await resolveCityParts(JSON.parse(source(file)),async part=>JSON.parse(source(`${prefix}/${part}`)));
-    tiles.add(latest);
-    console.log(`Prepared ${latest.city}: ${tiles.keys.length} tiles; resident raster ${(tiles.residentBytes/1024/1024).toFixed(1)} MiB`);
-    const thumbnail=cityThumbnail(latest);
-    if(thumbnail){const name=`thumbnails/${city}-geo-v3.png`;await copy(`city-data/v1/${name}`,cityOverviewPNG(thumbnail.raster));overviews.push({...thumbnail.meta,province:provinceForCity(latest.city),countySeats:savedCountySeats(latest),thumbnail:`thumbnails/${encodeURIComponent(city)}-geo-v3.png`});}
+    const cached=cachedLayers.get(city);
+    if(cached&&currentId&&cached.id===currentId){
+      reused++;
+      tiles.mergeSerializedLayer(cached.coverage);
+      await copy(`city-data/v1/thumbnails/${city}-geo-v3.png`,cached.thumbnail);
+      overviews.push(cached.overview);
+    }else{
+      const latest=await resolveCityParts(JSON.parse(source(file)),async part=>JSON.parse(source(`${prefix}/${part}`)));
+      const cityTiles=new CityOverviewTiles({cacheDirectory:join(tileCache,city),maxResidentTiles:128});
+      cityTiles.add(latest);
+      tiles.mergeLayer(cityTiles);
+      const thumb=cityThumbnail(latest);
+      if(thumb){
+        const thumbPng=cityOverviewPNG(thumb.raster);
+        await copy(`city-data/v1/thumbnails/${city}-geo-v3.png`,thumbPng);
+        const overview:CityOverview={...thumb.meta,province:provinceForCity(latest.city),countySeats:savedCountySeats(latest),thumbnail:`thumbnails/${encodeURIComponent(city)}-geo-v3.png`};
+        overviews.push(overview);
+        newLayers.set(city,{id:currentId||'',overview,thumbnail:thumbPng,coverage:cityTiles.serializeLayer()});
+      }
+    }
+    console.log(`Prepared ${city}: ${tiles.keys.length} tiles; resident raster ${(tiles.residentBytes/1024/1024).toFixed(1)} MiB${cached&&cached.id===currentId?' (reused)':''}`);
     if (files.has(historyPath)) {
       const text = source(historyPath), records = JSON.parse(text);
       await copy(historyPath, text);
@@ -87,7 +135,8 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   await copy('city-data/v1/overview.json',JSON.stringify({schemaVersion:3,cities:overviews,tiles:{base:tileBase,pixelRatio:TILE_PIXEL_RATIO,revision:commit,minZoom:TILE_MIN_ZOOM,maxZoom:TILE_MAX_ZOOM,keys:tiles.keys}}));
   await mkdir(join(output, 'city-data/v1'), { recursive: true });
   await writeFile(join(output, 'city-data/v1/publication.json'), JSON.stringify({ commit, cities, historySnapshots, bytes, publishedAt: new Date().toISOString() }));
-  return { cities, historySnapshots, bytes, commit };
+  if(layersDir)await saveLayers(layersDir,newLayers);
+  return { cities, historySnapshots, bytes, commit, reused };
   } finally {await rm(tileCache,{recursive:true,force:true});}
 }
 // ---- 发布步骤的仓库解析：Vercel 构建环境没有 `origin` 远程 ----
@@ -148,7 +197,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(1);
   }
   try {
-    console.log(await mirrorCitySnapshots('FETCH_HEAD'));
+    console.log(await mirrorCitySnapshots('FETCH_HEAD', 'public', process.cwd(), process.env.CITY_LAYERS_DIR || '.city-layers'));
   } catch (error: any) {
     console.error('Unable to publish shared city snapshots:', redact(error.message, token));
     process.exit(1);

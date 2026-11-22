@@ -1,11 +1,29 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {cityThumbnail,overviewPixel,mercatorY,validCityOverview} from '../src/utils/cityOverview';
-import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {mirrorCitySnapshots} from '../scripts/publish-city-static';
+import {CityOverviewTiles} from '../scripts/city-overview-tiles';
+
+test('per-city tile layers serialize and merge back losslessly', () => {
+  const a = new CityOverviewTiles({ cacheDirectory: join(mkdtempSync(join(tmpdir(), 'busline-layer-')), 'a') });
+  const b = new CityOverviewTiles({ cacheDirectory: join(mkdtempSync(join(tmpdir(), 'busline-layer-')), 'b') });
+  a.add({ lines: [{ path: [[116, 39], [116.5, 39.5]] as [number, number][] }] });
+  b.add({ lines: [{ path: [[116.2, 39.2], [116.4, 39.4]] as [number, number][] }] });
+  const merged = new CityOverviewTiles({ cacheDirectory: join(mkdtempSync(join(tmpdir(), 'busline-layer-')), 'm') });
+  merged.mergeLayer(a);
+  merged.mergeSerializedLayer(a.serializeLayer()); // max merge is idempotent
+  merged.mergeLayer(b);
+  const aKeys = new Set(a.keys), bKeys = new Set(b.keys);
+  for (const key of merged.keys) assert.ok(aKeys.has(key) || bKeys.has(key));
+  const restored = new CityOverviewTiles({ cacheDirectory: join(mkdtempSync(join(tmpdir(), 'busline-layer-')), 'r') });
+  restored.mergeSerializedLayer(a.serializeLayer());
+  assert.deepEqual(restored.keys, a.keys);
+  for (const key of a.keys) assert.deepEqual(restored.rawPixels(key), a.rawPixels(key));
+});
 
 test('overview covers all route bounds with a bounded raster and never changes source coordinates',()=>{
  const data={city:'测试市',capturedAt:'2026-11-17T00:00:00Z',lines:[{path:[[116.123456789123,39.987654321098],[116.5,40],[116,39]] as [number,number][]}]};
@@ -29,6 +47,25 @@ test('publication creates a tiny national index and a thumbnail for every valid 
  }finally{rmSync(root,{recursive:true,force:true});}
 });
 
+
+test('incremental publish reuses unchanged city tile layers', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'busline-incremental-'));
+  try {
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'pipe' });
+    git('init'); git('config', 'user.name', 'Test'); git('config', 'user.email', 'test@example.invalid');
+    const prefix = join(root, 'city-data/v1', '北京'); mkdirSync(prefix, { recursive: true });
+    writeFileSync(join(prefix, 'latest.json'), JSON.stringify({ schemaVersion: 1, city: '北京市', capturedAt: '2026-11-17T00:00:00Z', lines: [{ path: [[116, 39], [116.2, 39.5]] }], stops: [] }));
+    writeFileSync(join(prefix, 'meta.json'), JSON.stringify({ schemaVersion: 1, city: '北京市', capturedAt: '2026-11-17T00:00:00Z', retrievalComplete: true, filtered: false, lineDirections: 1, stops: 0, snapshotId: '2026-11-17T00-00-00-000Z-abcdef123456' }));
+    git('add', '.'); git('commit', '-m', 'fixtures');
+    const layersDir = join(root, 'layers');
+    const first = await mirrorCitySnapshots('HEAD', join(root, 'out1'), root, layersDir);
+    assert.equal(first.reused, 0);
+    const second = await mirrorCitySnapshots('HEAD', join(root, 'out2'), root, layersDir);
+    assert.equal(second.reused, 1);
+    assert.deepEqual(readFileSync(join(root, 'out1', 'city-data/v1/overview.json')), readFileSync(join(root, 'out2', 'city-data/v1/overview.json')));
+    assert.ok(existsSync(join(layersDir, '北京', 'coverage.gz')));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('geographic thumbnail maps corners and Mercator midpoints to their real image positions',()=>{
  const bounds:[number,number,number,number]=[100,20,120,60];
