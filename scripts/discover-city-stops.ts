@@ -1,3 +1,5 @@
+import { districtSearchScopes } from '../src/utils/searchCity';
+
 /** POI search is capped at 200 records per query. Split saturated areas instead of paging past that cap. */
 type Box={west:number;south:number;east:number;north:number;depth:number};
 type Area={code:string;box:Box|null};
@@ -21,9 +23,8 @@ export async function discoverCityStops(district:any,request:RequestPOI,maxReque
       pois.set(id, { ...poi, address, searchScope });
     }
   };
-  const childCodes = [...new Set<string>((Array.isArray(district.districts) ? district.districts : [])
-    .filter(child => ['city', 'district'].includes(child.level) && child.adcode && child.adcode !== scope)
-    .map(child => String(child.adcode)))];
+  const childCodes = districtSearchScopes(Array.isArray(district.districts) ? district.districts : [])
+    .filter(code => code !== scope);
   const queue: Area[] = [...childCodes, scope].map(code => ({ code, box: null }));
   let queuedRoot = false;
   const split=(box:Box)=>{

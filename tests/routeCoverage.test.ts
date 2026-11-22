@@ -87,7 +87,9 @@ test('large browser search processes more than 200 station records with bounded 
       constructor(private opts: { subdistrict: number }) {}
       search(scope: string, callback: Function) {
         districtQueries++;
-        const district = this.opts.subdistrict ? { adcode: '110000', districtList: cases.map(c => ({ level: 'district', adcode: c.district })) }
+        const district = this.opts.subdistrict ? { adcode: '110000', districtList: [
+          { adcode: '110100', level: 'city', districtList: cases.map(c => ({ level: 'district', adcode: c.district })) },
+        ] }
           : { adcode: scope, boundaries: [[{ lng: 116, lat: 39 }, { lng: 116.4, lat: 39.4 }]] };
         callback('complete', { districtList: [district] });
       }
@@ -142,6 +144,13 @@ test('large browser search processes more than 200 station records with bounded 
   assert.equal(lineQueries, 3);
   assert.equal(districtQueries + calls.length + boundsQueries + lineQueries, 58);
   t.diagnostic(`987 POIs, 44 directions, 58 mocked provider calls in ${(performance.now() - started).toFixed(1)} ms`);
+  const focused = await discoverCityStops(services, '北京市', () => false, () => false, {
+    maxRequests: 1, preferredScope: cases[0].district, focusBounds: [116.27, 40.02, 116.3, 40.05],
+  });
+  assert.equal(focused.complete, false);
+  assert.equal(focused.pois.length, 25);
+  assert.ok(focused.pois.every(poi => poi.searchScope === cases[0].district));
+
 });
 
 test('citywide results from before partitioned discovery cannot suppress a new scan', () => {

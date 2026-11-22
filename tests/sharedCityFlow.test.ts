@@ -49,7 +49,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
     filterIntervalBusRef:ref(false),filterAirportBusRef:ref(false),blockedKeywordsRef:ref([]),searchFilterVersionRef:ref(1),
     getCitySearchServices:async(key:string,code:string)=>{assert.equal(key,'a'.repeat(32));assert.equal(code,'b'.repeat(32));return scope.window.AMap;},
     citySearchApiStatus,useCustomApiKey:false,customApiKey:'a'.repeat(32),customApiSecurityCode:'b'.repeat(32),initialAmapConfig:{isCustom:true,key:'a'.repeat(32),securityCode:'b'.repeat(32)},focusCustomApiRef:ref(false),
-    enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>snapshot,
+    CITY_DETAIL_ZOOM,enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>snapshot,
     citySnapshotFresh:()=>true,citySnapshotPreviewable:previewableCityDataset,resolveSearchCity,normalizeCityDataset,matchesReturnedLine,lineBaseIdentity,
     cityDataCache:{remember(){}},discoverCityStops:async()=>{apiRequests++;throw Error('Unexpected POI request');},
     updateTerminalNamesCache(){},syncStopMarkersToMap(){},getStopColor:()=> '#52796F',isLineNameBlockedRef:()=>false,

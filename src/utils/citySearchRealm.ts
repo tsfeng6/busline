@@ -8,18 +8,22 @@ export async function getCitySearchServices(key:string,securityCode:string):Prom
  current?.dispose();
  const iframe=document.createElement('iframe'),channel=crypto.randomUUID();
  iframe.hidden=true;iframe.title='城市检索服务';iframe.setAttribute('aria-hidden','true');
- let sequence=0,settled=false;
+ let sequence=0,settled=false,disposed=false,nextRequestAt=0;
  const pending=new Map<number,{finish:(status:string,result:unknown)=>void;timer:ReturnType<typeof setTimeout>}>();
  let resolveReady:(services:any)=>void=()=>{},rejectReady:(error:Error)=>void=()=>{};
  const ready=new Promise<any>((resolve,reject)=>{resolveReady=resolve;rejectReady=reject;});
  const failReady=()=>{if(!settled){settled=true;rejectReady(Error('自有高德检索服务加载失败，请检查 Key、安全密钥和域名白名单。'));}};
  const timer=setTimeout(failReady,20000);
- const dispose=()=>{clearTimeout(timer);failReady();window.removeEventListener('message',receive);iframe.remove();for(const item of pending.values()){clearTimeout(item.timer);item.finish('error',{info:'SEARCH_CANCELLED'});}pending.clear();};
+ const dispose=()=>{disposed=true;clearTimeout(timer);failReady();window.removeEventListener('message',receive);iframe.remove();for(const item of pending.values()){clearTimeout(item.timer);item.finish('error',{info:'SEARCH_CANCELLED'});}pending.clear();};
  const invoke=(service:string,options:any,method:string,args:any[],callback:(status:string,result:any)=>void)=>{
   const id=++sequence;
   const finish=(status:string,result:unknown)=>{const item=pending.get(id);if(!item)return;clearTimeout(item.timer);pending.delete(id);callback(status,result);};
-  pending.set(id,{finish,timer:setTimeout(()=>finish('error',{info:'SEARCH_TIMEOUT'}),12000)});
-  iframe.contentWindow?.postMessage({channel,type:'query',id,service,options,method,args},window.location.origin);
+  const sendAt=Math.max(Date.now(),nextRequestAt);
+  nextRequestAt=sendAt+400;
+  const delay=Math.max(0,sendAt-Date.now());
+  pending.set(id,{finish,timer:setTimeout(()=>finish('error',{info:'SEARCH_TIMEOUT'}),12000+delay)});
+  const send=()=>{if(!disposed && pending.has(id))iframe.contentWindow?.postMessage({channel,type:'query',id,service,options,method,args},window.location.origin);};
+  if(delay) setTimeout(send,delay); else send();
  };
  const proxy=(service:string)=>class {
   private options:any;

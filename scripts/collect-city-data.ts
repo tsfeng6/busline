@@ -64,7 +64,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
     return result;
   };
   await options.onProgress?.('正在确认城市。');
-  const districts = await request('/v3/config/district', { keywords: requestedCity, subdistrict:'1', extensions:'all' }, 'district');
+  const districts = await request('/v3/config/district', { keywords: requestedCity, subdistrict:'2', extensions:'all' }, 'district');
   const district = array(districts.districts).find(item => text(item.name) && cityDataKey(item.name) === cityDataKey(requestedCity));
   const municipalities = new Set(['北京市','上海市','天津市','重庆市']);
   if (!district || !['city','district'].includes(district.level) && !municipalities.has(district.name)) throw new Error('无法确认该城市或地区，请检查名称。');

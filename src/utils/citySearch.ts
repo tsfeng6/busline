@@ -1,7 +1,9 @@
+import { districtSearchScopes } from './searchCity';
+
 type SearchResult = { status: string; result: any };
 type Callback = (status: string, result: any) => void;
 
-function request(invoke: (callback: Callback) => void): Promise<SearchResult> {
+function requestOnce(invoke: (callback: Callback) => void): Promise<SearchResult> {
   return new Promise(resolve => {
     const finish: Callback = (status, result) => {
       clearTimeout(timer);
@@ -12,23 +14,35 @@ function request(invoke: (callback: Callback) => void): Promise<SearchResult> {
   });
 }
 
-type Area = { scope: string; bounds?: [number, number, number, number]; depth: number };
+async function request(invoke: (callback: Callback) => void): Promise<SearchResult> {
+  const first = await requestOnce(invoke);
+  const status = typeof first.result === 'string' ? first.result : String(first.result?.info || first.result?.infocode || '');
+  if (!/QPS|FREQUENT|^10004$/i.test(status)) return first;
+  await new Promise(resolve => setTimeout(resolve, 750));
+  return requestOnce(invoke);
+}
+
+type SearchBounds = [number, number, number, number];
+type Area = { scope: string; bounds?: SearchBounds; depth: number };
 const PAGE_SIZE = 25;
 const STOP_CAP = 200;
 
 /** Search county and district scopes independently and split capped POI results geographically. */
 export async function discoverCityStops(services: any, city: string, cancelled: () => boolean,
-  checkQuota: (status: string, result: any) => unknown, { maxRequests = 1200, preferredScope = '' } = {}): Promise<{ pois: any[]; complete: boolean }> {
+  checkQuota: (status: string, result: any) => unknown, { maxRequests = 1200, preferredScope = '', focusBounds }: {
+    maxRequests?: number; preferredScope?: string; focusBounds?: SearchBounds;
+  } = {}): Promise<{ pois: any[]; complete: boolean }> {
   const district = (scope: string, subdistrict: number, extensions: string) =>
     request(callback => new services.DistrictSearch({ subdistrict, extensions }).search(scope, callback));
 
-  const response = await district(city, 1, 'base');
+  const response = await district(city, 2, 'base');
   const root = response.result?.districtList?.[0];
-  const children = (root?.districtList || []).filter((child: any) =>
-    ['district', 'city'].includes(child.level) && child.adcode && child.adcode !== root.adcode);
-  const scopes = [...new Set<string>(children.map((child: any) => String(child.adcode)))];
+  const scopes = districtSearchScopes(root?.districtList || []).filter(code => code !== root.adcode);
   if (scopes.includes(preferredScope)) scopes.unshift(...scopes.splice(scopes.indexOf(preferredScope), 1));
   const areas: Area[] = (scopes.length ? scopes : [city]).map(scope => ({ scope, depth: 0 }));
+  if (focusBounds && Math.max(focusBounds[2] - focusBounds[0], focusBounds[3] - focusBounds[1]) < 0.5) {
+    areas.unshift({ scope: scopes.includes(preferredScope) ? preferredScope : city, bounds: focusBounds, depth: 0 });
+  }
   const found = new Map<string, any>();
   let complete = response.status === 'complete' && !!root && (scopes.length > 0 || root.level === 'district');
   let requests = 0;

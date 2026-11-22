@@ -1599,7 +1599,7 @@ export default function App() {
 
   const checkAmapQuotaError = useCallback((status: string, result: any) => {
     if (status === 'error' || (result && result.info && result.info !== 'OK' && result.info !== 'NO_DATA')) {
-      const info = String(result?.info || '').toUpperCase();
+      const info = String(typeof result === 'string' ? result : result?.info || '').toUpperCase();
       const infocode = String(result?.infocode || '');
 
       if (
@@ -5188,7 +5188,10 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       if (!usedRegionCache && enableCityWideSearch) {
         const discovered = await discoverCityStops(searchServices, currentCity,
           () => searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current,
-          checkAmapQuotaError, { preferredScope: currentDistrict });
+          checkAmapQuotaError, {
+            preferredScope: currentDistrict,
+            focusBounds: currentZoom >= CITY_DETAIL_ZOOM ? [sw.lng, sw.lat, ne.lng, ne.lat] : undefined,
+          });
         allPois = discovered.pois;
         wasTruncated = !discovered.complete;
       } else if (!usedRegionCache) {
