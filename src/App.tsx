@@ -9330,8 +9330,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     const { name, start, end } = info;
                     const isUserSub = fetchedLinesCache.current.get(line)?.isUserSubmitted || approvedUserLines.some(ul => ul.name === line);
                     const badgeText = name.replace('路', '');
+                    const viewportRoute = !selectedStop && selectedViewportRoutesRef.current.find(route => route.name === line);
                     const schedule = fetchedLinesCache.current.get(line) || Array.from(fetchedLinesCache.current.values() as Iterable<BusLine>).find(candidate =>
-                      candidate.name.split(/[（(]/)[0].replace('路', '').trim() === name.replace('路', '').trim() && candidate.start_stop === start && candidate.end_stop === end);
+                      candidate.name.split(/[（(]/)[0].replace('路', '').trim() === name.replace('路', '').trim() && candidate.start_stop === start && candidate.end_stop === end)
+                      // The compact viewport tile includes the two display times,
+                      // avoiding a duplicate AMap request for a route just picked
+                      // from the map.
+                      || viewportRoute;
                     return (
                       <div 
                         key={line + idx}
@@ -9385,7 +9390,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             )}
                           </div>
                         </div>
-                        <div className="shrink-0"><OperatingHours first={schedule?.stime} last={schedule?.etime} description={schedule?.scheduleDescription} /></div>
+                        <div className="shrink-0"><OperatingHours first={schedule?.stime} last={schedule?.etime} description={schedule && 'scheduleDescription' in schedule ? schedule.scheduleDescription : undefined} /></div>
                       </div>
                     );
                   })}

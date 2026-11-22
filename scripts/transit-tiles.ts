@@ -121,7 +121,12 @@ export class TransitTilePublisher {
       };
       for (const line of data.lines ?? []) {
         if (!line.name || !line.path?.length) continue;
-        for (const [key, paths] of tileRoutePaths(line.path, z)) add(key, [0, data.city, line.id ?? '', line.name, paths]);
+        // Keep the two compact display times with the tile. The viewport deliberately
+        // avoids a second AMap request after a map click, so dropping these fields
+        // makes an otherwise complete route look like it has no operating hours.
+        for (const [key, paths] of tileRoutePaths(line.path, z)) {
+          add(key, [0, data.city, line.id ?? '', line.name, line.stime ?? '', line.etime ?? '', paths]);
+        }
       }
       for (const stop of stops.values()) {
         const [px, py] = tileCoordinates([stop.lng, stop.lat], z);

@@ -70,7 +70,7 @@ test('single publication merges Beijing, Baoding and Langfang from BVPK1, legacy
         schemaVersion: 1, scope: 'city', coverage: 'observed', city: name + '市', capturedAt: '2026-11-22T00:00:00Z',
         filtered: false, retrievalComplete: true,
         stops: [{ id: 's', name: '边界站', address: '1路', location: stop }],
-        lines: [{ id: 'route', name: '1路', path: [[116.17, 39.5], [116.23, 39.5]], via_stops: [{ name: '边界站', location: stop }] }],
+        lines: [{ id: 'route', name: '1路', stime: '05:30', etime: '22:00', path: [[116.17, 39.5], [116.23, 39.5]], via_stops: [{ name: '边界站', location: stop }] }],
       });
       put(prefix + '/meta.json', JSON.stringify({ snapshotId: id }));
       if (i === 0) {
@@ -101,6 +101,7 @@ test('single publication merges Beijing, Baoding and Langfang from BVPK1, legacy
       const decoded = await decodeTransitTile(stream.pipeThrough(new DecompressionStream('gzip')), new AbortController().signal);
       assert.ok(gunzipSync(tileBytes).byteLength > 0);
       assert.deepEqual(decoded.routes.map(route => route.city).sort(), cities.map(name => name + '市').sort());
+      assert.ok(decoded.routes.every(route => route.stime === '05:30' && route.etime === '22:00'));
       assert.equal(decoded.stops.length, 3);
       assert.ok(decoded.stops.every(stop => stop.terminal && stop.lines.includes('1路')));
       assert.deepEqual(nearbyTileRoutes([{ tile, data: decoded }], [116.2, 39.5]).map(route => route.city).sort(), cities.map(name => name + '市').sort());
@@ -120,6 +121,15 @@ test('stream decoder handles UTF-8 record boundaries and refuses truncated or ca
   await assert.rejects(decodeTransitTile(stream(bytes.subarray(0, -1)), controller.signal), /Truncated/);
   controller.abort();
   await assert.rejects(decodeTransitTile(stream(bytes), controller.signal), { name: 'AbortError' });
+});
+
+test('stream decoder keeps compact route operating hours and accepts pre-existing tiles', async () => {
+  const stream = (record: string) => new Blob([record]).stream();
+  const fresh = await decodeTransitTile(stream('[0,"北京市","id","1路","05:30","22:00",[[0,0,4096,4096]]]\n'), new AbortController().signal);
+  assert.deepEqual({ stime: fresh.routes[0].stime, etime: fresh.routes[0].etime }, { stime: '05:30', etime: '22:00' });
+  const legacy = await decodeTransitTile(stream('[0,"北京市","id","1路",[[0,0,4096,4096]]]\n'), new AbortController().signal);
+  assert.equal(legacy.routes[0].stime, undefined);
+  assert.equal(legacy.routes[0].etime, undefined);
 });
 
 test('viewport cache bounds decoded memory, cancels irrelevant work and defers prefetch until idle', async () => {
