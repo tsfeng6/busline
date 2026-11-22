@@ -3,8 +3,11 @@ import {cityOverviewPNG} from './city-overview-png';
 import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {gzipSync,gunzipSync} from 'node:zlib';
 import {dirname,join} from 'node:path';
-export const TILE_MIN_ZOOM=2,TILE_MAX_ZOOM=13,TILE_SIZE=256,TILE_PIXEL_RATIO=2;
-const RASTER_SIZE=TILE_SIZE*TILE_PIXEL_RATIO;
+export const TILE_MIN_ZOOM=2,TILE_MAX_ZOOM=13,TILE_SIZE=256,TILE_PIXEL_RATIO=3;
+/** Route width is specified in CSS pixels, then converted to the raster scale. */
+export const OVERVIEW_STROKE_CSS_PX=1.5;
+export const OVERVIEW_RASTER_SIZE=TILE_SIZE*TILE_PIXEL_RATIO;
+const RASTER_SIZE=OVERVIEW_RASTER_SIZE;
 export function worldPixel(point:[number,number],zoom:number):[number,number]{
  const size=TILE_SIZE*2**zoom;return [(point[0]+180)/360*size,(180-mercatorY(point[1]))/360*size];
 }
@@ -38,7 +41,7 @@ export class CityOverviewTiles{
   if(tx<0||ty<0||tx>=2**z||ty>=2**z)return;
   const key=`${z}/${tx}/${ty}`;
   const tile=this.pixels(key),pixels=tile.pixels;
-  const index=(y%RASTER_SIZE)*RASTER_SIZE+x%RASTER_SIZE;
+  const index=(((y%RASTER_SIZE)+RASTER_SIZE)%RASTER_SIZE)*RASTER_SIZE+((x%RASTER_SIZE)+RASTER_SIZE)%RASTER_SIZE;
   // Repeated routes cannot darken or thicken the same edge.
   if(alpha>pixels[index]){pixels[index]=alpha;tile.dirty=true;}
  }
@@ -51,13 +54,16 @@ export class CityOverviewTiles{
     if(prev&&p[0]===prev[0]&&p[1]===prev[1])continue;
     const a=prev||p,dx=p[0]-a[0],dy=p[1]-a[1],major=Math.max(Math.abs(dx),Math.abs(dy));
     if(major>RASTER_SIZE*2**z/2){prev=p;continue;}
-    // Wu-style subpixel coverage at 512px, with a roughly one-CSS-pixel stroke.
+    // Coverage is scaled from a CSS-pixel width, so changing raster density or
+    // map zoom affects sharpness, not the visual line weight.
     const steep=Math.abs(dy)>Math.abs(dx),count=Math.max(1,Math.ceil(major));
+    const radius=OVERVIEW_STROKE_CSS_PX*TILE_PIXEL_RATIO/2;
+    const support=Math.ceil(radius+.5);
     for(let i=0;i<=count;i++){
      const t=i/count,x=a[0]+dx*t,y=a[1]+dy*t;
      const primary=Math.round(steep?y:x),secondary=steep?x:y,base=Math.floor(secondary);
-     for(let offset=-1;offset<=2;offset++){
-      const side=base+offset,alpha=Math.round(Math.max(0,Math.min(1,1.5-Math.abs(side-secondary)))*255);
+     for(let offset=-support;offset<=support;offset++){
+      const side=base+offset,alpha=Math.round(Math.max(0,Math.min(1,radius+.5-Math.abs(side-secondary)))*255);
       this.paint(z,steep?side:primary,steep?primary:side,alpha);
      }
     }

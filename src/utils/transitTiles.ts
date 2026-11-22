@@ -7,7 +7,15 @@ export const MAX_TRANSIT_TILE_BYTES = 12 * 1024 * 1024;
 export type TransitPoint = [number, number];
 export type TransitBounds = [west: number, south: number, east: number, north: number];
 export type TransitTile = { z: number; x: number; y: number };
-export type TileRoute = { city: string; id: string; name: string; paths: Float32Array[] };
+/** Compact route metadata needed by the viewport card. Geometry stays tile-local. */
+export type TileRoute = {
+  city: string;
+  id: string;
+  name: string;
+  stime?: string;
+  etime?: string;
+  paths: Float32Array[];
+};
 export type TileStop = {
   city: string; id: string; name: string; x: number; y: number;
   address: string; lines: string[]; terminal: boolean;

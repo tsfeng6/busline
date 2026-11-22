@@ -7,7 +7,7 @@ import {
 } from '../utils/transitTiles';
 
 export type ViewportStop = TileStop & { location: { lng: number; lat: number }; key: string; isBusStop: true };
-export type ViewportRoute = Pick<TileRoute, 'city' | 'id' | 'name'>;
+export type ViewportRoute = Pick<TileRoute, 'city' | 'id' | 'name' | 'stime' | 'etime'>;
 export type ViewportTransitSelection = {
   stops(): ViewportStop[];
   routesAt(point: TransitPoint): ViewportRoute[];
@@ -87,7 +87,9 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
       function paint() {
         const context = ctx!;
         const { width, height } = map.getSize();
-        const ratio = Math.min(devicePixelRatio || 1, lowMemory ? 1.5 : 2);
+        // Coordinates and line widths below are in CSS pixels. Raising only the
+        // backing-store ratio sharpens the canvas without changing visual weight.
+        const ratio = Math.min(devicePixelRatio || 1, lowMemory ? 2 : 3);
         const w = Math.round(width * ratio), h = Math.round(height * ratio);
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w; canvas.height = h;
@@ -224,7 +226,9 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
             if (x < -tolerance || y < -tolerance || x > EXTENT + tolerance || y > EXTENT + tolerance) continue;
             for (const route of data.routes) {
               if (!options.current.blocked(route.name) && route.paths.some(path => pathNear(path, x, y, tolerance))) {
-                matches.set(`${route.city}\0${route.id || route.name}`, { city: route.city, id: route.id, name: route.name });
+                matches.set(`${route.city}\0${route.id || route.name}`, {
+                  city: route.city, id: route.id, name: route.name, stime: route.stime, etime: route.etime,
+                });
               }
             }
           }

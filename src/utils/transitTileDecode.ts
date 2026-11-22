@@ -9,12 +9,21 @@ export async function decodeTransitTile(stream: ReadableStream<Uint8Array>, sign
     if (![city, id, name].every(value => typeof value === 'string') || !city || !name) throw Error('Invalid transit record');
     result.bytes += 128 + 2 * (city.length + id.length + name.length);
     if (kind === 0) {
-      const paths = (fields[0] as number[][]).map(path => {
+      // v1 tiles originally stored [paths]. Newer tiles store [stime, etime,
+      // paths]. Continue accepting the former until every static deployment has
+      // been regenerated.
+      const [rawStart, rawEnd, rawPaths] = fields.length === 1
+        ? ['', '', fields[0]]
+        : [fields[0], fields[1], fields[2]];
+      if (typeof rawStart !== 'string' || typeof rawEnd !== 'string' || !Array.isArray(rawPaths)) {
+        throw Error('Invalid transit route');
+      }
+      const paths = rawPaths.map(path => {
         if (path.length < 4 || path.length % 2 || !path.every(coordinate)) throw Error('Invalid transit path');
         result.bytes += 64 + path.length * 12; // Include the renderer’s cached path estimate.
         return Float32Array.from(path);
       });
-      result.routes.push({ city, id, name, paths });
+      result.routes.push({ city, id, name, ...(rawStart ? { stime: rawStart } : {}), ...(rawEnd ? { etime: rawEnd } : {}), paths });
     } else if (kind === 1) {
       const [x, y, address, lines, terminal] = fields;
       if (!coordinate(x) || !coordinate(y) || typeof address !== 'string' || typeof terminal !== 'boolean'

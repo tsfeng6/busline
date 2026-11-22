@@ -106,22 +106,22 @@ test('each overview zoom has geographically correct XYZ tiles; missing tiles nee
  for(const file of tiles.files(index.base))assert.deepEqual([...file.content.subarray(0,8)],[137,80,78,71,13,10,26,10]);
 });
 
-test('HD XYZ tiles retain original bounds at 512px and have antialiased transparent edges',async()=>{
- const {CityOverviewTiles,TILE_PIXEL_RATIO}=await import('../scripts/city-overview-tiles');
+test('HD XYZ tiles retain original bounds at 3x density and have antialiased transparent edges',async()=>{
+ const {CityOverviewTiles,TILE_PIXEL_RATIO,OVERVIEW_RASTER_SIZE}=await import('../scripts/city-overview-tiles');
  const {inflateSync}=await import('node:zlib');
  const tiles=new CityOverviewTiles();tiles.add({lines:[{path:[[116.1234,39.9876],[116.151,40.001]]}]});
- assert.equal(TILE_PIXEL_RATIO,2);let partial=false,clear=false,solid=false;
+ assert.equal(TILE_PIXEL_RATIO,3);let partial=false,clear=false,solid=false;
  for(const file of tiles.files('tiles/xyz-v1')){
-  assert.equal(file.content.readUInt32BE(16),512);assert.equal(file.content.readUInt32BE(20),512);
+  assert.equal(file.content.readUInt32BE(16),OVERVIEW_RASTER_SIZE);assert.equal(file.content.readUInt32BE(20),OVERVIEW_RASTER_SIZE);
   const compressed:Buffer[]=[];for(let at=8;at<file.content.length;){const size=file.content.readUInt32BE(at);if(file.content.toString('ascii',at+4,at+8)==='IDAT')compressed.push(file.content.subarray(at+8,at+8+size));at+=size+12;}
   const rows=inflateSync(Buffer.concat(compressed));
-  for(let y=0;y<512;y++)for(let x=0;x<512;x++){const alpha=rows[y*(512*4+1)+1+x*4+3];if(alpha===0)clear=true;else if(alpha===255)solid=true;else partial=true;}
+  for(let y=0;y<OVERVIEW_RASTER_SIZE;y++)for(let x=0;x<OVERVIEW_RASTER_SIZE;x++){const alpha=rows[y*(OVERVIEW_RASTER_SIZE*4+1)+1+x*4+3];if(alpha===0)clear=true;else if(alpha===255)solid=true;else partial=true;}
  }
  assert.ok(clear&&solid&&partial);
 });
 
 test('disk-backed tile generation stays bounded and preserves every pixel across evictions and overlapping cities',async()=>{
- const {CityOverviewTiles}=await import('../scripts/city-overview-tiles');
+ const {CityOverviewTiles,OVERVIEW_RASTER_SIZE}=await import('../scripts/city-overview-tiles');
  const root=mkdtempSync(join(tmpdir(),'busline-tile-spill-test-'));
  try{
   const memory=new CityOverviewTiles(),disk=new CityOverviewTiles({cacheDirectory:root,maxResidentTiles:1});
@@ -130,10 +130,10 @@ test('disk-backed tile generation stays bounded and preserves every pixel across
    {lines:[{path:[[121.49,31.23],[121.51,31.25]] as [number,number][]}]},
    {lines:[{path:[[116.1235,39.9877],[116.16,40.002]] as [number,number][]}]},
   ];
-  for(const city of cities){memory.add(city);disk.add(city);assert.ok(disk.residentBytes<=512*512);}
+  for(const city of cities){memory.add(city);disk.add(city);assert.ok(disk.residentBytes<=OVERVIEW_RASTER_SIZE**2);}
   assert.ok(disk.keys.length>20);assert.deepEqual(disk.keys,memory.keys);
   const expected=new Map([...memory.files('tiles')].map(file=>[file.path,file.content]));
   for(let pass=0;pass<2;pass++)for(const file of disk.files('tiles'))assert.deepEqual(file.content,expected.get(file.path));
-  assert.ok(disk.residentBytes<=512*512);
+  assert.ok(disk.residentBytes<=OVERVIEW_RASTER_SIZE**2);
  }finally{rmSync(root,{recursive:true,force:true});}
 });

@@ -17,6 +17,7 @@ import { TransitTilePublisher } from './transit-tiles';
 import { TRANSIT_TILE_BASE, type TransitTileIndex } from '../src/utils/transitTiles';
 import { cityStorageFiles } from './city-storage-files';
 
+const CITY_OVERVIEW_RASTER_VERSION = 2;
 interface CityLayer { id: string; overview: CityOverview; thumbnail: Buffer; coverage: Buffer; }
 
 function loadLayers(layersDir: string): Map<string, CityLayer> {
@@ -29,7 +30,7 @@ function loadLayers(layersDir: string): Map<string, CityLayer> {
     if (!existsSync(metaPath) || !existsSync(covPath) || !existsSync(thumbPath)) continue;
     try {
       const meta = JSON.parse(readFileSync(metaPath, 'utf8'));
-      if (typeof meta.id !== 'string' || !meta.overview || typeof meta.overview.city !== 'string') continue;
+      if (meta.rasterVersion !== CITY_OVERVIEW_RASTER_VERSION || typeof meta.id !== 'string' || !meta.overview || typeof meta.overview.city !== 'string') continue;
       layers.set(entry.name, { id: meta.id, overview: meta.overview, thumbnail: readFileSync(thumbPath), coverage: readFileSync(covPath) });
     } catch { /* skip corrupt layer */ }
   }
@@ -42,7 +43,7 @@ async function saveLayers(layersDir: string, layers: Map<string, CityLayer>): Pr
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'coverage.gz'), layer.coverage);
     await writeFile(join(dir, 'thumb.png'), layer.thumbnail);
-    await writeFile(join(dir, 'meta.json'), JSON.stringify({ id: layer.id, overview: layer.overview }));
+    await writeFile(join(dir, 'meta.json'), JSON.stringify({ rasterVersion: CITY_OVERVIEW_RASTER_VERSION, id: layer.id, overview: layer.overview }));
   }
 }
 
