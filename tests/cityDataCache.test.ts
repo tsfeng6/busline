@@ -95,3 +95,17 @@ test('city-specific invalidation discards an in-flight version and preserves oth
   assert.equal(cache.peek('北京'), updated);
   assert.equal(cache.peek('天津'), other);
 });
+
+test('a newly displayed published city is reused for nearby queries and supersedes an in-flight prefetch', async () => {
+  let resolvePrefetch: (data: CityDataset) => void;
+  const cache = new CityDataCache(() => new Promise(resolve => { resolvePrefetch = resolve; }));
+  const pending = cache.get('北京');
+  const stale = { ...dataset('北京市', 1, 1), capturedAt: '2026-11-21T00:00:00.000Z' };
+  const displayed = { ...dataset('北京市', 2, 2), capturedAt: '2026-11-22T00:00:00.000Z' };
+  cache.remember(displayed);
+  resolvePrefetch!(stale);
+  await pending;
+  cache.remember(stale);
+  assert.equal(await cache.get('北京市'), displayed);
+  assert.equal(cache.count, 1);
+});

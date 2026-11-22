@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import {regularGameRoute,eligibleGameLines,clipRouteToRadius,distanceMeters,nearbyLines,gpsToMap,claimDailyLocation,savedCountySeats,provinceForCity,radiusRing} from '../src/utils/localTransit';
 import {createOfflineQuestion,shuffle} from '../src/utils/offlineGame';
+import {CityDataCache} from '../src/utils/cityDataCache';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
 const center:[number,number]=[116,39];
 const data=()=>normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',filtered:false,retrievalComplete:true,capturedAt:new Date().toISOString(),
@@ -117,7 +118,8 @@ test('published game catalog reads only same-origin static data and refreshes ca
  const source=fs.readFileSync('src/utils/publishedTransit.ts','utf8').replace('import.meta.env.BASE_URL',"'/'"),code=ts.transpile(source,{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS});
  let reads=0,downloads=0,revision='a'.repeat(40);const snapshot=data(),exports:any={};
  const city={city:snapshot.city,center,bounds:[115,38,117,40],thumbnail:'thumbnails/北京-geo-v3.png',lineDirections:3,capturedAt:snapshot.capturedAt,countySeats:savedCountySeats(snapshot)};
- const require=(name:string)=>name==='./cityOverview'?{validCityOverview}:name==='./localTransit'?{provinceForCity}:{loadSharedCity:async(city:string)=>{assert.equal(city,snapshot.city);downloads++;return snapshot;}};
+ const cityDataCache=new CityDataCache(async city=>{assert.equal(city,snapshot.city);downloads++;return snapshot;});
+ const require=(name:string)=>name==='./cityOverview'?{validCityOverview}:name==='./localTransit'?{provinceForCity}:{cityDataCache};
  const globalThis={fetch:async(url:string)=>{assert.ok(url.startsWith('/city-data/v1/overview.json'));assert.ok(!url.includes('amap'));reads++;return {ok:true,json:async()=>({cities:[city],tiles:{revision}})};}};
  Function('exports','require','globalThis','AbortSignal',code)(exports,require,globalThis,AbortSignal);
  const catalog=await exports.loadPublishedCities();assert.equal(catalog[0].province,'北京市');assert.equal(catalog[0].countySeats[0].source,'government-stop');

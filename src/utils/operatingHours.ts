@@ -1,4 +1,4 @@
-export const SCHEDULE_DATA_VERSION = 3;
+export const SCHEDULE_DATA_VERSION = 4;
 
 export function formatOperatingTime(value: unknown): string | null {
   if (value instanceof Date) {
@@ -16,6 +16,26 @@ export function formatOperatingTime(value: unknown): string | null {
   const hours = Number(match[1]), minutes = Number(match[2]);
   if (hours > 24 || minutes > 59 || (hours === 24 && minutes !== 0)) return null;
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+const clockRange = /(?:[01]?\d|2[0-4])[:：][0-5]\d\s*[-–—~～至]\s*(?:[01]?\d|2[0-4])[:：][0-5]\d/g;
+
+/** Older snapshots keep the provider remark even when first/last times were blank. */
+export function operatingHoursRows(description?: string): string[] {
+  return (description || '')
+    .replace(/(?<![、，,])(法定节假日|工作日|周末|休息日|节假日|平日)(?=\s*[:：]?\s*\d)/g, '\n$1')
+    .split(/[\n;；]/)
+    .map(row => row.trim().replace(/\s+/g, ' '))
+    .filter(row => [...row.matchAll(clockRange)].length > 0);
+}
+
+function dateLabel(date: any): string {
+  const types = Array.isArray(date.day_type) ? date.day_type : [];
+  const labels: Record<string, string> = {
+    workday: '工作日', weekday: '工作日', weekend: '周末', holiday: '节假日',
+    '工作日': '工作日', '周末': '周末', '节假日': '节假日',
+  };
+  return types.map((type: string) => labels[type] || '').filter(Boolean).join('、');
 }
 
 /** The SDK can return empty stime/etime while timedesc contains the full timetable. */
@@ -40,14 +60,23 @@ export function parseTimeDescription(value: unknown): { first?: string; last?: s
     const universal = (!date.day_type?.length || date.day_type.includes('all')) &&
       (!date.month_type?.length || date.month_type.includes('all')) &&
       !date.day_month?.length && !date.day_week?.length && !date.month?.length && !date.day_range && !date.month_range;
-    return { ranges, universal, remark: typeof group.remark === 'string' ? group.remark : '' };
+    return { ranges, universal, label: dateLabel(date), remark: typeof group.remark === 'string' ? group.remark : '' };
   }).filter((group: any) => group.ranges.length);
   const universal = schedules.filter((group: any) => group.universal);
   const selected = universal.length ? universal : schedules;
   const description = typeof data.allRemark === 'string' ? data.allRemark : schedules.map((group: any) => group.remark).filter(Boolean).join('；');
   // Do not silently merge different weekday/season schedules into a fictitious timetable.
   const signatures = new Set(selected.map((group: any) => JSON.stringify(group.ranges)));
-  if (!universal.length && signatures.size > 1) return { description: description || '分日期运营，请查看运营方时刻表' };
+  if (!universal.length && signatures.size > 1) {
+    const rows = selected.map((group: any) => {
+      if (operatingHoursRows(group.remark).length) return group.remark;
+      const times = group.ranges.filter(range => range.first && range.last)
+        .map(range => `${range.first}–${range.last}`).join('、');
+      return times && (group.label || group.remark) ? `${group.label || group.remark} ${times}` : '';
+    });
+    return { description: operatingHoursRows(description).length ? description
+      : rows.every(Boolean) ? rows.join('；') : description || '请查看运营方时刻表' };
+  }
   const ranges = selected[0]?.ranges || [];
   const starts = ranges.map((range: any) => range.first).filter(Boolean).sort();
   // Preserve cross-midnight final departures by comparing times relative to the first departure.

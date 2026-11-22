@@ -11,7 +11,10 @@ export interface GeoBox {
   maxLat: number;
 }
 
+const CITY_DISCOVERY_VERSION = 5;
+
 export interface CachedStopPoi {
+  searchScope?: string;
   id?: string;
   name: string;
   address: string;
@@ -234,7 +237,7 @@ export const isSearchScopeCached = (
 ): boolean => {
   if (!regions || regions.length === 0) return false;
 
-  if (regions.some((r) => r.isCityWide && r.isComplete && r.discoveryVersion === 4)) {
+  if (regions.some((r) => r.isCityWide && r.isComplete && r.discoveryVersion === CITY_DISCOVERY_VERSION)) {
     return true;
   }
 
@@ -244,7 +247,7 @@ export const isSearchScopeCached = (
 
   let remaining: GeoBox[] = [targetBounds];
   for (const region of regions) {
-    if ((region.isCityWide && region.discoveryVersion !== 4) || !region.isComplete) {
+    if ((region.isCityWide && region.discoveryVersion !== CITY_DISCOVERY_VERSION) || !region.isComplete) {
       continue;
     }
     remaining = remaining.flatMap((piece) => subtractGeoBox(piece, region.searchBounds));
@@ -321,6 +324,7 @@ export const saveCitySearchToCache = async (params: {
         const stop: CachedStopPoi = {
           id: poi.id || '',
           name: poi.name || '',
+          searchScope: poi.searchScope,
           address: poi.address || '',
           location: loc,
         };
@@ -360,7 +364,7 @@ export const saveCitySearchToCache = async (params: {
         city,
         isCityWide,
         isComplete,
-        discoveryVersion: 4,
+        discoveryVersion: CITY_DISCOVERY_VERSION,
         searchBounds,
         timestamp: Date.now(),
       };
