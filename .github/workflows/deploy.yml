@@ -25,21 +25,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Restore city tile layers cache
+      - name: Restore city publication cache
         uses: actions/cache@v4
         with:
-          path: .city-layers
-          key: city-layers-v1-${{ github.run_id }}
-          restore-keys: city-layers-v1-
+          path: |
+            .city-layers
+            .city-publication-cache
+          key: city-publication-v2-${{ github.run_id }}
+          restore-keys: city-publication-v2-
 
       - name: Publish shared city snapshots with the website
         run: node --import tsx scripts/publish-city-static.ts
 
-      - name: Save city tile layers cache
+      - name: Save city publication cache
         uses: actions/cache@v4
         with:
-          path: .city-layers
-          key: city-layers-v1-${{ github.run_id }}
+          path: |
+            .city-layers
+            .city-publication-cache
+          key: city-publication-v2-${{ github.run_id }}
 
       - name: Build frontend
         run: npm run build:vite

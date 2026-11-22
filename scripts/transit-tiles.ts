@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import type { CityDataset } from '../src/utils/cityDataset';
@@ -143,7 +143,44 @@ export class TransitTilePublisher {
     }
   }
 
-  *files() {
+  /**
+   * Reuse one city's already-expanded tile contribution.  Contributions are
+   * deliberately kept separate until this point: two neighbouring cities can
+   * therefore safely share a tile without either city overwriting the other.
+   */
+  addDirectory(directory: string, onlyGroups?: ReadonlySet<string>) {
+    if (!existsSync(directory)) throw Error(`Missing transit contribution: ${directory}`);
+    const visit = (dir: string, relative = '') => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const next = relative ? `${relative}/${entry.name}` : entry.name;
+        const source = join(dir, entry.name);
+        if (entry.isDirectory()) visit(source, next);
+        else if (entry.isFile() && next.endsWith('.ndjson')) {
+          const key = next.slice(0, -'.ndjson'.length);
+          const [z, x, y] = key.split('/').map(Number);
+          if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y)) throw Error(`Invalid transit contribution key: ${next}`);
+          const group = transitPackLocation({ z, x, y }).key;
+          if (onlyGroups && !onlyGroups.has(group)) continue;
+          const target = join(this.directory, `${key}.ndjson`);
+          mkdirSync(dirname(target), { recursive: true });
+          appendFileSync(target, readFileSync(source));
+          this.keys.add(key);
+        }
+      }
+    };
+    visit(directory);
+  }
+
+  groups(): Set<string> {
+    const groups = new Set<string>();
+    for (const key of this.keys) {
+      const [z, x, y] = key.split('/').map(Number);
+      groups.add(transitPackLocation({ z, x, y }).key);
+    }
+    return groups;
+  }
+
+  *files(onlyGroups?: ReadonlySet<string>) {
     const groups = new Map<string, { key: string; slot: number; slots: number }[]>();
     for (const key of this.keys) {
       const [z, x, y] = key.split('/').map(Number);
@@ -154,6 +191,7 @@ export class TransitTilePublisher {
     }
     if (groups.size > 50000) throw Error('Transit tile index exceeds publication budget');
     for (const group of [...groups.keys()].sort()) {
+      if (onlyGroups && !onlyGroups.has(group)) continue;
       const tiles = groups.get(group)!.sort((a, b) => a.slot - b.slot);
       const slots = tiles[0].slots, header = Buffer.alloc(slots * 8);
       let offset = header.length, mask = 0n;

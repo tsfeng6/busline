@@ -93,11 +93,11 @@ export class CityOverviewTiles{
   return gzipSync(Buffer.concat(parts));
  }
  /** Merge a serialized layer (cached gzip) into this instance. */
- mergeSerializedLayer(buffer:Buffer){
+ mergeSerializedLayer(buffer:Buffer, onlyKeys?:ReadonlySet<string>){
   const raw=gunzipSync(buffer);let offset=0;const count=raw.readUInt32BE(offset);offset+=4;
   for(let i=0;i<count;i++){const keyLen=raw.readUInt32BE(offset);offset+=4;
    const key=raw.subarray(offset,offset+keyLen).toString('utf8');offset+=keyLen;
    const source=raw.subarray(offset,offset+RASTER_SIZE*RASTER_SIZE);offset+=RASTER_SIZE*RASTER_SIZE;
-   this.mergeTile(key,source);}
+   if(!onlyKeys||onlyKeys.has(key))this.mergeTile(key,source);}
  }
 }

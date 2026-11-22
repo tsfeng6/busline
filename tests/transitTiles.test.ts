@@ -85,9 +85,11 @@ test('single publication merges Beijing, Baoding and Langfang from BVPK1, legacy
     }
     git('add', '.');
     git('commit', '-m', 'mixed fixtures');
-    const out = join(root, 'out');
-    const result = await mirrorCitySnapshots('HEAD', out, root);
+    const out = join(root, 'out'), layers = join(root, 'layers'), publicationCache = join(root, 'publication-cache');
+    const result = await mirrorCitySnapshots('HEAD', out, root, layers, publicationCache);
     assert.equal(result.cities, 3);
+    const repeated = await mirrorCitySnapshots('HEAD', out, root, layers, publicationCache);
+    assert.equal(repeated.reused, 3, 'unchanged cities reuse both contribution and overview caches');
     const index = JSON.parse(readFileSync(join(out, 'city-data/v1/transit.json'), 'utf8'));
     assert.ok(validTransitTileIndex(index));
     assert.equal(index.revision, git('rev-parse', 'HEAD'));
@@ -106,6 +108,23 @@ test('single publication merges Beijing, Baoding and Langfang from BVPK1, legacy
       assert.ok(decoded.stops.every(stop => stop.terminal && stop.lines.includes('1路')));
       assert.deepEqual(nearbyTileRoutes([{ tile, data: decoded }], [116.2, 39.5]).map(route => route.city).sort(), cities.map(name => name + '市').sort());
     }
+    // Change only Baoding.  Its border tile must be rebuilt from all three
+    // city contributions instead of replacing Beijing and Langfang records.
+    const baodingPath = join(root, 'city-data/v1/保定/latest.json');
+    const baoding = JSON.parse(readFileSync(baodingPath, 'utf8'));
+    baoding.lines[0].name = '2路';
+    writeFileSync(baodingPath, JSON.stringify(baoding));
+    git('add', '.'); git('commit', '-m', 'update baoding');
+    const incremental = await mirrorCitySnapshots('HEAD', out, root, layers, publicationCache);
+    assert.equal(incremental.reused, 2);
+    const nextIndex = JSON.parse(readFileSync(join(out, 'city-data/v1/transit.json'), 'utf8'));
+    const [tile] = tilesInBounds([stop[0], stop[1], stop[0], stop[1]], 13);
+    const group = transitPackLocation(tile);
+    const pack = readFileSync(join(out, 'city-data/v1', nextIndex.base, group.key + '-' + nextIndex.groups[group.key][1] + '.pack'));
+    const bytes = transitPackTile(pack, group.slot, group.slots);
+    const decoded = await decodeTransitTile(new Blob([new Uint8Array(bytes)]).stream().pipeThrough(new DecompressionStream('gzip')), new AbortController().signal);
+    assert.deepEqual(decoded.routes.map(route => route.city).sort(), cities.map(name => name + '市').sort());
+    assert.ok(decoded.routes.some(route => route.city === '保定市' && route.name === '2路'));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

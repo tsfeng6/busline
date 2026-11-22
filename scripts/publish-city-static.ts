@@ -1,7 +1,7 @@
 import {provinceForCity,savedCountySeats} from '../src/utils/localTransit';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { cp, mkdir, writeFile, mkdtemp, rename, rm, readFile } from 'node:fs/promises';
 import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -19,6 +19,31 @@ import { cityStorageFiles } from './city-storage-files';
 
 const CITY_OVERVIEW_RASTER_VERSION = 2;
 interface CityLayer { id: string; overview: CityOverview; thumbnail: Buffer; coverage: Buffer; }
+interface CityContribution { fingerprint: string; groups: string[]; overviewKeys: string[]; }
+interface PublicationCache { version: 1; cities: Record<string, CityContribution>; }
+const PUBLICATION_CACHE_VERSION = 1;
+
+async function readJson<T>(path: string): Promise<T | undefined> {
+  try { return JSON.parse(await readFile(path, 'utf8')) as T; } catch { return undefined; }
+}
+
+/** Copy a previous successful publication before replacing changed files. */
+async function restorePublication(cacheDir: string, output: string): Promise<boolean> {
+  const from = join(cacheDir, 'static', 'city-data', 'v1');
+  if (!existsSync(join(from, 'transit.json')) || !existsSync(join(from, 'overview.json'))) return false;
+  await cp(from, join(output, 'city-data', 'v1'), { recursive: true });
+  return true;
+}
+
+async function savePublication(cacheDir: string, output: string): Promise<void> {
+  const target = join(cacheDir, 'static', 'city-data', 'v1');
+  const staging = `${target}.next`;
+  await rm(staging, { recursive: true, force: true });
+  await mkdir(dirname(staging), { recursive: true });
+  await cp(join(output, 'city-data', 'v1'), staging, { recursive: true });
+  await rm(target, { recursive: true, force: true });
+  await rename(staging, target);
+}
 
 function loadLayers(layersDir: string): Map<string, CityLayer> {
   const layers = new Map<string, CityLayer>();
@@ -49,7 +74,7 @@ async function saveLayers(layersDir: string, layers: Map<string, CityLayer>): Pr
 
 const snapshotId = /^[\dTZ-]+-[a-f0-9]{12}$/;
 /** Publish latest AND indexed history, including all referenced immutable pieces. No live gateway is needed to read. */
-export async function mirrorCitySnapshots(ref: string, output = 'public', repo = process.cwd(), layersDir?: string) {
+export async function mirrorCitySnapshots(ref: string, output = 'public', repo = process.cwd(), layersDir?: string, publicationCacheDir?: string) {
   const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 35 * 1024 * 1024 });
   const commit = git(['rev-parse', '--verify', ref]).trim();
   const files = new Set(git(['ls-tree', '-r', '-z', '--name-only', commit, '--', 'city-data/v1']).split('\0').filter(Boolean));
@@ -65,6 +90,12 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   const transit=new TransitTilePublisher(join(tileCache,'transit'));
   const cachedLayers=layersDir?loadLayers(layersDir):new Map<string,CityLayer>();
   const newLayers=new Map<string,CityLayer>();
+  const cacheFile = publicationCacheDir ? join(publicationCacheDir, 'manifest.json') : '';
+  const previousCache = publicationCacheDir ? await readJson<PublicationCache>(cacheFile) : undefined;
+  const previousCities = previousCache?.version === PUBLICATION_CACHE_VERSION ? previousCache.cities : {};
+  const restored = publicationCacheDir ? await restorePublication(publicationCacheDir, output) : false;
+  const contributions = new Map<string, CityContribution>();
+  const changed = new Set<string>();
   try {
   const copied = new Set<string>();
   const copy = async (path: string, content: string | Uint8Array) => {
@@ -120,33 +151,49 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
     if (files.has(metaPath)) {
       const text = source(metaPath), meta = JSON.parse(text);
       if (typeof meta.snapshotId === 'string' && snapshotId.test(meta.snapshotId)) currentId = meta.snapshotId;
-      await copy(metaPath, text);
     }
-    const active = await snapshot(prefix, file, currentId); cities++;
-    const latest = await resolveCityStorage(active, async part => JSON.parse(source(`${prefix}/${part}`)),
-      descriptor => readNodeCityBvpkPart(descriptor, async part => sourceBytes(`${prefix}/${part}`)));
-    transit.add(latest);
+    // Git object ids are content hashes.  Coupling this to snapshotId catches an
+    // accidental mutable snapshot without loading an unchanged legacy dataset.
+    const fingerprint = `${currentId ?? 'legacy'}:${git(['rev-parse', `${commit}:${file}`]).trim()}`;
     const cached=cachedLayers.get(city);
-    if(cached&&currentId&&cached.id===currentId){
+    const previous = previousCities[city];
+    const contributionDir = publicationCacheDir ? join(publicationCacheDir, 'transit', city) : '';
+    const unchanged = restored && previous?.fingerprint === fingerprint && existsSync(contributionDir) && cached?.id === fingerprint;
+    cities++;
+    if (unchanged) {
       reused++;
-      tiles.mergeSerializedLayer(cached.coverage);
-      await copy(`city-data/v1/thumbnails/${city}-geo-v3.png`,cached.thumbnail);
       overviews.push(cached.overview);
+      contributions.set(city, previous);
     }else{
+      changed.add(city);
+      if (files.has(metaPath)) await copy(metaPath, source(metaPath));
+      const active = await snapshot(prefix, file, currentId);
+      const latest = await resolveCityStorage(active, async part => JSON.parse(source(`${prefix}/${part}`)),
+        descriptor => readNodeCityBvpkPart(descriptor, async part => sourceBytes(`${prefix}/${part}`)));
+      const cityTransit = new TransitTilePublisher(join(tileCache, 'contributions', city));
+      cityTransit.add(latest);
       const cityTiles=new CityOverviewTiles({cacheDirectory:join(tileCache,city),maxResidentTiles:128});
       cityTiles.add(latest);
-      tiles.mergeLayer(cityTiles);
+      const overviewKeys=cityTiles.keys;
+      const contribution:CityContribution={fingerprint,groups:[...cityTransit.groups()].sort(),overviewKeys};
+      contributions.set(city,contribution);
+      if(publicationCacheDir){
+        const destination=contributionDir, staging=`${destination}.next`;
+        await rm(staging,{recursive:true,force:true}); await mkdir(dirname(destination),{recursive:true});
+        await rename(join(tileCache, 'contributions', city),staging);
+        await rm(destination,{recursive:true,force:true}); await rename(staging,destination);
+      }
       const thumb=cityThumbnail(latest);
       if(thumb){
         const thumbPng=cityOverviewPNG(thumb.raster);
         await copy(`city-data/v1/thumbnails/${city}-geo-v3.png`,thumbPng);
         const overview:CityOverview={...thumb.meta,province:provinceForCity(latest.city),countySeats:savedCountySeats(latest),thumbnail:`thumbnails/${encodeURIComponent(city)}-geo-v3.png`};
         overviews.push(overview);
-        newLayers.set(city,{id:currentId||'',overview,thumbnail:thumbPng,coverage:cityTiles.serializeLayer()});
+        newLayers.set(city,{id:fingerprint,overview,thumbnail:thumbPng,coverage:cityTiles.serializeLayer()});
       }
     }
-    console.log(`Prepared ${city}: ${tiles.keys.length} tiles; resident raster ${(tiles.residentBytes/1024/1024).toFixed(1)} MiB${cached&&cached.id===currentId?' (reused)':''}`);
-    if (files.has(historyPath)) {
+    console.log(`Prepared ${city}${unchanged ? ' (reused)' : ''}`);
+    if (!unchanged && files.has(historyPath)) {
       const text = source(historyPath), records = JSON.parse(text);
       await copy(historyPath, text);
       if (Array.isArray(records)) for (const record of records) {
@@ -155,18 +202,57 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       }
     }
   }
+  // A disappeared city must not leave stale snapshots or a stale contribution
+  // in the next publication.  Its former shared tiles are rebuilt below.
+  for (const city of Object.keys(previousCities)) if (!contributions.has(city)) {
+    changed.add(city);
+    await rm(join(output, 'city-data/v1', city), { recursive: true, force: true });
+    await rm(join(output, 'city-data/v1/thumbnails', `${city}-geo-v3.png`), { force: true });
+  }
   const tileBase='tiles/xyz-v1';
+  const effectiveLayers=new Map(cachedLayers); for(const [city,layer] of newLayers)effectiveLayers.set(city,layer);
+  const affectedOverview=new Set<string>();
+  for(const city of changed){for(const key of previousCities[city]?.overviewKeys||[])affectedOverview.add(key);for(const key of contributions.get(city)?.overviewKeys||[])affectedOverview.add(key);}
+  if(!restored)for(const contribution of contributions.values())for(const key of contribution.overviewKeys)affectedOverview.add(key);
+  for(const layer of effectiveLayers.values())tiles.mergeSerializedLayer(layer.coverage,affectedOverview);
   for(const file of tiles.files(`city-data/v1/${tileBase}`))await copy(file.path,file.content);
-  const groups: TransitTileIndex['groups'] = {};
-  for (const file of transit.files()) {
+
+  const cachedTransit=restored?await readJson<TransitTileIndex>(join(output,'city-data/v1/transit.json')):undefined;
+  const allGroups=new Set<string>(); for(const contribution of contributions.values())for(const group of contribution.groups)allGroups.add(group);
+  const affectedGroups=new Set<string>();
+  for(const city of changed){for(const group of previousCities[city]?.groups||[])affectedGroups.add(group);for(const group of contributions.get(city)?.groups||[])affectedGroups.add(group);}
+  if(!cachedTransit?.groups)for(const group of allGroups)affectedGroups.add(group);
+  const groups: TransitTileIndex['groups'] = {...(cachedTransit?.groups||{})};
+  for(const group of affectedGroups){
+    const old=groups[group]; if(old)await rm(join(output,'city-data/v1',TRANSIT_TILE_BASE,`${group}-${old[1]}.pack`),{force:true});
+    delete groups[group];
+  }
+  if(publicationCacheDir) for(const [city,contribution] of contributions){
+    if(contribution.groups.some(group=>affectedGroups.has(group))) transit.addDirectory(join(publicationCacheDir, 'transit', city),affectedGroups);
+  }
+  // Fresh contributions live under the temporary work directory until the
+  // optional persistent cache is enabled.
+  if(!publicationCacheDir) for(const [city,contribution] of contributions){
+    if(contribution.groups.some(group=>affectedGroups.has(group))) transit.addDirectory(join(tileCache,'contributions',city),affectedGroups);
+  }
+  for (const file of transit.files(affectedGroups)) {
     await copy(file.path, file.content);
     groups[file.key] = file.descriptor;
   }
+  for(const group of Object.keys(groups))if(!allGroups.has(group))delete groups[group];
+  const overviewKeys=[...new Set([...contributions.values()].flatMap(contribution=>contribution.overviewKeys))].sort();
+  // Write indexes last.  A deployed reader therefore sees all immutable
+  // snapshots and packs before an index can point at them.
   await copy('city-data/v1/transit.json', JSON.stringify({ schemaVersion: 1, base: TRANSIT_TILE_BASE, revision: commit, groups }));
-  await copy('city-data/v1/overview.json',JSON.stringify({schemaVersion:3,cities:overviews,tiles:{base:tileBase,pixelRatio:TILE_PIXEL_RATIO,revision:commit,minZoom:TILE_MIN_ZOOM,maxZoom:TILE_MAX_ZOOM,keys:tiles.keys}}));
+  await copy('city-data/v1/overview.json',JSON.stringify({schemaVersion:3,cities:overviews,tiles:{base:tileBase,pixelRatio:TILE_PIXEL_RATIO,revision:commit,minZoom:TILE_MIN_ZOOM,maxZoom:TILE_MAX_ZOOM,keys:overviewKeys}}));
   await mkdir(join(output, 'city-data/v1'), { recursive: true });
   await writeFile(join(output, 'city-data/v1/publication.json'), JSON.stringify({ commit, cities, historySnapshots, bytes, publishedAt: new Date().toISOString() }));
   if(layersDir)await saveLayers(layersDir,newLayers);
+  if(publicationCacheDir){
+    await savePublication(publicationCacheDir,output);
+    await mkdir(publicationCacheDir,{recursive:true});
+    await writeFile(cacheFile,JSON.stringify({version:PUBLICATION_CACHE_VERSION,cities:Object.fromEntries(contributions)} satisfies PublicationCache));
+  }
   return { cities, historySnapshots, bytes, commit, reused };
   } finally {await rm(tileCache,{recursive:true,force:true});}
 }
@@ -228,7 +314,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(1);
   }
   try {
-    console.log(await mirrorCitySnapshots('FETCH_HEAD', 'public', process.cwd(), process.env.CITY_LAYERS_DIR || '.city-layers'));
+    console.log(await mirrorCitySnapshots('FETCH_HEAD', 'public', process.cwd(), process.env.CITY_LAYERS_DIR || '.city-layers', process.env.CITY_PUBLICATION_CACHE_DIR || '.city-publication-cache'));
   } catch (error: any) {
     console.error('Unable to publish shared city snapshots:', redact(error.message, token));
     process.exit(1);

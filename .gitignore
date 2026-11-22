@@ -13,4 +13,5 @@ city-update-report.json
 
 public/city-data/
 .city-layers/
+.city-publication-cache/
 .geometry-experiment/
