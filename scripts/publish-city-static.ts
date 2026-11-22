@@ -18,6 +18,10 @@ import { TRANSIT_TILE_BASE, type TransitTileIndex } from '../src/utils/transitTi
 import { cityStorageFiles } from './city-storage-files';
 
 const CITY_OVERVIEW_RASTER_VERSION = 2;
+// GitHub Pages has a 1 GiB site limit.  The source branch intentionally keeps
+// readable JSON, but the static mirror must split and gzip sizeable legacy
+// snapshots or latest/history copies exhaust that limit before deployment.
+const STATIC_CITY_PART_BYTES = 512 * 1024;
 interface CityLayer { id: string; overview: CityOverview; thumbnail: Buffer; coverage: Buffer; }
 interface CityContribution { fingerprint: string; groups: string[]; overviewKeys: string[]; }
 interface PublicationCache { version: 1; cities: Record<string, CityContribution>; }
@@ -121,11 +125,22 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       return parsed;
     }
     if (parsed?.storage !== undefined && !isCityParts(parsed)) throw Error(`Unknown city storage: ${path}`);
-    // Repack legacy large single files only in the static build; the repository/history remains untouched.
-    if (!isCityParts(parsed) && parsed.schemaVersion === 1 && Buffer.byteLength(content) > CITY_FILE_BYTES) {
+    // Repack sizeable legacy single files only in the static build; the
+    // repository/history remains untouched.  Identical latest/history content
+    // shares the same immutable gzip parts through `copied`.
+    if (!isCityParts(parsed) && parsed.schemaVersion === 1 && Buffer.byteLength(content) > STATIC_CITY_PART_BYTES) {
       const name = `${new Date(parsed.capturedAt).toISOString().replace(/[:.]/g, '-')}-${createHash('sha256').update(content).digest('hex').slice(0, 12)}`;
       if (!snapshotId.test(name)) throw Error('Invalid snapshot identity');
-      for (const file of cityStorageFiles(parsed, prefix, name, false)) {
+      let staticFiles;
+      try {
+        staticFiles = [...cityStorageFiles(parsed, prefix, name, false, STATIC_CITY_PART_BYTES)];
+      } catch (error: any) {
+        // An exceptionally long single route cannot fit the smaller static
+        // chunks.  Retain the established 8 MiB compatibility limit for it.
+        if (!/单条线路超过分片上限/.test(error?.message || '')) throw error;
+        staticFiles = [...cityStorageFiles(parsed, prefix, name, false, CITY_FILE_BYTES)];
+      }
+      for (const file of staticFiles) {
         await copy(file.path.startsWith(`${prefix}/history/`) ? path : file.path, file.content);
       }
     } else {
@@ -158,7 +173,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
     const cached=cachedLayers.get(city);
     const previous = previousCities[city];
     const contributionDir = publicationCacheDir ? join(publicationCacheDir, 'transit', city) : '';
-    const unchanged = restored && previous?.fingerprint === fingerprint && existsSync(contributionDir) && cached?.id === fingerprint;
+    const unchanged = Boolean(publicationCacheDir && restored && previous?.fingerprint === fingerprint && existsSync(contributionDir) && cached?.id === fingerprint);
     cities++;
     if (unchanged) {
       reused++;
@@ -173,7 +188,10 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       const cityTransit = new TransitTilePublisher(join(tileCache, 'contributions', city));
       cityTransit.add(latest);
       const cityTiles=new CityOverviewTiles({cacheDirectory:join(tileCache,city),maxResidentTiles:128});
-      cityTiles.add(latest);
+      const reusedLayer=!publicationCacheDir&&Boolean(cached&&currentId&&cached.id===currentId);
+      if(reusedLayer){
+        reused++; cityTiles.mergeSerializedLayer(cached!.coverage); overviews.push(cached!.overview);
+      }else cityTiles.add(latest);
       const overviewKeys=cityTiles.keys;
       const contribution:CityContribution={fingerprint,groups:[...cityTransit.groups()].sort(),overviewKeys};
       contributions.set(city,contribution);
@@ -183,13 +201,13 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
         await rename(join(tileCache, 'contributions', city),staging);
         await rm(destination,{recursive:true,force:true}); await rename(staging,destination);
       }
-      const thumb=cityThumbnail(latest);
+      const thumb=reusedLayer?null:cityThumbnail(latest);
       if(thumb){
         const thumbPng=cityOverviewPNG(thumb.raster);
         await copy(`city-data/v1/thumbnails/${city}-geo-v3.png`,thumbPng);
         const overview:CityOverview={...thumb.meta,province:provinceForCity(latest.city),countySeats:savedCountySeats(latest),thumbnail:`thumbnails/${encodeURIComponent(city)}-geo-v3.png`};
         overviews.push(overview);
-        newLayers.set(city,{id:fingerprint,overview,thumbnail:thumbPng,coverage:cityTiles.serializeLayer()});
+        newLayers.set(city,{id:publicationCacheDir?fingerprint:(currentId||''),overview,thumbnail:thumbPng,coverage:cityTiles.serializeLayer()});
       }
     }
     console.log(`Prepared ${city}${unchanged ? ' (reused)' : ''}`);
