@@ -7,6 +7,7 @@ import { TermsDocument } from './components/TermsDocument';
 import { acceptTerms, hasAcceptedTerms, BEIJING_TOUR_CENTER } from './utils/onboardingConsent';
 import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
+import { resolveAmapCredentials } from './utils/amapCredentials';
 import {MapActivityIndicator} from './components/MapActivityIndicator';
 import { CityOverviewLayer } from './components/CityOverviewLayer';
 import { ViewportTransitLayer, type ViewportTransitSelection, type ViewportRoute } from './components/ViewportTransitLayer';
@@ -133,7 +134,9 @@ const deleteApprovedLineInFirebase = async (id: string, adminPassword?: string) 
 const getInitialAmapConfig = () => {
   const defaultKey = import.meta.env.VITE_AMAP_KEY || '20f5c6b65349e5d4cb5f58c7e0c4a4ba'; 
   const defaultSecurityCode = import.meta.env.VITE_AMAP_SECURITY_CODE || '312d8a4369a48971f1f9e2b19280d075';
-  return { key: defaultKey, securityCode: defaultSecurityCode, isCustom: false };
+  let storage: Storage | undefined;
+  try { storage = typeof window === 'undefined' ? undefined : window.localStorage; } catch { storage = undefined; }
+  return resolveAmapCredentials(storage, defaultKey, defaultSecurityCode);
 };
 
 const initialAmapConfig = getInitialAmapConfig();
@@ -8826,12 +8829,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       <div ref={customApiSectionRef} className="flex flex-col gap-3 p-1">
                         <div className="flex items-center justify-between">
                           <div className="flex flex-col">
-                            <span className="text-xs font-bold text-slate-700">全市检索使用自有高德 API</span>
-                            <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">仅用于全市检索；普通搜索使用公共 API</span>
+                            <span className="text-xs font-bold text-slate-700">地图与检索使用自有高德 API</span>
+                            <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">开启后地图、普通检索与全市检索都会使用该配置；关闭后使用公共 API</span>
                           </div>
                           <button 
                             type="button"
-                            onClick={() => setUseCustomApiKey(prev => !prev)}
+                            onClick={() => {
+                              const next = !useCustomApiKey;
+                              setUseCustomApiKey(next);
+                              localStorage.setItem('app_use_custom_api_key', String(next));
+                              if (!next) window.location.reload();
+                            }}
                             className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 border-2 ${useCustomApiKey ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
                           >
                             <motion.div 
@@ -8869,7 +8877,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                               />
                             </div>
                             <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
-                              <span>填写完整后，下次全市检索时生效。</span>
+                              <span>保存后页面会刷新，地图、检索与全市检索都会使用该配置。</span>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -8881,6 +8889,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                                   localStorage.setItem('app_custom_api_key', customApiKey.trim());
                                   localStorage.setItem('app_custom_api_security_code', customApiSecurityCode.trim());
                                   setShowSettings(false);
+                                  window.location.reload();
                                 }}
                                 className="px-2.5 py-1 bg-m3-primary/10 hover:bg-m3-primary/20 text-m3-primary font-bold rounded-lg transition-all cursor-pointer"
                               >
