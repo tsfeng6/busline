@@ -51,6 +51,16 @@ export class CityDataCache {
     return task;
   }
 
+  /** Share a freshly read published snapshot with the viewport and nearby queries. */
+  remember(data: CityDataset): void {
+    const key = safeKey(data.city);
+    const previous = this.entries.get(key);
+    if (previous && previous.data.capturedAt > data.capturedAt) return;
+    if (previous) this.totalBytes -= previous.bytes;
+    this.inflight.delete(key);
+    this.insert(key, data, previous?.pinned);
+  }
+
   /** Synchronous cache read: returns the cached dataset or null, without triggering a load. */
   peek(city: string, opts: { pin?: boolean } = {}): CityDataset | null {
     const entry = this.entries.get(safeKey(city));

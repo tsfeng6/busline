@@ -26,7 +26,7 @@ export async function getCitySearchServices(key:string,securityCode:string):Prom
   constructor(options:any={}){this.options={...options};}
   setPageIndex(pageIndex:number){this.options.pageIndex=pageIndex;}
   search(query:any,callback:any){invoke(service,{...this.options},'search',[query],callback);}
-  searchInBounds(query:any,bounds:any,callback:any){const sw=bounds.getSouthWest(),ne=bounds.getNorthEast();invoke(service,{...this.options},'searchInBounds',[query,[[sw.lng,sw.lat],[ne.lng,ne.lat]]],callback);}
+  searchInBounds(query:any,bounds:any,callback:any){const points=Array.isArray(bounds)?bounds:[[bounds.getSouthWest().lng,bounds.getSouthWest().lat],[bounds.getNorthEast().lng,bounds.getNorthEast().lat]];invoke(service,{...this.options},'searchInBounds',[query,points],callback);}
  };
  const receive=(event:MessageEvent<Reply>)=>{
   if(event.origin!==window.location.origin||event.source!==iframe.contentWindow||event.data?.channel!==channel)return;

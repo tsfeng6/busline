@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import { previewableCityDataset, normalizeCityDataset } from '../src/utils/cityDataset';
 import { resolveSearchCity } from '../src/utils/searchCity';
-import { matchesReturnedLine } from '../src/utils/lineIdentity';
+import { lineBaseIdentity, matchesReturnedLine } from '../src/utils/lineIdentity';
 
 test('fresh shared data draws directly and a remote cache miss starts browser search without an Actions collection', async () => {
   const snapshot = normalizeCityDataset({ schemaVersion: 1, city: '北京市', scope: 'city', coverage: 'observed',
@@ -50,7 +50,8 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
     getCitySearchServices:async(key:string,code:string)=>{assert.equal(key,'a'.repeat(32));assert.equal(code,'b'.repeat(32));return scope.window.AMap;},
     citySearchApiStatus,useCustomApiKey:false,customApiKey:'a'.repeat(32),customApiSecurityCode:'b'.repeat(32),initialAmapConfig:{isCustom:true,key:'a'.repeat(32),securityCode:'b'.repeat(32)},focusCustomApiRef:ref(false),
     enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>snapshot,
-    citySnapshotFresh:()=>true,citySnapshotPreviewable:previewableCityDataset,resolveSearchCity,normalizeCityDataset,matchesReturnedLine,
+    citySnapshotFresh:()=>true,citySnapshotPreviewable:previewableCityDataset,resolveSearchCity,normalizeCityDataset,matchesReturnedLine,lineBaseIdentity,
+    cityDataCache:{remember(){}},discoverCityStops:async()=>{apiRequests++;throw Error('Unexpected POI request');},
     updateTerminalNamesCache(){},syncStopMarkersToMap(){},getStopColor:()=> '#52796F',isLineNameBlockedRef:()=>false,
     aggregateAndVisualize:async(names:string[])=>{rendered=names;},
     fetchAndDrawLines:()=>{throw Error('Shared city must bypass live line discovery');},
@@ -119,10 +120,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
   scope.initialAmapConfig={isCustom:true,key:scope.customApiKey,securityCode:scope.customApiSecurityCode};
   scope.manualResultCityRef.current='';
   map.getZoom=()=>12;
-  scope.window.AMap.PlaceSearch=class {
-    setPageIndex(){}
-    search(_:any,callback:any){callback('complete',{poiList:{pois:snapshot.stops,count:1}});}
-  };
+  scope.discoverCityStops=async()=>({pois:snapshot.stops,complete:true});
   scope.setPendingCityUpload=(data:any)=>{scope.pendingCityUploadRef.current=data;scope.pendingCityUpload=data;};
   scope.fetchAndDrawLines=async(_names:any,_map:any,_amap:any,_city:any,_cancel:any,_force:any,onCollected:any)=>{
     for(const line of snapshot.lines)scope.fetchedLinesCache.current.set(line.name,{...line,city:'北京'});

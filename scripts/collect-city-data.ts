@@ -1,7 +1,7 @@
 import { discoverCityStops } from './discover-city-stops';
 import { normalizeCityDataset, cityDataKey, type CityDataset } from '../src/utils/cityDataset';
 import { getOperatingHours } from '../src/utils/operatingHours';
-import { lineBaseIdentity } from '../src/utils/lineIdentity';
+import { lineBaseIdentity, matchesLineQuery } from '../src/utils/lineIdentity';
 import type { BusLine } from '../src/types';
 
 type Options = {
@@ -64,7 +64,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
     return result;
   };
   await options.onProgress?.('正在确认城市。');
-  const districts = await request('/v3/config/district', { keywords: requestedCity, subdistrict:'0', extensions:'all' }, 'district');
+  const districts = await request('/v3/config/district', { keywords: requestedCity, subdistrict:'1', extensions:'all' }, 'district');
   const district = array(districts.districts).find(item => text(item.name) && cityDataKey(item.name) === cityDataKey(requestedCity));
   const municipalities = new Set(['北京市','上海市','天津市','重庆市']);
   if (!district || !['city','district'].includes(district.level) && !municipalities.has(district.name)) throw new Error('无法确认该城市或地区，请检查名称。');
@@ -72,6 +72,7 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   const scope = text(district.adcode) || city;
   const stops = new Map<string, CityDataset['stops'][number]>();
   const queries = new Map<string,string>();
+  const queryScopes = new Map<string,Set<string>>();
   let discoveryComplete=false;
   await options.onProgress?.(`正在分区发现${city}公交站点（候选名称不是线路总数）。`);
   try {
@@ -85,7 +86,14 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
       const address=text(poi.address);
       stops.set(`${poi.name}:${location.lng},${location.lat}`,{id:text(poi.id),name:poi.name,address,location});
       for(const name of address.split(/[;；]/).map(part=>part.trim()).filter(Boolean)){
-        if(lineBaseIdentity(name))queries.set(lineBaseIdentity(name),name);
+        const identity = lineBaseIdentity(name);
+        if (!identity) continue;
+        queries.set(identity,name);
+        const adcode = text(poi.searchScope);
+        if (adcode && adcode !== scope) {
+          if (!queryScopes.has(identity)) queryScopes.set(identity,new Set());
+          queryScopes.get(identity)!.add(adcode);
+        }
       }
     }
   }catch(error:any){throw Object.assign(new Error(`站点发现失败：${error.message}`),{collectionReport:{city,counts,interruptions:[{query:'站点发现',message:error.message}]}});}
@@ -109,40 +117,55 @@ export async function collectCityDataset(requestedCity: string, key: string, opt
   const queue = [...queries.values()];
   await options.onProgress?.(`发现 ${stops.size} 个站点、${queue.length} 个候选名称；已复用 ${cachedDirections} 个线路方向。`);
   lineLoop: for (let index=0;index<queue.length;index++) {
-    const query = queue[index].replace(/[（(].*$/,'').trim();
+    const query = queue[index].normalize('NFKC').replace(/[(#].*$/,'').trim();
     if (!query) { continue; }
     if(cachedQueries.has(lineBaseIdentity(query)))continue;
-    let matched = false, received = 0, expected = Infinity;
-    const seenPages = new Set<string>();
-    for (let page=1;page<=10;page++) {
-      if (counts.line>=maxLineRequests) { retrievalComplete=false;failedQueries.add(query);break; }
-      let result:any;
-      try { result=await request('/v3/bus/linename',{city:scope,keywords:query,offset:'100',page:String(page),extensions:'all'},'line'); }
-      catch (error:any) {
-        retrievalComplete=false;failedQueries.add(query);interruptions.push({query,message:error.message});
-        if(error.fatal){queue.slice(index+1).forEach(name=>failedQueries.add(name));break lineLoop;}
-        break;
+    let matched = false, exactMatch = false;
+    const scopes = [scope, ...queryScopes.get(lineBaseIdentity(query)) || []];
+    for (const searchScope of scopes) {
+      if (exactMatch && searchScope !== scope) break;
+      let received = 0, expected = Infinity;
+      const seenPages = new Set<string>();
+      for (let page=1;page<=10;page++) {
+        if (counts.line>=maxLineRequests) { retrievalComplete=false;failedQueries.add(query);break; }
+        let result:any;
+        try { result=await request('/v3/bus/linename',{city:searchScope,keywords:query,offset:'100',page:String(page),extensions:'all'},'line'); }
+        catch (error:any) {
+          retrievalComplete=false;failedQueries.add(query);interruptions.push({query,message:error.message});
+          if(error.fatal){queue.slice(index+1).forEach(name=>failedQueries.add(name));break lineLoop;}
+          break;
+        }
+        const buslines=array(result.buslines);
+        if (!buslines.length) { if (received && Number.isFinite(expected) && received<expected) { retrievalComplete=false;failedQueries.add(query); } break; }
+        const pageKey=buslines.map(line=>line.id||line.name).join('|');
+        if(seenPages.has(pageKey)){retrievalComplete=false;failedQueries.add(query);break;}
+        seenPages.add(pageKey);
+        received+=buslines.length;
+        for (const info of buslines) {
+          const exact = matchesLineQuery(query,text(info.name));
+          if (searchScope !== scope && !exact) continue;
+          const line=parseRestLine(info,city,query);
+          if (!line) { retrievalComplete=false;continue; }
+          const identity=line.id || line.name, previous=lines.get(identity);
+          line.sourceQueries=[...new Set([...(previous?.sourceQueries||[]),query])];
+          lines.set(identity,line);matched=true;exactMatch ||= exact;
+        }
+        const total=Number(result.count);
+        if(Number.isFinite(total)&&total>0)expected=total;
+        if (Number.isFinite(total) && received>=total || !Number.isFinite(total) && buslines.length<100) break;
+        if (page===10) retrievalComplete=false;
       }
-      const buslines=array(result.buslines);
-      if (!buslines.length) { if (matched && Number.isFinite(expected) && received<expected) { retrievalComplete=false;failedQueries.add(query); } break; }
-      const pageKey=buslines.map(line=>line.id||line.name).join('|');
-      if(seenPages.has(pageKey)){retrievalComplete=false;failedQueries.add(query);break;}
-      seenPages.add(pageKey);
-      received+=buslines.length;
-      for (const info of buslines) {
-        const line=parseRestLine(info,city,query);
-        if (!line) { retrievalComplete=false;continue; }
-        const identity=line.id || line.name, previous=lines.get(identity);
-        line.sourceQueries=[...new Set([...(previous?.sourceQueries||[]),query])];
-        lines.set(identity,line);matched=true;
-      }
-      const total=Number(result.count);
-      if(Number.isFinite(total)&&total>0)expected=total;
-      if (Number.isFinite(total) && received>=total || !Number.isFinite(total) && buslines.length<100) break;
-      if (page===10) retrievalComplete=false;
     }
-    if (counts.line>=maxLineRequests) { retrievalComplete=false;queue.slice(index+1).forEach(name=>failedQueries.add(name));break; }
+    if (!matched || !exactMatch) { retrievalComplete=false;failedQueries.add(query); }
+    if (counts.line>=maxLineRequests && index + 1 < queue.length) { retrievalComplete=false;queue.slice(index+1).forEach(name=>failedQueries.add(name));break; }
     if ((index+1)%30===0) await options.onProgress?.(`候选名称处理 ${index+1}/${queue.length}；已取得 ${lines.size} 个线路方向。`);
+  }
+  if (!retrievalComplete && options.seed && !options.seed.filtered && cityDataKey(options.seed.city) === cityDataKey(city)) {
+    for (const line of options.seed.lines) if (!lines.has(line.id || line.name)) lines.set(line.id || line.name, line);
+    for (const stop of options.seed.stops) {
+      const id = `${stop.name}:${stop.location.lng},${stop.location.lat}`;
+      if (!stops.has(id)) stops.set(id,stop);
+    }
   }
   if (!lines.size) throw Object.assign(new Error(interruptions[0]?.message || '数据源未返回可用线路路径，保留原有数据。'),{collectionReport:{city,counts,failedQueries:[...failedQueries],interruptions,candidateNames:queue.length,discoveryComplete}});
   // Line responses already include platforms; reuse them instead of another POI search.
