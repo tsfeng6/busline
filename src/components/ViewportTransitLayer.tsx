@@ -244,6 +244,9 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         ends.forEach(event => map.off(event, end));
         layer.render = () => {};
         map.remove(layer);
+        canvas.width = 0;
+        canvas.height = 0;
+        canvas.remove();
         clearTimeout(settled);
         clearTimeout(idle);
         clearTimeout(retry);
