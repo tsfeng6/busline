@@ -1,51 +1,46 @@
-import { readdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { cityDataKey, cityDatasetExpiresAt, normalizeCityDataset, type CitySnapshotMeta } from '../src/utils/cityDataset';
-import { isCityParts, validateCityPart, resolveCityParts } from '../src/utils/cityStorage';
+import { cityDataKey, normalizeCityDataset, type CitySnapshotMeta } from '../src/utils/cityDataset';
+import { resolveCityStorage } from '../src/utils/cityBvpk';
+import { readNodeCityBvpkPart } from './city-bvpk-files';
 
-/** Reconcile an existing data checkout. Git history remains available for recovery. */
+/** Read-only audit of active snapshots and the indexed archive. */
 export async function retainCityHistory(root: string) {
-  const base=join(root,'city-data/v1');let cities=0,removed=0;
-  for(const entry of await readdir(base,{withFileTypes:true})) {
-    if(!entry.isDirectory())continue;
-    const city=entry.name;
-    const dir=join(base,city);
-    if(cityDataKey(city)!==city)throw Error('Invalid city path');
-    const read=async(path:string)=>JSON.parse(await readFile(join(dir,path),'utf8'));
-    const history:CitySnapshotMeta[]=await read('history.json');
-    if(!Array.isArray(history)||!history.length)throw Error(`Missing history: ${city}`);
-    const kept=history.slice().sort((a,b)=>Date.parse(b.capturedAt)-Date.parse(a.capturedAt)).slice(0,5);
-    const referenced=new Set<string>();let latest:any;
-    for(const record of kept) {
-      if(!/^[\dTZ-]+-[a-f0-9]{12}$/.test(record.id))throw Error('Invalid snapshot identity');
-      const manifest=await read(`history/${record.id}.json`);
-      // Validate all retained data before modifying this city's files.
-      const data=normalizeCityDataset(await resolveCityParts(manifest,read));
-      if(cityDataKey(data.city)!==city)throw Error('City mismatch');
-      if(isCityParts(manifest))for(const part of manifest.parts)referenced.add(validateCityPart(part));
-      if(!latest)latest={manifest,data,record};
-    }
-    const {data,manifest,record}=latest;
-    await writeFile(join(dir,'latest.json'),JSON.stringify(manifest));
-    await writeFile(join(dir,'meta.json'),JSON.stringify({schemaVersion:1,city:data.city,capturedAt:data.capturedAt,
-      expiresAt:cityDatasetExpiresAt(data),retrievalComplete:data.retrievalComplete,filtered:data.filtered,
-      lineDirections:data.lines.length,stops:data.stops.length,snapshotId:record.id}));
-    await writeFile(join(dir,'history.json'),JSON.stringify(kept.map(item=>({...item,promoted:item.id===record.id}))));
-    for(const name of await readdir(join(dir,'history'))) {
-      if(!kept.some(item=>name===`${item.id}.json`)){await rm(join(dir,'history',name));removed++;}
-    }
-    let partDirs:string[]=[];
-    try{partDirs=await readdir(join(dir,'parts'));}catch(error:any){if(error.code!=='ENOENT')throw error;}
-    for(const id of partDirs) {
-      for(const name of await readdir(join(dir,'parts',id))) {
-        if(!referenced.has(`parts/${id}/${name}`)){await rm(join(dir,'parts',id,name));removed++;}
-      }
-      if(!(await readdir(join(dir,'parts',id))).length)await rm(join(dir,'parts',id),{recursive:true});
+  const base = join(root, 'city-data/v1');
+  let cities = 0, snapshots = 0;
+  for (const entry of await readdir(base, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const city = entry.name;
+    const dir = join(base, city);
+    const read = async (path: string) => JSON.parse(await readFile(join(dir, path), 'utf8'));
+    const inspect = async (path: string) => {
+      const data = normalizeCityDataset(await resolveCityStorage(await read(path), read, descriptor =>
+        readNodeCityBvpkPart(descriptor, part => readFile(join(dir, part)))));
+      if (cityDataKey(data.city) !== city) throw Error(`City mismatch: ${city}/${path}`);
+    };
+    try { await inspect('latest.json'); }
+    catch (error: any) {
+      // The root may contain folders other than cities and cities with only archived data.
+      if (error.code !== 'ENOENT' || error.path !== join(dir, 'latest.json')) throw error;
+      continue;
     }
     cities++;
+    let history: CitySnapshotMeta[];
+    try { history = await read('history.json'); }
+    catch (error: any) { if (error.code === 'ENOENT') continue; throw error; }
+    if (!Array.isArray(history)) throw Error(`Invalid history index: ${city}`);
+    for (const record of history) {
+      if (!/^[\dTZ-]+-[a-f0-9]{12}$/.test(record.id)) throw Error('Invalid snapshot identity');
+      await inspect(`history/${record.id}.json`);
+      snapshots++;
+    }
   }
-  return {cities,removed};
+  return { cities, snapshots };
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)
-  retainCityHistory(process.argv[2]||process.cwd()).then(console.log).catch(error=>{console.error(error.message);process.exitCode=1;});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  retainCityHistory(process.argv[2] || process.cwd()).then(console.log).catch(error => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

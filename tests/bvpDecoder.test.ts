@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { brotliDecompressSync } from 'node:zlib';
+import { openNodeBvpk, packCitySnapshot, readNodeCityBvpkPart } from '../scripts/city-bvpk-files';
+import { resolveCityStorage } from '../src/utils/cityBvpk';
 import { indexCityGeometry, decodeRoute, parseBvpkHeader } from '../src/utils/bvpGeometryDecoder';
 
-const dir = resolve('.geometry-experiment/jinzhou/outputs');
+const fixtures = process.env.BUSLINE_GEOMETRY_FIXTURES || '.geometry-experiment';
+const dir = resolve(fixtures, 'jinzhou/outputs');
 const have = existsSync(resolve(dir, 'city.paths.bvp')) && existsSync(resolve(dir, 'city.restored.json'));
 
 test('BVP1 rejects invalid magic and out-of-range route', () => {
@@ -44,7 +48,7 @@ test('real Jinzhou BVPK1 header is valid and length-consistent', { skip: !exists
   assert.equal(header.totalLength, 144553);
 });
 
-const bjDir = resolve('.geometry-experiment/beijing/package/outputs');
+const bjDir = resolve(fixtures, 'beijing/package/outputs');
 const haveBj = existsSync(resolve(bjDir, 'city.paths.bvp')) && existsSync(resolve(bjDir, 'city.restored.json'));
 test('real Beijing BVP1 decodes bit-exactly (903 lines / 502,911 points)', { skip: !haveBj && 'beijing fixtures not present' }, () => {
   const bvp = new Uint8Array(readFileSync(resolve(bjDir, 'city.paths.bvp')));
@@ -69,3 +73,29 @@ test('real Beijing BVPK1 header is valid', { skip: !existsSync(resolve(bjDir, 'c
   assert.equal(header.geomLength, 761927);
   assert.equal(header.totalLength, 1292698);
 });
+
+for (const [name, folder, lines, points] of [
+  ['Jinzhou', dir, 186, 58412],
+  ['Beijing', bjDir, 903, 502911],
+] as const) {
+  const original = resolve(folder, 'baseline.original.json.br');
+  const experiment = resolve(folder, 'city.bvpk');
+  test(`real ${name} original JSON equals the experimental and published BVPK1 decodes`, {
+    skip: !existsSync(original) || !existsSync(experiment),
+  }, async () => {
+    const source = brotliDecompressSync(readFileSync(original));
+    const data = JSON.parse(source.toString('utf8'));
+    assert.equal(data.lines.length, lines);
+    assert.equal(data.lines.reduce((total: number, line: any) => total + line.path.length, 0), points);
+    const pack = await openNodeBvpk(readFileSync(experiment));
+    assert.deepEqual({ ...pack.metadata, lines: pack.metadata.lines.map((_, index) => pack.route(index)) }, data);
+    const snapshotId = data.capturedAt.replace(/[:.]/g, '-') + '-000000000000';
+    const { manifest, files } = await packCitySnapshot(data, 'city', snapshotId);
+    const assets = new Map(files.map(file => [file.path, file.content]));
+    const decoded = await resolveCityStorage(manifest, async () => { throw Error('Unexpected legacy read'); }, descriptor =>
+      readNodeCityBvpkPart(descriptor, async path => assets.get('city/' + path)!));
+    assert.deepEqual(decoded, data);
+    const bytes = Buffer.byteLength(JSON.stringify(manifest)) + files.reduce((total, file) => total + file.content.length, 0);
+    console.log(`${name}: ${lines} routes / ${points} points, ${source.length} original bytes, ${bytes} published bytes in ${files.length} BVPK1 parts`);
+  });
+}

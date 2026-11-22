@@ -85,8 +85,8 @@ export function normalizeCityDataset(input: any): CityDataset {
   if (!lines.size || !stops.size) throw new Error('不能保存空城市快照。');
   const result: CityDataset = { schemaVersion: 1, city: input.city.trim(), scope: 'city', capturedAt: new Date(input.capturedAt).toISOString(),
     coverage: 'observed', retrievalComplete: input.retrievalComplete === true, filtered: input.filtered === true,
-    lines: [...lines.values()].sort((a, b) => a.name.localeCompare(b.name)),
-    stops: [...stops.values()].sort((a, b) => `${a.name}:${a.location.lng},${a.location.lat}`.localeCompare(`${b.name}:${b.location.lng},${b.location.lat}`)) };
+    lines: [...lines.values()],
+    stops: [...stops.values()] };
   normalizedDatasets.add(result);
   return result;
 }

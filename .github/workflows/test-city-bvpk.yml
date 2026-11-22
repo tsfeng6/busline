@@ -1,0 +1,31 @@
+name: Test city snapshot storage
+
+on:
+  push:
+    branches: [codex/city-bvpk]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Test city storage, publication and readers
+        run: node --import tsx --test tests/*.test.ts
+      - name: Check types
+        run: |
+          npm run lint
+          npm run lint:gateway
+          npm run lint:edgeone
+      - name: Build frontend and server
+        run: npm run build

@@ -24,6 +24,7 @@
     "@edgeone/pages-blob": "^0.0.19",
     "@google/genai": "^1.29.0",
     "axios": "^1.21.0",
+    "brotli-dec-wasm": "2.3.2",
     "canvas-confetti": "^1.9.4",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

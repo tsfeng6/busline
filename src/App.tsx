@@ -21,7 +21,7 @@ import { CityUpdateStatus } from './components/CityUpdateStatus';
 import type { CityUpdateJob } from './utils/cityUpdateJobs';
 import { CityDataPanel } from './components/CityDataPanel';
 import { normalizeCityDataset, type CityDataset } from './utils/cityDataset';
-import { actionsCityUpdatesEnabled, cityUpdateJobs, loadSharedCity, inspectSharedCity, gatewayBase, citySnapshotFresh, citySnapshotPreviewable, sharedCityDataEnabled } from './utils/sharedCityClient';
+import { actionsCityUpdatesEnabled, cityUpdateJobs, loadSharedCity, inspectSharedCity, invalidateSharedCityRead, gatewayBase, citySnapshotFresh, citySnapshotPreviewable, sharedCityDataEnabled } from './utils/sharedCityClient';
 import { lineBaseIdentity, matchesLineQuery, matchesReturnedLine } from './utils/lineIdentity';
 import { resolveSearchCity } from './utils/searchCity';
 import { discoverStationLines, segmentGridKeys } from './utils/stationCoverage';
@@ -5545,9 +5545,16 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const result = await cityUpdateJobs.watch(initial, job => {
         if (!controller.signal.aborted) { setCityUpdateJob(job); setSharedCityStatus(job.message); }
       }, controller.signal);
-      if (controller.signal.aborted || preserveLocalMap) return;
+      if (controller.signal.aborted) return;
+      if (result.state === 'ready' || result.state === 'completed') {
+        cityDataCache.invalidate(result.city);
+        invalidateSharedCityRead(result.city);
+        cityAutoChecksRef.current.delete(result.city.replace(/市$/, ''));
+      }
+      if (preserveLocalMap) return;
       if (result.state === 'ready' || result.state === 'completed' || result.state === 'retained') {
-        const data = await loadSharedCity(result.city, result.id || crypto.randomUUID());
+        const snapshotId = result.result?.promoted ? result.result.snapshotId || undefined : undefined;
+        const data = await loadSharedCity(result.city, snapshotId || result.id || crypto.randomUUID(), snapshotId);
         if (controller.signal.aborted) return;
         if (data && (citySnapshotFresh(data) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(data)))) {
           setLastCityDataset(data);
@@ -6118,14 +6125,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       setCityLoading(true);
       try {
       const cached = cityDataCache.peek(currentCity, { pin: true });
-      const {data, status} = cached && (citySnapshotFresh(cached) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(cached)))
-        ? { data: cached, status: 'ready' }
-        : await inspectSharedCity(currentCity);
+      const current = await inspectSharedCity(currentCity);
+      const { data, status } = current.status === 'unavailable' && cached &&
+        (citySnapshotFresh(cached) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(cached)))
+        ? { data: cached, status: 'unavailable' as const }
+        : current;
       if (cancelled || pendingCityUploadRef.current || isMinigameActiveRef.current || startedAtSearchVersion !== searchVersionRef.current || manualResultCityRef.current === key) return;
       cityAutoChecksRef.current.set(key, Date.now());
       if (data && (citySnapshotFresh(data) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(data)))) {
         setCityDataNotice(null);
         await handleSearch(false, data);
+        if (!cancelled && status === 'unavailable') setSharedCityStatus('暂时无法读取共享线路，当前显示本次会话已缓存的版本。');
       } else {
         // Do not show the previous city's map as if it belonged to this city.
         if (sharedMapDataRef.current || (lastCityDataset && lastCityDataset.city.replace(/市$/, '') !== key)) handleClear();

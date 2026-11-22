@@ -46,12 +46,12 @@ export async function runCityUpdate(env:NodeJS.ProcessEnv=process.env,transport:
       });
       dataset=collected.dataset;collection=collected.report;
     }
-    await report('running','数据已就绪，正在校验并保存历史版本。');
+    await report('running','数据已就绪，正在压缩、校验并发布线路快照。');
     await writeFile('city-update-report.json',JSON.stringify({city:dataset.city,retrievalComplete:dataset.retrievalComplete,...collection},null,2));
     const saved=await store.publish(dataset);
     const after=await store.latest(city);
     const published=!!after&&(saved.promoted||!!saved.unchanged);
-    await report(published?'completed':'retained',published?(after!.retrievalComplete?'城市线路已更新，可以查看。':'最新上传已发布，可以查看；本次检索不完整。'):`本次取得 ${dataset.lines.length} 个线路方向，但采集未完整${collection.interruptions[0] ? '：'+collection.interruptions[0].message : '，未发布为完整共享版本。'}`,{
+    await report(published?'completed':'retained',published?(after!.retrievalComplete?'城市线路已更新，可以查看。':'最新上传已发布，可以查看；本次检索不完整。'):'本次检索时间较早，当前共享版本继续生效。',{
       promoted:published,lineDirections:dataset.lines.length,stops:dataset.stops.length,snapshotId:saved.id||'',
     });
     return {skipped:false,...saved};

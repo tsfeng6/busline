@@ -90,8 +90,9 @@ test('pathLengthMeters is positive and scales with the path', () => {
   assert.ok(pathLengthMeters([[121.6, 41.9], [121.61, 41.9]]) > 800);
 });
 
-const deltaFile = resolve('.geometry-experiment/delta.json');
-const rawFile = resolve('.geometry-experiment/raw.json');
+const fixtures = process.env.BUSLINE_GEOMETRY_FIXTURES || '.geometry-experiment';
+const deltaFile = resolve(fixtures, 'delta.json');
+const rawFile = resolve(fixtures, 'raw.json');
 test('real Fuxin delta-e6-v1 file decodes losslessly against the raw snapshot', { skip: !existsSync(deltaFile) || !existsSync(rawFile) && 'fixtures not present' }, () => {
   const delta = JSON.parse(readFileSync(deltaFile, 'utf8'));
   const raw = JSON.parse(readFileSync(rawFile, 'utf8'));

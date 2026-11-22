@@ -20,14 +20,13 @@ const safeKey = (city: string): string => { try { return cityDataKey(city); } ca
 /**
  * Byte-budgeted LRU cache over whole-city datasets. Viewport cities are pinned
  * (not evictable); prefetched neighbors are evictable. In-flight loads are
- * single-flighted per city, and `invalidate()` bumps a generation so late
- * resolutions are not re-inserted after a catalog revision change.
+ * single-flighted per city. Invalidation prevents late resolutions from
+ * repopulating an outdated entry.
  */
 export class CityDataCache {
   private entries = new Map<string, CacheEntry>();
   private inflight = new Map<string, Promise<CityDataset | null>>();
   private totalBytes = 0;
-  private generation = 0;
 
   constructor(
     private readonly load: CityLoader,
@@ -44,9 +43,8 @@ export class CityDataCache {
 
     let task = this.inflight.get(key);
     if (!task) {
-      const gen = this.generation;
       task = this.load(city)
-        .then(data => { if (data && gen === this.generation) this.insert(key, data, opts.pin); return data; })
+        .then(data => { if (data && this.inflight.get(key) === task) this.insert(key, data, opts.pin); return data; })
         .finally(() => { if (this.inflight.get(key) === task) this.inflight.delete(key); });
       this.inflight.set(key, task);
     }
@@ -65,7 +63,18 @@ export class CityDataCache {
   pin(city: string): void { const entry = this.entries.get(safeKey(city)); if (entry) entry.pinned = true; }
   unpin(city: string): void { const entry = this.entries.get(safeKey(city)); if (entry) entry.pinned = false; }
 
-  invalidate(): void { this.generation++; this.entries.clear(); this.totalBytes = 0; }
+  invalidate(city?: string): void {
+    if (city === undefined) {
+      this.entries.clear();
+      this.inflight.clear();
+      this.totalBytes = 0;
+      return;
+    }
+    const key = safeKey(city);
+    this.totalBytes -= this.entries.get(key)?.bytes ?? 0;
+    this.entries.delete(key);
+    this.inflight.delete(key);
+  }
 
   private insert(key: string, data: CityDataset, pin?: boolean): void {
     const bytes = estimateCityBytes(data);

@@ -45,11 +45,7 @@ async function smallFile(transport:typeof fetch,url:string) {
 }
 async function cityFresh(env:Env,city:string,transport:typeof fetch) {
   const prefix=encodeURIComponent(cityDataKey(city));
-  let meta=await smallFile(transport,rawUrl(env,`${prefix}/meta.json`));
-  if(!meta){
-    const history=await smallFile(transport,rawUrl(env,`${prefix}/history.json`));
-    meta=Array.isArray(history)?history.find(item=>item.promoted):null;
-  }
+  const meta=await smallFile(transport,rawUrl(env,`${prefix}/meta.json`));
   return !!meta&&cityDataKey(meta.city)===cityDataKey(city)&&meta.retrievalComplete===true&&meta.filtered!==true
     &&Date.parse(meta.capturedAt)<=Date.now()+300000&&Date.now()<cityDatasetExpiresAt(meta);
 }
@@ -89,7 +85,7 @@ export async function handleGateway(request:Request,env:Env,transport:typeof fet
       const headers=new Headers(result.headers);for(const [key,value] of Object.entries(cors))headers.set(key,value);
       return new Response(result.body,{status:result.status,headers});
     }
-    // Stream public JSON; never parse a city-sized document in the small Worker.
+    // Compatibility reader for direct gateway callers. The website uses its own static files.
     if(request.method==='GET'&&path.startsWith('/api/city-data/')){
       const parts=path.slice('/api/city-data/'.length).split('/').map(decodeURIComponent);
       const key=encodeURIComponent(cityDataKey(parts[0]));
@@ -97,11 +93,16 @@ export async function handleGateway(request:Request,env:Env,transport:typeof fet
       if(parts.length===2&&parts[1]==='history')suffix='history.json';
       else if(parts.length===3&&parts[1]==='history'&&/^[\dTZ-]+-[a-f0-9]{12}$/.test(parts[2]))suffix=`history/${parts[2]}.json`;
       else if(parts.length===4&&parts[1]==='parts'&&/^[\dTZ-]+-[a-f0-9]{12}$/.test(parts[2])&&/^\d+\.json$/.test(parts[3]))suffix=`parts/${parts[2]}/${parts[3]}`;
+      else if(parts.length===3&&parts[1]==='bvpk'&&/^[a-f0-9]{64}\.bvpk$/.test(parts[2]))suffix=`bvpk/${parts[2]}`;
       else if(parts.length!==1)throw fail(404,'没有这个数据文件。');
       const version=url.searchParams.get('v');
-      const upstream=await transport(rawUrl(env,`${key}/${suffix}`)+(/^[a-f0-9-]{36}$/.test(version||'')?`?v=${version}`:''),{signal:AbortSignal.timeout(15000)});
+      const binary=suffix.startsWith('bvpk/');
+      const versioned = !binary && /^(?:[a-f0-9-]{36}|[\dTZ-]+-[a-f0-9]{12})$/.test(version||'');
+      const upstream=await transport(rawUrl(env,`${key}/${suffix}`)+(versioned?`?v=${version}`:''),{signal:AbortSignal.timeout(15000)});
       if(!upstream.ok)return json({error:upstream.status===404?'该城市暂无共享数据。':'共享数据暂时不可用。'},upstream.status===404?404:502);
-      return new Response(upstream.body,{status:200,headers:{...cors,'Content-Type':'application/json','Cache-Control':'public,max-age=60'}});
+      return new Response(upstream.body,{status:200,headers:{...cors,
+        'Content-Type':binary?'application/octet-stream':'application/json',
+        'Cache-Control':binary?'public,max-age=31536000,immutable':'public,max-age=60'}});
     }
     if(request.method==='GET'&&/^\/jobs\/[a-f0-9-]{36}$/.test(path)){
       const job=await env.JOBS.prepare('SELECT * FROM city_jobs WHERE id=?').bind(path.split('/')[2]).first<Job>();

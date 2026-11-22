@@ -9,19 +9,23 @@ export const cityUpdateJobs = new CityUpdateJobClient(gatewayBase);
 export const sharedCityDataEnabled = import.meta.env.VITE_CITY_DATA_ENABLED === 'true';
 export const citySnapshotFresh = usableCityDataset;
 export const citySnapshotPreviewable = previewableCityDataset;
-async function read(city: string, suffix = '', version = '') {
-  return readCityJSON(sharedCityStaticURL(city, suffix, version, import.meta.env.BASE_URL || '/'));
+async function read(city: string, suffix = '', version = '', expectedSnapshotId?: string) {
+  return readCityJSON(sharedCityStaticURL(city, suffix, version, import.meta.env.BASE_URL || '/'), undefined, { expectedSnapshotId });
 }
 type CityCheck = { data: CityDataset | null; status: 'ready' | 'missing' | 'unavailable' };
 const cityLoads = new Map<string, Promise<CityCheck>>();
-export async function inspectSharedCity(city: string, version = ''): Promise<CityCheck> {
+export function invalidateSharedCityRead(city: string) {
+  const prefix = cityDataKey(city) + ':';
+  for (const key of cityLoads.keys()) if (key.startsWith(prefix)) cityLoads.delete(key);
+}
+export async function inspectSharedCity(city: string, version = '', expectedSnapshotId?: string): Promise<CityCheck> {
   if (!sharedCityDataEnabled) return { data: null, status: 'unavailable' };
-  const key = `${cityDataKey(city)}:${version}`;
+  const key = `${cityDataKey(city)}:${version}:${expectedSnapshotId || ''}`;
   let task = cityLoads.get(key);
   if (!task) {
     task = (async (): Promise<CityCheck> => {
       try {
-        const data = normalizeCityDataset(await read(city, '', version));
+        const data = normalizeCityDataset(await read(city, '', version, expectedSnapshotId));
         return cityDataKey(data.city) === cityDataKey(city) ? { data, status: 'ready' } : { data: null, status: 'unavailable' };
       } catch (error: any) { return { data: null, status: error.status === 404 ? 'missing' : 'unavailable' }; }
     })();
@@ -29,7 +33,9 @@ export async function inspectSharedCity(city: string, version = ''): Promise<Cit
   }
   try { return await task; } finally { if (cityLoads.get(key) === task) cityLoads.delete(key); }
 }
-export async function loadSharedCity(city: string, version = ''): Promise<CityDataset | null> { return (await inspectSharedCity(city, version)).data; }
+export async function loadSharedCity(city: string, version = '', expectedSnapshotId?: string): Promise<CityDataset | null> {
+  return (await inspectSharedCity(city, version, expectedSnapshotId)).data;
+}
 export async function acquireCityRefresh(city: string): Promise<{ token: string; expiresAt: number }> {
   const response = await fetch(`${apiBase}/api/city-data/${encodeURIComponent(city)}/refresh`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(30000),
