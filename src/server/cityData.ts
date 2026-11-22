@@ -1,5 +1,6 @@
-import { cityStorageFiles, cityContentHash, cityContentBytes } from '../../scripts/city-storage-files';
-import { isCityParts, validateCityPart, resolveCityParts } from '../utils/cityStorage';
+import { cityContentHash, cityContentBytes } from '../../scripts/city-storage-files';
+import { packCitySnapshot, readNodeCityBvpkPart } from '../../scripts/city-bvpk-files';
+import { CITY_BVPK_FORMAT, cityBvpkManifest, resolveCityStorage } from '../utils/cityBvpk';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { cityDataKey, cityDatasetExpiresAt, normalizeCityDataset, usableCityDataset, type CityDataset, type CitySnapshotMeta } from '../utils/cityDataset';
 
@@ -26,27 +27,33 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, in
   return results;
 }
 
-/** Atomic two-file commits, optimistic ref updates and bounded conflict retries. */
+/** Atomic snapshot commits, optimistic ref updates and bounded conflict retries. */
 export class GithubCityStore {
   constructor(private settings: Config, private transport: Transport = fetch) {
     if (!/^[\w.-]+\/[\w.-]+$/.test(settings.repo) || !/^[\w/-]+$/.test(settings.branch) || settings.branch.includes('..')) throw apiError(503, '共享数据仓库配置无效。');
   }
-  private async api(path: string, method = 'GET', body?: unknown, raw = false): Promise<any> {
+  private async api(path: string, method = 'GET', body?: unknown, raw: boolean | 'bytes' = false): Promise<any> {
     const response = await this.transport(`https://api.github.com/repos/${this.settings.repo}${path}`, {
       method, headers: { Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
         Authorization: `Bearer ${this.settings.token}`, 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(20000),
     });
     if (!response.ok) throw apiError(response.status, response.status === 404 ? '共享数据不存在。' : `共享仓库请求失败（${response.status}）。`);
-    return response.json();
+    return raw === 'bytes' ? new Uint8Array(await response.arrayBuffer()) : response.json();
   }
   private async file(path: string, ref = this.settings.branch): Promise<any | null> {
     try { return await this.api(`/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`, 'GET', undefined, true); }
     catch (error: any) { if (error.status === 404) return null; throw error; }
   }
+  private resolve(value: unknown, prefix: string, ref = this.settings.branch) {
+    return resolveCityStorage(value, part => this.file(`${prefix}/${part}`, ref), descriptor =>
+      readNodeCityBvpkPart(descriptor, part => this.api(
+        `/contents/${encodePath(`${prefix}/${part}`)}?ref=${encodeURIComponent(ref)}`, 'GET', undefined, 'bytes',
+      )));
+  }
   async latest(city: string): Promise<CityDataset | null> {
     const result = await this.file(`${routePath(city)}/latest.json`);
-    return result ? normalizeCityDataset(await resolveCityParts(result, part => this.file(`${routePath(city)}/${part}`))) : null;
+    return result ? normalizeCityDataset(await this.resolve(result, routePath(city))) : null;
   }
   async history(city: string): Promise<CitySnapshotMeta[]> {
     return (await this.file(`${routePath(city)}/history.json`)) || [];
@@ -54,7 +61,7 @@ export class GithubCityStore {
   async historical(city: string, id: string): Promise<CityDataset | null> {
     if (!/^[\dTZ-]+-[a-f0-9]{12}$/.test(id)) throw apiError(400, '快照版本无效。');
     const result = await this.file(`${routePath(city)}/history/${id}.json`);
-    return result ? normalizeCityDataset(await resolveCityParts(result, part => this.file(`${routePath(city)}/${part}`))) : null;
+    return result ? normalizeCityDataset(await this.resolve(result, routePath(city))) : null;
   }
   private async head(): Promise<any> {
     try { return await this.api(`/git/ref/heads/${encodePath(this.settings.branch)}`); }
@@ -76,6 +83,7 @@ export class GithubCityStore {
     const hash = cityContentHash(data);
     const id = `${data.capturedAt.replace(/[:.]/g, '-')}-${hash.slice(0, 12)}`;
     const prefix = routePath(data.city);
+    let packed: Awaited<ReturnType<typeof packCitySnapshot>> | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
       const head = await this.head();
       const commit = await this.api(`/git/commits/${head.object.sha}`);
@@ -83,48 +91,41 @@ export class GithubCityStore {
       const [oldFile, records] = await Promise.all([
         this.file(`${prefix}/latest.json`, head.object.sha), this.file(`${prefix}/history.json`, head.object.sha),
       ]);
-      const old = oldFile ? await resolveCityParts(oldFile, part => this.file(`${prefix}/${part}`, head.object.sha)) : null;
+      const old = oldFile ? await this.resolve(oldFile, prefix, head.object.sha) : null;
       const history: CitySnapshotMeta[] = Array.isArray(records) ? records : [];
       const oldStable = old ? { ...normalizeCityDataset(old), capturedAt: '' } : null;
       const oldHash = oldStable ? cityContentHash(oldStable) : '';
-      if (hash === oldHash && Date.parse(data.capturedAt) <= Date.parse(old.capturedAt)) return { saved: false, promoted: false, unchanged: true, id: history.find(item => item.hash === hash)?.id };
+      if (hash === oldHash && Date.parse(data.capturedAt) <= Date.parse(old.capturedAt)) return { saved: false, promoted: false, unchanged: true, id: cityBvpkManifest(oldFile)?.snapshotId };
       const promoted = !old || Date.parse(data.capturedAt) >= Date.parse(old.capturedAt);
       const meta: CitySnapshotMeta = { id, city: data.city, capturedAt: data.capturedAt, hash,
         lineDirections: data.lines.length, stops: data.stops.length, retrievalComplete: data.retrievalComplete, promoted };
+      if (history.some(item => item.id === id && item.hash === hash)) {
+        return { saved: false, promoted: false, unchanged: false, id };
+      }
       const retained = [meta, ...history.filter(item => item.id !== id)]
         .sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt)).slice(0, 5);
-      // An older delayed upload must not displace the current snapshot or exceed retention.
-      if (!retained.some(item => item.id === id)) return { saved: false, promoted: false, unchanged: true };
-      const removed = history.filter(item => !retained.some(keep => keep.id === item.id));
+      // The public index stays bounded; archive files remain immutable and recoverable.
+      if (!retained.some(item => item.id === id)) return { saved: false, promoted: false, unchanged: false };
+      if (await this.file(`${prefix}/history/${id}.json`, head.object.sha)) {
+        throw apiError(409, '存档版本已存在，请使用新的检索时间。');
+      }
+      packed ??= await packCitySnapshot(data, prefix, id);
+      const pointer = JSON.stringify(packed.manifest);
       const files = [
+        { path: `${prefix}/history/${id}.json`, content: pointer },
         { path: `${prefix}/history.json`, content: JSON.stringify(retained) },
         ...(promoted ? [
-          { path: `${prefix}/meta.json`, content: JSON.stringify({ schemaVersion: 1, city: data.city,
+          { path: `${prefix}/latest.json`, content: pointer },
+          { path: `${prefix}/meta.json`, content: JSON.stringify({ schemaVersion: 1, storage: CITY_BVPK_FORMAT, city: data.city,
             capturedAt: data.capturedAt, expiresAt: cityDatasetExpiresAt(data), retrievalComplete: data.retrievalComplete,
             filtered: data.filtered, lineDirections: data.lines.length, stops: data.stops.length, snapshotId: id }) },
         ] : []),
+        ...packed.files,
       ];
-      const newFiles = [...(function* () { yield* cityStorageFiles(data, prefix, id, promoted); yield* files; })()];
-      const blobs = await mapLimit(newFiles, 8, (file) => this.api('/git/blobs', 'POST', { content: file.content, encoding: 'utf-8' }));
-      const treeEntries: { path: string; mode: string; type: string; sha: string | null }[] = newFiles.map((file, index) => ({ path: file.path, mode: '100644', type: 'blob', sha: blobs[index].sha }));
-      const liveParts = new Set<string>();
-      const preserveParts = (manifest: any) => { if (isCityParts(manifest)) for (const part of manifest.parts) liveParts.add(validateCityPart(part)); };
-      if (!promoted) preserveParts(oldFile);
-      const retainedManifests = await mapLimit(retained.filter(record => record.id !== id), 8, (record) => this.file(`${prefix}/history/${record.id}.json`, head.object.sha));
-      for (const manifest of retainedManifests) preserveParts(manifest);
-      for (const entry of treeEntries) if (entry.path.startsWith(`${prefix}/parts/`)) liveParts.add(entry.path.slice(prefix.length + 1));
-      for (const record of removed) {
-        if (!/^[\dTZ-]+-[a-f0-9]{12}$/.test(record.id)) throw apiError(400, '历史版本无效。');
-        const path = `${prefix}/history/${record.id}.json`;
-        const manifest = await this.file(path, head.object.sha);
-        if (!manifest) continue;
-        treeEntries.push({ path, mode: '100644', type: 'blob', sha: null });
-        if (isCityParts(manifest)) for (const part of manifest.parts) {
-          validateCityPart(part);
-          if (!liveParts.has(part) && !treeEntries.some(entry => entry.path === `${prefix}/${part}`))
-            treeEntries.push({ path: `${prefix}/${part}`, mode: '100644', type: 'blob', sha: null });
-        }
-      }
+      const blobs = await mapLimit(files, 8, file => this.api('/git/blobs', 'POST', typeof file.content === 'string'
+        ? { content: file.content, encoding: 'utf-8' }
+        : { content: file.content.toString('base64'), encoding: 'base64' }));
+      const treeEntries = files.map((file, index) => ({ path: file.path, mode: '100644', type: 'blob', sha: blobs[index].sha }));
       const tree = await this.api('/git/trees', 'POST', { base_tree: commit.tree.sha, tree: treeEntries });
       const next = await this.api('/git/commits', 'POST', { message: `data: ${data.city} snapshot ${id}`, tree: tree.sha, parents: [head.object.sha] });
       try {

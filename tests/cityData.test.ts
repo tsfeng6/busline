@@ -13,7 +13,7 @@ function fixture(count = 10, complete = true) {
   };
 }
 function githubMock() {
-  let counter = 0, head = 'initial', branchExists = false, conflict = false;
+  let counter = 0, head = 'initial', branchExists = false, conflict = false, failBlob = false;
   const blobs = new Map<string, string>();
   const trees = new Map<string, Map<string, string>>([['initial-tree', new Map()]]);
   const commits = new Map<string, any>([['initial', { tree: { sha: 'initial-tree' } }]]);
@@ -34,9 +34,14 @@ function githubMock() {
       const ref = url.searchParams.get('ref')!;
       const commit = commits.get(ref === 'busline-data' ? head : ref);
       const text = trees.get(commit?.tree.sha)?.get(pathname.slice('/contents/'.length));
-      return text ? new Response(text, { status: 200 }) : response({}, 404);
+      return text ? new Response(pathname.endsWith('.bvpk') ? Buffer.from(text, 'base64') : text, { status: 200 }) : response({}, 404);
     }
-    if (pathname === '/git/blobs') { const sha = `blob-${++counter}`; blobs.set(sha, body.content); return response({ sha }); }
+    if (pathname === '/git/blobs') {
+      if (failBlob && body.encoding === 'base64') { failBlob = false; return response({}, 503); }
+      const sha = `blob-${++counter}`;
+      blobs.set(sha, body.content);
+      return response({ sha });
+    }
     if (pathname === '/git/trees') {
       const sha = `tree-${++counter}`, tree = new Map(trees.get(body.base_tree));
       for (const entry of body.tree) { if (entry.sha === null) tree.delete(entry.path); else tree.set(entry.path, blobs.get(entry.sha)!); }
@@ -59,7 +64,7 @@ function githubMock() {
     throw new Error(`Unexpected ${method} ${pathname}`);
   };
   const store = new GithubCityStore({ repo: 'tsfeng6/busline', branch: 'busline-data', token: 'fake-test-token', enabled: true }, transport);
-  return { store, writes, transport, conflict: () => { conflict = true; }, files: () => trees.get(commits.get(head).tree.sha)! };
+  return { store, writes, transport, conflict: () => { conflict = true; }, failNextPackage: () => { failBlob = true; }, files: () => trees.get(commits.get(head).tree.sha)! };
 }
 
 test('mapLimit preserves order and bounds concurrency', async () => {
@@ -99,7 +104,7 @@ test('publishes latest/history atomically, reads history and deduplicates unchan
   const before = mock.writes.length;
   assert.equal((await mock.store.publish(initial)).unchanged, true);
   assert.equal(mock.writes.length, before);
-  assert.ok(mock.writes.filter(write => write.pathname === '/git/trees').every(write => write.body.tree.length === 4));
+  assert.ok(mock.writes.filter(write => write.pathname === '/git/trees').every(write => write.body.tree.length === 5));
 });
 
 test('newest valid upload becomes default even when partial or smaller; delayed old uploads stay historical', async () => {
@@ -114,7 +119,7 @@ test('newest valid upload becomes default even when partial or smaller; delayed 
   await assert.rejects(()=>mock.store.publish({...fixture(),filtered:true}),/过滤/);
 });
 
-test('only five snapshots remain; dropped archives are deleted atomically and current stays readable',async()=>{
+test('the recent index stays bounded while all archived snapshots remain readable',async()=>{
   const mock=githubMock(),now=Date.now();const ids:string[]=[];
   for(let i=0;i<8;i++){
     const saved=await mock.store.publish({...fixture(i+1),capturedAt:new Date(now-10000+i*1000).toISOString()});
@@ -123,9 +128,9 @@ test('only five snapshots remain; dropped archives are deleted atomically and cu
   const history=await mock.store.history('北京');
   assert.deepEqual(history.map(item=>item.id),ids.slice(-5).reverse());
   assert.equal((await mock.store.latest('北京'))?.lines.length,8);
-  for(const id of ids.slice(0,3))assert.equal(await mock.store.historical('北京',id),null);
-  for(const id of ids.slice(-5))assert.ok(await mock.store.historical('北京',id));
-  assert.equal([...mock.files().keys()].filter(path=>path.includes('/history/')).length,5);
+  for (const id of ids) assert.ok(await mock.store.historical('北京', id));
+  assert.equal([...mock.files().keys()].filter(path => path.includes('/history/')).length, 8);
+  assert.ok(mock.writes.filter(write => write.pathname === '/git/trees').every(write => write.body.tree.every((entry: any) => entry.sha !== null)));
 });
 
 test('retries optimistic ref conflicts and retains one consistent snapshot', async () => {
@@ -164,7 +169,7 @@ test('renewing an expired unchanged city updates verification time instead of ca
   const mock = githubMock();
   await mock.store.publish(fixture());
   const previous = JSON.parse(mock.files().get('city-data/v1/北京/latest.json')!);
-  previous.capturedAt = new Date(Date.now() - 90 * 86400000).toISOString();
+  previous.header.capturedAt = new Date(Date.now() - 90 * 86400000).toISOString();
   mock.files().set('city-data/v1/北京/latest.json', JSON.stringify(previous));
   const next = { ...fixture(), capturedAt: new Date(Date.now() + 1000).toISOString() };
   assert.equal((await mock.store.publish(next)).promoted, true);
@@ -244,39 +249,68 @@ test('GitHub publication and subsequent reads round-trip a real snapshot larger 
   const result=await mock.store.publish(data);
   assert.equal(result.promoted,true);
   const manifest=JSON.parse(mock.files().get('city-data/v1/北京/latest.json')!);
-  assert.equal(manifest.storage,'city-parts-v1');
+  assert.equal(manifest.storage,'city-bvpk1');
   assert.ok(manifest.parts.length>1);
   assert.deepEqual(await mock.store.latest('北京'),data);
   assert.deepEqual(await mock.store.historical('北京',result.id!),data);
   assert.equal((await mock.store.publish(data)).unchanged,true);
 });
 
-test('existing archives migrate to newest default and five snapshots, pruning only unreferenced parts',async()=>{
+test('history audit leaves an older active snapshot, newer archives and all files unchanged',async()=>{
   const {mkdtemp,mkdir,writeFile,readFile,readdir,rm}=await import('node:fs/promises');
   const {join}=await import('node:path');const {tmpdir}=await import('node:os');
   const {cityStorageFiles}=await import('../scripts/city-storage-files');
   const {retainCityHistory}=await import('../scripts/retain-city-history');
   const root=await mkdtemp(join(tmpdir(),'busline-retain-')),prefix='city-data/v1/北京';
   try{
-    const records:any[]=[];let newest:any;
+    const records:any[]=[];
     for(let i=0;i<8;i++){
       const data=normalizeCityDataset({...fixture(9-i),capturedAt:new Date(Date.now()-10000+i*1000).toISOString()});
       const id=`${data.capturedAt.replace(/[:.]/g,'-')}-${String(i).padStart(12,'0')}`;
       for(const file of cityStorageFiles(data,prefix,id,i===0,500)){
         await mkdir(join(root,file.path,'..'),{recursive:true});await writeFile(join(root,file.path),file.content);
       }
-      records.unshift({id,capturedAt:data.capturedAt,promoted:i===0});newest=data;
+      records.unshift({id,capturedAt:data.capturedAt,promoted:i===0});
     }
     await writeFile(join(root,prefix,'history.json'),JSON.stringify(records.reverse()));
-    assert.equal((await retainCityHistory(root)).cities,1);
-    const index=JSON.parse(await readFile(join(root,prefix,'history.json'),'utf8'));
-    assert.equal(index.length,5);assert.equal(index[0].promoted,true);
-    const {resolveCityParts}=await import('../src/utils/cityStorage');
-    const data=await resolveCityParts(JSON.parse(await readFile(join(root,prefix,'latest.json'),'utf8')),
-      async part=>JSON.parse(await readFile(join(root,prefix,part),'utf8')));
-    assert.deepEqual(normalizeCityDataset(data),newest);
-    assert.equal((await readdir(join(root,prefix,'history'))).length,5);
-    assert.equal((await readdir(join(root,prefix,'parts'))).length,5);
-    assert.deepEqual(await retainCityHistory(root),{cities:1,removed:0});
+    await writeFile(join(root,prefix,'meta.json'),JSON.stringify({snapshotId:records[0].id}));
+    const before = new Map<string, Buffer>();
+    for (const file of await readdir(join(root, prefix), { recursive: true, withFileTypes: true })) {
+      if (file.isFile()) {
+        const path = join(file.parentPath, file.name);
+        before.set(path, await readFile(path));
+      }
+    }
+    assert.deepEqual(await retainCityHistory(root), { cities: 1, snapshots: 8 });
+    for (const [path, bytes] of before) assert.deepEqual(await readFile(path), bytes);
   }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('an unavailable active package stops a publish and leaves current and archives alone', async () => {
+  const mock = githubMock(), input = fixture();
+  await mock.store.publish(input);
+  const files = mock.files();
+  const pack = [...files.keys()].find(path => path.includes('/bvpk/'))!;
+  files.set(pack, Buffer.from('invalid BVPK1').toString('base64'));
+  const before = [...files];
+  const writes = mock.writes.length;
+  await assert.rejects(mock.store.publish({ ...input, capturedAt: new Date(Date.now() + 1000).toISOString() }), /校验/);
+  assert.equal(mock.writes.length, writes);
+  assert.deepEqual([...mock.files()], before);
+});
+
+test('failed package write keeps the prior release and can be retried atomically', async () => {
+  const mock = githubMock();
+  const now = Date.now();
+  const previous = { ...fixture(), capturedAt: new Date(now - 1000).toISOString() };
+  const update = { ...fixture(2), capturedAt: new Date(now).toISOString() };
+  const first = await mock.store.publish(previous);
+  const before = [...mock.files()];
+  mock.failNextPackage();
+  await assert.rejects(mock.store.publish(update), (error: any) => error.status === 503);
+  assert.deepEqual([...mock.files()], before);
+  assert.deepEqual(await mock.store.latest('北京'), normalizeCityDataset(previous));
+  assert.equal((await mock.store.publish(update)).promoted, true);
+  assert.deepEqual(await mock.store.latest('北京'), normalizeCityDataset(update));
+  assert.deepEqual(await mock.store.historical('北京', first.id!), normalizeCityDataset(previous));
 });

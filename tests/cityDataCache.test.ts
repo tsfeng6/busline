@@ -74,3 +74,24 @@ test('pin/unpin toggles evictability', async () => {
   await cache.get('C');
   assert.ok((await cache.get('A')) !== null);
 });
+
+test('city-specific invalidation discards an in-flight version and preserves other cities', async () => {
+  const old = dataset('北京', 1, 1);
+  const updated = { ...old, capturedAt: '2026-11-22T00:00:00.000Z' };
+  const other = dataset('天津', 1, 1);
+  let resolveOld!: (data: typeof old) => void;
+  let visits = 0;
+  const cache = new CityDataCache(city => {
+    if (city === '天津') return Promise.resolve(other);
+    if (visits++ === 0) return new Promise(resolve => { resolveOld = resolve; });
+    return Promise.resolve(updated);
+  });
+  await cache.get('天津');
+  const previous = cache.get('北京');
+  cache.invalidate('北京市');
+  assert.equal(await cache.get('北京'), updated);
+  resolveOld(old);
+  await previous;
+  assert.equal(cache.peek('北京'), updated);
+  assert.equal(cache.peek('天津'), other);
+});

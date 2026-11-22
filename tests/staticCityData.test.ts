@@ -108,3 +108,86 @@ test('production Vite relative base loads latest, history and parts instead of b
     await assert.rejects(readCityJSON(invalid,async()=>{throw Error('Unexpected fetch');}),/同源/);
   }
 });
+
+test('static mixed-format publication serves validated BVPK1, keeps legacy history read-only and retries corrupted cache', async () => {
+  const { packCitySnapshot } = await import('../scripts/city-bvpk-files');
+  const { normalizeCityDataset } = await import('../src/utils/cityDataset');
+  const { brotliDecompressSync } = await import('node:zlib');
+  const dir = mkdtempSync(join(tmpdir(), 'busline-static-bvpk-'));
+  try {
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, stdio: 'pipe' });
+    git('init'); git('config', 'user.email', 'test@example.invalid'); git('config', 'user.name', 'Test');
+    const prefix = 'city-data/v1/北京';
+    const id = '2026-11-16T00-00-00-000Z-abcdef123456', oldId = '2026-11-15T00-00-00-000Z-bcdef1234567';
+    const data = normalizeCityDataset({
+      schemaVersion: 1, city: '北京市', scope: 'city', coverage: 'observed', filtered: false, retrievalComplete: true,
+      capturedAt: '2026-11-16T00:00:00.000Z',
+      stops: [{ id: '2', name: '乙站', location: [116.101, 39.912345678] }, { id: '1', name: '甲站', location: [116.100001, 39.9] }],
+      lines: [
+        { id: '9', name: '9路', path: [[116.101, 39.9], [116.100001, 39.901], [116.100001, 39.901]], stime: '06:20', etime: '23:59' },
+        { id: '1', name: '1路', path: [[116.101000000092, 39.9], [116.101, 39.901]], via_stops: [{ id: '1', name: '甲站', location: [116.101, 39.9] }] },
+      ],
+    });
+    assert.deepEqual(data.lines.map(line => line.id), ['9', '1']);
+    assert.deepEqual(data.stops.map(stop => stop.id), ['2', '1']);
+    const { manifest, files } = await packCitySnapshot(data, prefix, id, 350);
+    assert.ok(manifest.parts.length > 1);
+    function put(path: string, content: string | Buffer) {
+      mkdirSync(join(dir, path, '..'), { recursive: true });
+      writeFileSync(join(dir, path), content);
+    }
+    const old = { ...data, capturedAt: '2026-11-15T00:00:00.000Z' };
+    put(prefix + '/latest.json', JSON.stringify(manifest));
+    put(prefix + '/meta.json', JSON.stringify({ snapshotId: id }));
+    put(prefix + '/history.json', JSON.stringify([{ id }, { id: oldId }]));
+    put(prefix + '/history/' + id + '.json', JSON.stringify(manifest));
+    put(prefix + '/history/' + oldId + '.json', JSON.stringify(old));
+    for (const file of files) put(file.path, file.content);
+    git('add', '.'); git('commit', '-m', 'mixed city formats');
+
+    const out = join(dir, 'out');
+    const result = await mirrorCitySnapshots('HEAD', out, dir);
+    assert.equal(result.historySnapshots, 2);
+    const calls: Array<{ path: string; cache?: string }> = [];
+    let corruptOnce = true, fail = false;
+    const transport: typeof fetch = async (input, options) => {
+      const path = decodeURIComponent(String(input).split('?')[0]);
+      calls.push({ path, cache: options?.cache });
+      const bytes = readFileSync(join(out, path));
+      if (path.includes('/bvpk/')) {
+        if (fail) return new Response(null, { status: 404 });
+        if (corruptOnce) { corruptOnce = false; bytes[bytes.length - 1] ^= 1; }
+      }
+      return new Response(bytes);
+    };
+    const options = { decompress: brotliDecompressSync, expectedSnapshotId: id };
+    const cityUrl = sharedCityStaticURL('北京', '', id);
+    assert.deepEqual(normalizeCityDataset(await readCityJSON(cityUrl, transport, options)), data);
+    assert.deepEqual(calls.slice(0, 3).map(call => call.cache), ['no-cache', 'force-cache', 'reload']);
+    assert.deepEqual(normalizeCityDataset(await readCityJSON(sharedCityStaticURL('北京', 'history/' + oldId), transport)), old);
+    await assert.rejects(readCityJSON(cityUrl, transport, { ...options, expectedSnapshotId: oldId }), /同步/);
+    fail = true;
+    calls.length = 0;
+    await assert.rejects(readCityJSON(cityUrl, transport, options), (error: any) => error.status === 503);
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every(call => !call.path.includes('/history')));
+
+    put(files[0].path, Buffer.from('corrupt'));
+    git('add', files[0].path); git('commit', '-m', 'corrupt data');
+    const bad = join(dir, 'bad');
+    await assert.rejects(mirrorCitySnapshots('HEAD', bad, dir), /校验/);
+    assert.equal(existsSync(join(bad, 'city-data/v1/publication.json')), false);
+
+    // Explicit operator rollback selects the old version and removes the corrupt entry from the public index only.
+    put(prefix + '/latest.json', JSON.stringify(old));
+    put(prefix + '/meta.json', JSON.stringify({ snapshotId: oldId }));
+    put(prefix + '/history.json', JSON.stringify([{ id: oldId }]));
+    git('add', ...['latest.json', 'meta.json', 'history.json'].map(path => prefix + '/' + path));
+    git('commit', '-m', 'manual city rollback');
+    const rollback = join(dir, 'rollback');
+    await mirrorCitySnapshots('HEAD', rollback, dir);
+    assert.deepEqual(JSON.parse(readFileSync(join(rollback, prefix, 'latest.json'), 'utf8')), JSON.parse(JSON.stringify(old)));
+    assert.equal(readFileSync(join(dir, files[0].path), 'utf8'), 'corrupt');
+    assert.equal(readFileSync(join(dir, prefix, 'history', id + '.json'), 'utf8'), JSON.stringify(manifest));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -15,7 +15,7 @@
     "lint": "tsc --noEmit",
     "city-data:update": "tsx scripts/update-city-data.ts",
     "lint:gateway": "tsc -p cloudflare/city-gateway/tsconfig.json",
-    "test:city-data": "node --import tsx --test tests/cityData.test.ts tests/sharedCityFlow.test.ts tests/cityActions.test.ts tests/staticCityData.test.ts tests/mapMemory.test.ts tests/cityOverview.test.ts tests/localTransit.test.ts tests/publishCityStatic.test.ts",
+    "test:city-data": "node --import tsx --test tests/cityData.test.ts tests/sharedCityFlow.test.ts tests/cityActions.test.ts tests/staticCityData.test.ts tests/mapMemory.test.ts tests/cityOverview.test.ts tests/localTransit.test.ts tests/publishCityStatic.test.ts tests/geometryEncoding.test.ts tests/bvpDecoder.test.ts",
     "test:edgeone": "node --import tsx --test tests/edgeOneGateway.test.ts",
     "lint:edgeone": "tsc -p edgeone/city-gateway/tsconfig.json"
   },
@@ -24,6 +24,7 @@
     "@edgeone/pages-blob": "^0.0.19",
     "@google/genai": "^1.29.0",
     "axios": "^1.21.0",
+    "brotli-dec-wasm": "2.3.2",
     "canvas-confetti": "^1.9.4",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

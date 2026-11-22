@@ -40,7 +40,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Collect, validate and publish city JSON
+      - name: Collect, validate and publish a city snapshot
         run: npm run city-data:update
         env:
           CITY_UPDATE_CITY: ${{ inputs.city }}

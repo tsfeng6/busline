@@ -11,7 +11,8 @@ import { cityDataKey } from '../src/utils/cityDataset';
 import {CityOverviewTiles,TILE_MIN_ZOOM,TILE_MAX_ZOOM,TILE_PIXEL_RATIO} from './city-overview-tiles';
 import {cityOverviewPNG} from './city-overview-png';
 import { cityThumbnail, type CityOverview } from '../src/utils/cityOverview';
-import { resolveCityParts } from '../src/utils/cityStorage';
+import { cityBvpkManifest, cityBvpkPartPath, resolveCityStorage } from '../src/utils/cityBvpk';
+import { readNodeCityBvpkPart, verifyNodeCityBvpkPart } from './city-bvpk-files';
 import { cityStorageFiles } from './city-storage-files';
 
 interface CityLayer { id: string; overview: CityOverview; thumbnail: Buffer; coverage: Buffer; }
@@ -49,10 +50,11 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', maxBuffer: 35 * 1024 * 1024 });
   const commit = git(['rev-parse', '--verify', ref]).trim();
   const files = new Set(git(['ls-tree', '-r', '-z', '--name-only', commit, '--', 'city-data/v1']).split('\0').filter(Boolean));
-  const source = (path: string) => {
+  const sourceBytes = (path: string) => {
     if (!files.has(path)) throw Error(`Missing shared city file: ${path}`);
-    return git(['show', `${commit}:${path}`]);
+    return execFileSync('git', ['show', `${commit}:${path}`], { cwd: repo, maxBuffer: 35 * 1024 * 1024 });
   };
+  const source = (path: string) => sourceBytes(path).toString('utf8');
   let bytes = 0, cities = 0, historySnapshots = 0, reused = 0;
   const overviews:CityOverview[]=[];
   const tileCache=await mkdtemp(join(tmpdir(),'busline-tile-work-'));
@@ -70,11 +72,27 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   };
   const snapshot = async (prefix: string, path: string, id?: string) => {
     const content = source(path), parsed = JSON.parse(content);
+    const manifest = cityBvpkManifest(parsed);
+    if (manifest) {
+      if (id && manifest.snapshotId !== id) throw Error(`BVPK1 snapshot identity mismatch: ${path}`);
+      if (cityDataKey(manifest.header.city) !== prefix.split('/').at(-1)) throw Error(`BVPK1 city mismatch: ${path}`);
+      for (const descriptor of manifest.parts) {
+        const partPath = `${prefix}/${cityBvpkPartPath(descriptor)}`;
+        const bytes = sourceBytes(partPath);
+        verifyNodeCityBvpkPart(descriptor, bytes);
+        await copy(partPath, bytes);
+      }
+      await copy(path, content);
+      return parsed;
+    }
+    if (parsed?.storage !== undefined && !isCityParts(parsed)) throw Error(`Unknown city storage: ${path}`);
     // Repack legacy large single files only in the static build; the repository/history remains untouched.
     if (!isCityParts(parsed) && parsed.schemaVersion === 1 && Buffer.byteLength(content) > CITY_FILE_BYTES) {
-      const name = id || `${new Date(parsed.capturedAt).toISOString().replace(/[:.]/g, '-')}-${createHash('sha256').update(content).digest('hex').slice(0, 12)}`;
+      const name = `${new Date(parsed.capturedAt).toISOString().replace(/[:.]/g, '-')}-${createHash('sha256').update(content).digest('hex').slice(0, 12)}`;
       if (!snapshotId.test(name)) throw Error('Invalid snapshot identity');
-      for (const file of cityStorageFiles(parsed, prefix, name, path.endsWith('/latest.json'))) await copy(file.path, file.content);
+      for (const file of cityStorageFiles(parsed, prefix, name, false)) {
+        await copy(file.path.startsWith(`${prefix}/history/`) ? path : file.path, file.content);
+      }
     } else {
       await copy(path, content);
       if (isCityParts(parsed)) {
@@ -85,6 +103,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
         }
       }
     }
+    return parsed;
   };
   for (const file of files) {
     const match = /^city-data\/v1\/([^/]+)\/latest\.json$/.exec(file);
@@ -99,7 +118,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       if (typeof meta.snapshotId === 'string' && snapshotId.test(meta.snapshotId)) currentId = meta.snapshotId;
       await copy(metaPath, text);
     }
-    await snapshot(prefix, file, currentId); cities++;
+    const active = await snapshot(prefix, file, currentId); cities++;
     const cached=cachedLayers.get(city);
     if(cached&&currentId&&cached.id===currentId){
       reused++;
@@ -107,7 +126,8 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       await copy(`city-data/v1/thumbnails/${city}-geo-v3.png`,cached.thumbnail);
       overviews.push(cached.overview);
     }else{
-      const latest=await resolveCityParts(JSON.parse(source(file)),async part=>JSON.parse(source(`${prefix}/${part}`)));
+      const latest = await resolveCityStorage(active, async part => JSON.parse(source(`${prefix}/${part}`)),
+        descriptor => readNodeCityBvpkPart(descriptor, async part => sourceBytes(`${prefix}/${part}`)));
       const cityTiles=new CityOverviewTiles({cacheDirectory:join(tileCache,city),maxResidentTiles:128});
       cityTiles.add(latest);
       tiles.mergeLayer(cityTiles);

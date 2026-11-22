@@ -263,3 +263,28 @@ test('upload manifest accepts exactly 1GiB and rejects larger files without allo
   assert.equal(accepted.status,200);
   assert.equal(x.dispatches(),0);
 });
+
+test('gateway checks only active metadata and streams immutable BVPK1 bytes for direct clients', async () => {
+  const x = setup();
+  const calls: string[] = [];
+  const pack = Uint8Array.from([66, 86, 80, 75, 49, 0, 255]);
+  const part = 'a'.repeat(64) + '.bvpk';
+  const transport: typeof fetch = async (input, init) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.endsWith('/meta.json')) return new Response(null, { status: 404 });
+    if (url.endsWith('/bvpk/' + part)) return new Response(pack);
+    return x.transport(input, init);
+  };
+  const job = await handleGateway(x.request(), x.env, transport);
+  assert.equal(job.status, 202);
+  assert.ok(calls.every(url => !url.includes('/history')));
+  const response = await handleGateway(
+    new Request('https://gateway.example/api/city-data/北京市/bvpk/' + part, { headers: { Origin: 'https://busline.cc' } }),
+    x.env, transport,
+  );
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Content-Type'), 'application/octet-stream');
+  assert.match(response.headers.get('Cache-Control')!, /immutable/);
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), pack);
+});

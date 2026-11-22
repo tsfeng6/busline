@@ -32,7 +32,7 @@ jobs:
           key: city-layers-v1-${{ github.run_id }}
           restore-keys: city-layers-v1-
 
-      - name: Publish existing shared city JSON with the website
+      - name: Publish shared city snapshots with the website
         run: node --import tsx scripts/publish-city-static.ts
 
       - name: Save city tile layers cache
