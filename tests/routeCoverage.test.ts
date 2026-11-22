@@ -131,9 +131,14 @@ test('large browser search processes more than 200 station records with bounded 
     },
   };
   const started = performance.now();
-  const result = await discoverCityStops(services, '北京市', () => false, () => false);
+  const progress: number[] = [];
+  const result = await discoverCityStops(services, '北京市', () => false, () => false, {
+    onProgress: found => progress.push(found),
+  });
   assert.equal(result.complete, true);
   assert.equal(result.pois.length, 987);
+  assert.ok(progress.length > 0);
+  assert.equal(progress.at(-1), result.pois.length);
   assert.deepEqual(calls, cases.map(c => c.district));
   assert.equal(boundsQueries, 48);
   assert.deepEqual(new Set(result.pois.map(poi => poi.address).filter(Boolean)), new Set(cases.map(c => c.route)));

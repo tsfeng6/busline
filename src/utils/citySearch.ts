@@ -29,8 +29,8 @@ const STOP_CAP = 200;
 
 /** Search county and district scopes independently and split capped POI results geographically. */
 export async function discoverCityStops(services: any, city: string, cancelled: () => boolean,
-  checkQuota: (status: string, result: any) => unknown, { maxRequests = 1200, preferredScope = '', focusBounds }: {
-    maxRequests?: number; preferredScope?: string; focusBounds?: SearchBounds;
+  checkQuota: (status: string, result: any) => unknown, { maxRequests = 1200, preferredScope = '', focusBounds, onProgress }: {
+    maxRequests?: number; preferredScope?: string; focusBounds?: SearchBounds; onProgress?: (found: number) => void;
   } = {}): Promise<{ pois: any[]; complete: boolean }> {
   const district = (scope: string, subdistrict: number, extensions: string) =>
     request(callback => new services.DistrictSearch({ subdistrict, extensions }).search(scope, callback));
@@ -86,6 +86,7 @@ export async function discoverCityStops(services: any, city: string, cancelled: 
           typeof value === 'string' ? value.split(/[;；]/).map(name => name.trim()).filter(Boolean) : []))].join(';');
         found.set(key, { ...poi, address, searchScope: /^\d{6}$/.test(poi.adcode) ? String(poi.adcode) : area.scope });
       }
+      onProgress?.(found.size);
       if (expected >= STOP_CAP && Number.isFinite(expected) || fetched >= STOP_CAP) { saturated = true; break; }
       if (fetched >= expected || !Number.isFinite(expected) && items.length < PAGE_SIZE) break;
       if (page === STOP_CAP / PAGE_SIZE) saturated = true;

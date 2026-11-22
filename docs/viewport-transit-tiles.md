@@ -74,6 +74,7 @@ location.reload();
 - 交界样本：`15/26957/12465`（包 `15/3369/1558` 的 slot 13）解出 4 条线路、3 个站点，来源城市包含北京市、保定市、廊坊市。
 - 自动化：本机 Node v24.22.1 执行 `node --import tsx --test tests/*.test.ts` 为 140 项、通过 133、跳过 7、失败 0；`npm run lint`、`npm run lint:gateway`、`npm run lint:edgeone`、`npm run build` 均通过。CI 固定 Node 22，PR #6 的同一测试命令已通过。
 - 自有 Key 实测（2026-11-22）：在设置中填写 Key 与安全密钥并保存后页面自动刷新，AMap 脚本与安全配置均使用自有 Key；“天安门”“1路”的检索建议及线路结果正常。关闭开关后刷新回退公共 Key。
+- 无共享数据城市（如济南）：全市检索先查已发布城市目录，不再请求不存在的 `latest.json`（消除 404）；检索期间页面显示“正在发现公交站点（已找到 N 个）…”，避免被误认为无响应。
 - 浏览器实测（生产与本地构建）：15 级视野下 CustomLayer Canvas 有绘制像素，Worker 会请求对应 `.pack`（DevTools 不会列出 Worker 内部的 fetch）。
 - 检索实测（2026-11-22）：生产公共 AMap Key 返回 `USER_DAILY_QUERY_OVER_LIMIT`；换用独立测试 Key 构建本地版本后，线路“1路”与地名“天安门”的建议、结果均正常。代码已补充 AutoComplete / PlaceSearch 的配额错误提示。
 - 未验证：真实低端手机与触屏体验、受登录保护的 Vercel 分支预览、长时间缓存与弱网抖动下的恢复表现。

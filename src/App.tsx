@@ -866,6 +866,7 @@ export default function App() {
 
   const [isSearching, setIsSearching] = useState(false);
   const [searchActivity,setSearchActivity]=useState<'auto'|'manual'|null>(null);
+  const [citySearchProgress,setCitySearchProgress]=useState('');
   const [showEmptySearchNotice, setShowEmptySearchNotice] = useState(false);
   const customApiSectionRef = useRef<HTMLDivElement>(null);
   const focusCustomApiRef = useRef(false);
@@ -5016,6 +5017,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
     setSearchActivity(sharedOverride?'auto':'manual');
     setIsSearching(true);
+    setCitySearchProgress('正在检查共享线路…');
     setSharedCityStatus(sharedCityDataEnabled ? '正在检查共享城市线路…' : '');
     try {
       const AMap = (window as any).AMap;
@@ -5129,7 +5131,14 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
       }
 
-      const sharedDataset = sharedOverride || (forceRefresh || manualResultCityRef.current !== currentCity.replace(/市$/, '') ? await loadSharedCity(currentCity) : null);
+      let sharedDataset = sharedOverride;
+      if (!sharedDataset && (forceRefresh || manualResultCityRef.current !== currentCity.replace(/市$/, ''))) {
+        const known = await loadPublishedCities().then(
+          cities => cities.some(entry => entry.city.replace(/市$/, '') === currentCity.replace(/市$/, '')),
+          () => true,
+        );
+        if (known) sharedDataset = await loadSharedCity(currentCity);
+      }
       if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
       if (sharedDataset) {
         if (!forceRefresh && (citySnapshotFresh(sharedDataset) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(sharedDataset)))) {
@@ -5191,14 +5200,23 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }
 
       if (!usedRegionCache && enableCityWideSearch) {
+        let lastProgressAt = 0;
+        setCitySearchProgress('正在发现公交站点…');
         const discovered = await discoverCityStops(searchServices, currentCity,
           () => searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current,
           checkAmapQuotaError, {
             preferredScope: currentDistrict,
             focusBounds: currentZoom >= CITY_DETAIL_ZOOM ? [sw.lng, sw.lat, ne.lng, ne.lat] : undefined,
+            onProgress: found => {
+              const now = performance.now();
+              if (now - lastProgressAt < 800) return;
+              lastProgressAt = now;
+              setCitySearchProgress(`正在发现公交站点（已找到 ${found} 个）…`);
+            },
           });
         allPois = discovered.pois;
         wasTruncated = !discovered.complete;
+        setCitySearchProgress('正在整理站点与线路…');
       } else if (!usedRegionCache) {
         const placeSearch = new searchServices.PlaceSearch({
           type: '公交车站',
@@ -5394,6 +5412,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
               setSharedCityStatus('本次检索结果未通过快照校验，无法提交；已获得的线路仍可在本地查看。');
             }
           };
+          setCitySearchProgress('正在检索线路…');
           const linesComplete = await fetchAndDrawLines(Array.from(lineNamesSet), map, AMap, currentCity, () => false, refreshLineData, prepareUpload, searchServices, lineScopes);
           if (!linesComplete) wasTruncated = true;
         }
@@ -5567,7 +5586,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       console.error('Search error:', error);
       setIsSearching(false);
     } finally {
-      if(searchVersionRef.current===thisSearchVer){setSearchActivity(null);setIsSearching(false);}
+      if(searchVersionRef.current===thisSearchVer){setSearchActivity(null);setIsSearching(false);setCitySearchProgress('');}
     }
   };
 
@@ -6759,7 +6778,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         onSelect={({ city, line }) => void handleManualSearch({ name: line.name, routeId: line.id, sourceCity: city, type: 'busline' })} />}
       <CityUploadDialog data={pendingCityUpload} busy={cityUploadBusy} progress={cityUploadProgress} error={cityUploadError}
         onSubmit={() => void submitCityUpload()} onClose={() => { if (!cityUploadBusy) setPendingCityUpload(null); }} />
-      {!loading && !showMinigameModal && onboardingStep===0 && <MapActivityIndicator raised={showMoreInfo} mode={searchActivity==='manual'||(isSearching&&searchActivity!=='auto')?'search':searchActivity==='auto'?'city':null} />}
+      {!loading && !showMinigameModal && onboardingStep===0 && <MapActivityIndicator raised={showMoreInfo} label={citySearchProgress} mode={searchActivity==='manual'||(isSearching&&searchActivity!=='auto')?'search':searchActivity==='auto'?'city':null} />}
       <CityUpdateStatus job={cityUpdateJob} onClose={() => { cityJobWatchRef.current?.abort(); setCityUpdateJob(null); }} />
       {cityDataNotice && !cityUpdateJob && !isSearching && <div role="status" className="absolute top-24 left-4 sm:left-6 z-30 max-w-sm rounded-2xl bg-m3-surface/95 border border-m3-outline-variant/40 p-4 shadow-lg flex items-center gap-3">
         <div className="text-xs text-slate-600"><p className="font-bold text-slate-800 mb-1">{cityDataNotice.city}</p>
