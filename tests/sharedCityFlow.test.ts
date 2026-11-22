@@ -24,7 +24,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
   const code = ts.transpile(`const ${declaration.getText(ast)};`, { target: ts.ScriptTarget.ES2022 });
   const ref = (current: any) => ({current});
   const errors: any[] = [];
-  let rendered: string[] = [], apiRequests = 0;
+  let rendered: string[] = [], apiRequests = 0, sharedReads = 0;
   class Bounds {
     constructor(public sw = [115,38], public ne = [117,40]) {}
     getSouthWest() { return { lng: this.sw[0], lat: this.sw[1] }; }
@@ -49,7 +49,8 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
     filterIntervalBusRef:ref(false),filterAirportBusRef:ref(false),blockedKeywordsRef:ref([]),searchFilterVersionRef:ref(1),
     getCitySearchServices:async(key:string,code:string)=>{assert.equal(key,'a'.repeat(32));assert.equal(code,'b'.repeat(32));return scope.window.AMap;},
     citySearchApiStatus,useCustomApiKey:false,customApiKey:'a'.repeat(32),customApiSecurityCode:'b'.repeat(32),initialAmapConfig:{isCustom:true,key:'a'.repeat(32),securityCode:'b'.repeat(32)},focusCustomApiRef:ref(false),
-    CITY_DETAIL_ZOOM,enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>snapshot,
+    CITY_DETAIL_ZOOM,enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>{sharedReads++;return snapshot;},
+    loadPublishedCities:async()=>[{city:'北京市'}],
     citySnapshotFresh:()=>true,citySnapshotPreviewable:previewableCityDataset,resolveSearchCity,normalizeCityDataset,matchesReturnedLine,lineBaseIdentity,
     cityDataCache:{remember(){}},discoverCityStops:async()=>{apiRequests++;throw Error('Unexpected POI request');},
     updateTerminalNamesCache(){},syncStopMarkersToMap(){},getStopColor:()=> '#52796F',isLineNameBlockedRef:()=>false,
@@ -68,7 +69,20 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
   assert.deepEqual(errors,[]);
   assert.deepEqual(rendered,['6路(甲--乙)']);
   assert.equal(apiRequests,0);
+  assert.equal(sharedReads,1);
   assert.equal(scope.sharedMapDataRef.current,true);
+  // An unpublished city must never request latest.json: it goes straight to the
+  // browser collection flow, which may later offer the result for upload.
+  scope.manualResultCityRef.current='';
+  scope.loadPublishedCities=async()=>[];
+  scope.loadSharedCity=async()=>{sharedReads++;throw Error('Unpublished city must not read latest.json');};
+  errors.length=0;
+  await run();
+  assert.equal(sharedReads,1);
+  assert.deepEqual(errors,[]);
+  assert.equal(scope.focusCustomApiRef.current,true);
+  scope.loadPublishedCities=async()=>[{city:'北京市'}];
+  scope.loadSharedCity=async()=>{sharedReads++;return snapshot;};
   rendered=[];
   const version=scope.searchVersionRef.current;
   scope.pendingCityUpload=snapshot;

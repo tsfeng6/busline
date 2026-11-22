@@ -5129,7 +5129,19 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
       }
 
-      const sharedDataset = sharedOverride || (forceRefresh || manualResultCityRef.current !== currentCity.replace(/市$/, '') ? await loadSharedCity(currentCity) : null);
+      let sharedDataset = sharedOverride;
+      if (!sharedDataset && (forceRefresh || manualResultCityRef.current !== currentCity.replace(/市$/, ''))) {
+        // The overview is the authoritative index of published snapshots.  A missing
+        // city is expected to fall through to local collection, not request a
+        // non-existent latest.json first.
+        const known = await loadPublishedCities().then(
+          cities => cities.some(entry => entry.city.replace(/市$/, '') === currentCity.replace(/市$/, '')),
+          // If the index is temporarily unavailable, retain the direct read so an
+          // existing city remains usable and the read path can report its own error.
+          () => true,
+        );
+        if (known) sharedDataset = await loadSharedCity(currentCity);
+      }
       if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
       if (sharedDataset) {
         if (!forceRefresh && (citySnapshotFresh(sharedDataset) || (actionsCityUpdatesEnabled && citySnapshotPreviewable(sharedDataset)))) {
