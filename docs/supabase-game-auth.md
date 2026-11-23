@@ -1,7 +1,7 @@
 # Supabase 账号与小游戏排行榜配置
 
 1. 在**已创建的** Supabase 项目的 SQL Editor 执行 [`supabase-game-auth.sql`](./supabase-game-auth.sql)。脚本只增加小游戏和微信账号表，不触碰公交城市数据。
-2. 在 Authentication 启用 Phone 登录，配置短信服务商、发送者与短信模板；在 URL Configuration 添加正式网站地址（例如 `https://busline.cc`）。
+2. 在 Authentication 的 URL Configuration 添加正式网站地址（例如 `https://busline.cc`）；本方案不启用手机号或邮箱登录。
 3. 在 EdgeOne Pages 的 Production 环境变量中填写（均不使用 `VITE_` 前缀）：
    - `SUPABASE_URL`：项目 URL，例如 `https://xxxx.supabase.co`
    - `SUPABASE_ANON_KEY`：Supabase 的 anon/publishable key。它只保存在 EdgeOne，用于代理认证和受 RLS/RPC 约束的请求；不要填写 service_role key，也不要把它或任何密钥写入前端。
@@ -10,7 +10,7 @@
 
 网关继续保留原 `/uploads` 与 GitHub Actions 写入流程。账号接口使用 `/game-auth/*`、`/game-runs*` 和 `/leaderboards`，与城市上传的 GitHub Token、Blob 存储和回调密钥完全分离。
 
-排行榜只接受六个真实规则组合：线路/站名各有标准和地狱两榜，城市和县城各有固定规则榜。用户以手机号验证码登录，可修改昵称并上传客户端压缩为 256px WebP（最大 180KiB）的头像。服务端要求已登录、单次 run、未结算、未过期，并以服务器起始时间限制可提交的得分；这能阻止直接向任意榜单写任意高分。题库仍在浏览器本地生成，因此它不是赛事级反作弊；如需更强保证，下一阶段应把出题种子和逐题判定迁到服务端。
+排行榜只接受六个真实规则组合：线路/站名各有标准和地狱两榜，城市和县城各有固定规则榜。用户通过公众号登录，可修改昵称并上传客户端压缩为 256px WebP（最大 180KiB）的头像。服务端要求已登录、单次 run、未结算、未过期，并以服务器起始时间限制可提交的得分；这能阻止直接向任意榜单写任意高分。题库仍在浏览器本地生成，因此它不是赛事级反作弊；如需更强保证，下一阶段应把出题种子和逐题判定迁到服务端。
 
 ## 微信公众号账号
 
@@ -26,4 +26,4 @@
 
 然后在微信公众号后台将“服务器地址(URL)”配置为 `PUBLIC_GATEWAY_URL/wechat/callback`，Token 使用 `WECHAT_CALLBACK_TOKEN`，消息加解密方式选“明文模式”。当前实现不处理安全模式的 `Encrypt` 载荷；如后台强制安全模式，需要再提供 EncodingAESKey 和 AppID 后才能启用。公众号还必须具备接收普通消息并被动回复的权限。
 
-网页右上角头像是唯一的账户入口。未登录用户扫描项目内展示的公众号二维码后，向公众号发送“注册账号”；系统以 OpenID 创建身份并读取微信昵称、头像作为初始资料。网页随后显示一个 5 分钟、一次性 8 位登录码；用户发送“登录 + 登录码”后，网页轮询到确认结果并跳转至短期 Supabase magic link。手机号和邮箱不会出现在用户界面；系统仅为 Supabase 身份内部使用不可投递的地址，用户无法通过它登录。小游戏必须已登录才能开始。
+网页右上角头像是唯一的账户入口。未登录用户扫描项目内展示的公众号二维码后，向公众号发送“注册账号”；系统以 OpenID 创建身份并读取微信昵称、头像作为初始资料。网页随后显示一个 5 分钟、一次性 8 位登录码；用户发送“登录 + 登录码”后，网页轮询到确认结果并跳转至短期 Supabase magic link。页面只用该短期凭据建立 `busline_game_session` 的 `Secure`、`HttpOnly`、`SameSite=Lax` Cookie，随即清除地址栏片段；后续请求不在 URL、localStorage 或 sessionStorage 保存登录令牌。Cookie 默认一小时有效，刷新页面可恢复登录，退出登录会清除 Cookie。手机号和邮箱不会出现在用户界面；系统仅为 Supabase 身份内部使用不可投递的地址，用户无法通过它登录。小游戏必须已登录才能开始。

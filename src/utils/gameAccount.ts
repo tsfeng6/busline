@@ -11,7 +11,8 @@ async function request<T>(path: string, init: RequestInit = {}, accessToken?: st
   if (!configuredUrl) throw Error('排行榜服务尚未配置。');
   const response = await fetch(endpoint(path), {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}), ...(init.headers || {}) }
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(accessToken && accessToken !== 'cookie' ? { Authorization: `Bearer ${accessToken}` } : {}), ...(init.headers || {}) }
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw Error(body.error || '排行榜服务暂时不可用。');
@@ -27,7 +28,11 @@ export async function verifyPhoneOtp(phone: string, token: string, displayName?:
 export async function completeWechatLink(token: string, accessToken: string) {
   return request<{ bound: true }>('/wechat/complete', { method: 'POST', body: JSON.stringify({ token }) }, accessToken);
 }
-export async function getGameAccount(accessToken: string) { return request<{ account: GameAccount }>('/game-auth/me', {}, accessToken); }
+export async function establishGameSession(accessToken: string) {
+  return request<{ signedIn: true }>('/game-auth/session', { method: 'POST' }, accessToken);
+}
+export async function endGameSession() { return request<{ signedOut: true }>('/game-auth/logout', { method: 'POST' }); }
+export async function getGameAccount(accessToken?: string) { return request<{ account: GameAccount }>('/game-auth/me', {}, accessToken); }
 export async function updateGameProfile(displayName: string, avatar?: File, accessToken?: string) {
   let avatarData: string | undefined;
   if (avatar) avatarData = await compressAvatar(avatar);

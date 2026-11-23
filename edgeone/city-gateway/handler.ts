@@ -101,7 +101,14 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
   if(!configured)throw fail(503,'账号与排行榜服务尚未配置。');
   const base=env.SUPABASE_URL!.replace(/\/$/,'');
   if(!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(base))throw fail(503,'账号服务配置无效。');
-  const bearer=request.headers.get('authorization')||'';
+  // A browser session is held in an HttpOnly, same-site cookie.  Keep the
+  // Authorization fallback solely for the one-time bootstrap request and
+  // older clients; normal game traffic never exposes a token to JavaScript.
+  const cookieValue=(name:string)=>{const part=(request.headers.get('cookie')||'').split(';').map(item=>item.trim()).find(item=>item.startsWith(name+'='));try{return part?decodeURIComponent(part.slice(name.length+1)):'';}catch{return '';}};
+  const headerBearer=request.headers.get('authorization')||'';
+  const cookieToken=cookieValue('busline_game_session');
+  const bearer=/^Bearer\s+\S+$/i.test(headerBearer)?headerBearer:cookieToken?`Bearer ${cookieToken}`:'';
+  const sessionCookie=(value:string,maxAge:number)=>{let domain='';try{const appHost=new URL(env.PUBLIC_APP_URL||'').hostname.replace(/^www\./i,'');const gatewayHost=new URL(request.url).hostname;if(appHost&&gatewayHost.endsWith(appHost))domain=`; Domain=${appHost}`;}catch{}return `busline_game_session=${encodeURIComponent(value)}; Path=/${domain}; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Lax`;};
   const supabase=async(pathname:string,init:RequestInit={},needsUser=false)=>{
     if(needsUser&&!/^Bearer\s+\S+$/i.test(bearer))throw fail(401,'请先登录。');
     const response=await transport(base+pathname,{...init,headers:{apikey:env.SUPABASE_ANON_KEY!,...(needsUser?{Authorization:bearer}:{}),'Content-Type':'application/json',...(init.headers||{})},signal:AbortSignal.timeout(15000)});
@@ -114,6 +121,14 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     if(!response.ok)throw fail(400,'用户资料读取失败。');return response.json();
   };
   const withAvatarUrl=(account:{avatarUrl?:string})=>{if(account.avatarUrl)account.avatarUrl=base+'/storage/v1/object/public/game-avatars/'+account.avatarUrl;return account;};
+  if(path==='/game-auth/session'&&request.method==='POST'){
+    if(!/^Bearer\s+\S+$/i.test(headerBearer))throw fail(401,'请先登录。');
+    await supabase('/auth/v1/user',{},true);
+    const response=json({signedIn:true});response.headers.set('Set-Cookie',sessionCookie(headerBearer.replace(/^Bearer\s+/i,''),3600));return response;
+  }
+  if(path==='/game-auth/logout'&&request.method==='POST'){
+    const response=json({signedOut:true});response.headers.set('Set-Cookie',sessionCookie('',0));return response;
+  }
   if(path==='/game-auth/otp'&&request.method==='POST'){
     const input=await jsonBody(request,1024),phone=String(input.phone||'').trim();
     if(!/^\+[1-9]\d{7,14}$/.test(phone))throw fail(400,'请输入带国家区号的手机号，例如 +8613812345678。');
@@ -191,7 +206,7 @@ async function serial<T>(key:string,action:()=>Promise<T>):Promise<T>{
 export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadStore,transport:typeof fetch=fetch,clientIp=''){
   const origin=request.headers.get('Origin')||'';
   const allowed=(env.ALLOWED_ORIGINS||'https://busline.cc,https://www.busline.cc').split(',').map(x=>x.trim());
-  const cors:Record<string,string>=allowed.includes(origin)?{'Access-Control-Allow-Origin':origin,'Vary':'Origin'}:{};
+  const cors:Record<string,string>=allowed.includes(origin)?{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Credentials':'true','Vary':'Origin'}:{};
   const json=(data:unknown,status=200)=>new Response(JSON.stringify(data),{status,headers:{...cors,'Content-Type':'application/json;charset=utf-8','Cache-Control':'no-store'}});
   const get=async(key:string)=>store.get(key,{type:'json',consistency:'strong'});
   const put=(key:string,value:unknown)=>store.set(key,JSON.stringify(value));

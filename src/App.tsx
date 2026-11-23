@@ -55,7 +55,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { getGameTimeLimit, formatGameTime } from './utils/gameTimer';
-import { gameAccountEnabled, finishGameRun, getGameAccount, getGameLeaderboard, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
+import { establishGameSession, gameAccountEnabled, finishGameRun, getGameAccount, getGameLeaderboard, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
 import { WechatAccountLink } from './components/WechatAccountLink';
 
 const isFirebaseEnabled = () => true;
@@ -341,7 +341,9 @@ export default function App() {
   const [gameLoadingText, setGameLoadingText] = useState('正在读取已有线路数据…');
   const [gameScore, setGameScore] = useState(0);
   const [gameAccount, setGameAccount] = useState<GameAccount | null>(null);
-  const [gameAccessToken, setGameAccessToken] = useState(() => { try { return sessionStorage.getItem('busline_game_access_token') || ''; } catch { return ''; } });
+  // The literal marker means that the authenticated session is held only in
+  // the HttpOnly gateway cookie, never in JavaScript-accessible storage.
+  const [gameAccessToken, setGameAccessToken] = useState('');
   const [gameAuthMessage, setGameAuthMessage] = useState('');
   const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
 
@@ -349,21 +351,26 @@ export default function App() {
   // the fragment. Fragments never reach EdgeOne; consume it immediately and
   // remove it from the address bar before rendering the normal map UI.
   useEffect(() => {
-    const query = new URLSearchParams(window.location.search);
     const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-    const accessToken = query.get('wechat') === 'logged-in' ? fragment.get('access_token') : '';
+    // Supabase may normalize an allowed redirect URL to the Site URL and drop
+    // its query string. The fragment is never sent to the server, so accepting
+    // its access token here is safe and makes either redirect form work.
+    const accessToken = fragment.get('access_token');
     if (!accessToken) return;
-    try { sessionStorage.setItem('busline_game_access_token', accessToken); } catch {}
-    setGameAccessToken(accessToken);
     window.history.replaceState({}, '', window.location.pathname);
+    void establishGameSession(accessToken).then(() => setGameAccessToken('cookie')).catch(() => setGameAuthMessage('登录状态建立失败，请重新获取登录码。'));
   }, []);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   useEffect(() => {
     if (!gameAccessToken || !gameAccountEnabled) return;
     getGameAccount(gameAccessToken).then(result => setGameAccount(result.account)).catch(() => {
-      try { sessionStorage.removeItem('busline_game_access_token'); } catch {}
       setGameAccessToken('');
     });
+  }, [gameAccessToken]);
+  // Restore an existing HttpOnly session after a normal reload.
+  useEffect(() => {
+    if (!gameAccountEnabled || gameAccessToken) return;
+    getGameAccount().then(result => { setGameAccount(result.account); setGameAccessToken('cookie'); }).catch(() => {});
   }, [gameAccessToken]);
   const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [gameCatalog,setGameCatalog]=useState<PublishedCity[]>([]);
@@ -6584,7 +6591,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
   return (
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
-      <WechatAccountLink account={gameAccount} accessToken={gameAccessToken} onSignedIn={(account, accessToken) => { setGameAccount(account); setGameAccessToken(accessToken); }} onLogout={()=>{try{sessionStorage.removeItem('busline_game_access_token');}catch{}setGameAccessToken('');setGameAccount(null);}} />
+      <WechatAccountLink account={gameAccount} accessToken={gameAccessToken} onSignedIn={(account, accessToken) => { setGameAccount(account); setGameAccessToken(accessToken); }} onLogout={()=>{setGameAccessToken('');setGameAccount(null);}} />
       {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
       {/* Global API Quota / Error Banner */}
       <AnimatePresence>
