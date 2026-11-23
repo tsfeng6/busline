@@ -8800,13 +8800,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[101] w-[920px] max-w-[94vw] h-[680px] max-h-[86vh] bg-m3-surface-container-high border border-m3-outline-variant/30 rounded-[28px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
               >
                 <div className="flex h-full">
-                  {/* Account-style navigation: original setting/about contents now live in this shared profile shell. */}
+                  {/* Application-only settings; account profile lives in the unified profile card. */}
                   <div className="w-[210px] bg-m3-surface-container-highest border-r border-m3-outline-variant/20 flex flex-col p-4 gap-1.5 relative overflow-hidden shrink-0 select-none">
-                    <button type="button" onClick={() => { setShowSettings(false); window.setTimeout(() => window.dispatchEvent(new Event('busline-account')), 0); }} className="mb-7 flex items-center gap-3 rounded-2xl p-2 text-left hover:bg-white/55">
-                      {gameAccount?.avatarUrl ? <img src={gameAccount.avatarUrl} alt="用户头像" className="h-11 w-11 rounded-full object-cover shadow-sm" /> : <span className="flex h-11 w-11 items-center justify-center rounded-full bg-m3-primary text-base font-black text-white shadow-sm">{(gameAccount?.displayName || '人').trim().slice(0, 1)}</span>}
-                      <span className="min-w-0"><span className="block truncate text-sm font-black text-slate-800">{gameAccount?.displayName || '巴士玩家'}</span><span className="block text-[10px] font-bold text-slate-400">个人主页</span></span>
-                    </button>
-                    <div className="px-3 py-1.5 mb-1"><h2 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.15em]">账号设置</h2></div>
                     <button 
                       onClick={() => setSettingsTab('general')}
                       className={`px-4 py-2.5 rounded-xl text-left text-xs font-bold transition-all ${settingsTab === 'general' ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-600 hover:bg-m3-primary/5 hover:text-slate-800'}`}
@@ -8819,7 +8814,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     >
                       {t('about')}
                     </button>
-                    <p className="mt-auto px-3 text-[10px] leading-4 text-slate-400">账户资料、头像与注销账号，请在个人主页的“设置”中管理。</p>
                   </div>
 
                   <div className="flex-1 p-8 overflow-y-auto relative bg-m3-surface">
