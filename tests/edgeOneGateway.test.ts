@@ -5,7 +5,7 @@ import {handleEdgeOneGateway,gatewaySignature,type UploadStore} from '../edgeone
 import {uploadCitySnapshot} from '../src/utils/cityUploadClient';
 import {readCityUpload} from '../scripts/read-city-upload';
 import {cityBlobHash,CITY_CHUNK_BYTES} from '../src/utils/cityTransfer';
-const env={GITHUB_DISPATCH_TOKEN:'fake-test-token',CALLBACK_SECRET:'test-only-callback-secret-1234567890',RATE_LIMIT_SALT:'test-only-rate-salt-12345'};
+const env={GITHUB_DISPATCH_TOKEN:'fake-test-token',CALLBACK_SECRET:'test-only-callback-secret-1234567890',RATE_LIMIT_SALT:'test-only-rate-salt-12345',ADMIN_PASSWORD:'buslineadmin',ADMIN_SESSION_SECRET:'test-only-admin-session-secret'};
 function fixture(){
  const data=new Map<string,string|ArrayBuffer>(),requests:string[]=[];
  const store:UploadStore={
@@ -41,6 +41,13 @@ test('EdgeOne rejects unauthorized origins, forged signatures, oversized manifes
  const job=await uploadCitySnapshot('https://upload.example',sample(),()=>{},f.browser);
  assert.equal((await f.browser(`https://upload.example/uploads/${job.id}/chunks/0`,{method:'PUT',headers:{'x-city-upload-token':'wrong'},body:'bad'})).status,401);
  assert.equal((await f.transport(`https://upload.example/uploads/${job.id}`)).status,401);
+});
+test('EdgeOne verifies the admin key at the gateway and throttles incorrect attempts',async()=>{
+ const f=fixture(),request=(password:string)=>new Request('https://gateway.example/admin/verify',{method:'POST',headers:{Origin:'https://busline.cc','Content-Type':'application/json'},body:JSON.stringify({password})});
+ assert.equal((await handleEdgeOneGateway(request('incorrect'),env,f.store,fetch,'192.0.2.9')).status,401);
+ const accepted=await handleEdgeOneGateway(request('buslineadmin'),env,f.store,fetch,'192.0.2.9');assert.equal(accepted.status,200);const body=await accepted.json();assert.ok(body.sessionToken);assert.equal(body.expiresIn,21600000);
+ for(let i=0;i<5;i++)assert.equal((await handleEdgeOneGateway(request('incorrect'),env,f.store,fetch,'192.0.2.10')).status,401);
+ assert.equal((await handleEdgeOneGateway(request('buslineadmin'),env,f.store,fetch,'192.0.2.10')).status,429);
 });
 test('EdgeOne validates part lengths, missing parts, retries completion once and blocks expired HMAC',async()=>{
  const f=fixture(),blob=new Blob(['test']);

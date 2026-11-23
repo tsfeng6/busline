@@ -144,6 +144,7 @@ const initialAmapConfig = getInitialAmapConfig();
 const AMAP_KEY = initialAmapConfig.key;
 const SECURITY_CODE = initialAmapConfig.securityCode;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
+const ADMIN_GATEWAY_URL = (import.meta.env.VITE_GAME_GATEWAY_URL || import.meta.env.VITE_CITY_UPDATE_GATEWAY_URL || API_BASE_URL || '').replace(/\/$/, '');
 const APP_VERSION = '5.5';
 const APP_LAST_VERSION_KEY = 'app_last_visited_version';
 
@@ -4039,9 +4040,13 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
   const handleAdminLoginVerify = async () => {
     try {
+      if (!ADMIN_GATEWAY_URL) {
+        alert('管理员服务尚未配置，无法验证密钥。');
+        return;
+      }
       setLoading(true);
       const trimmed = adminPassword.trim();
-      const res = await fetch(`${API_BASE_URL}/api/admin/verify`, {
+      const res = await fetch(`${ADMIN_GATEWAY_URL}/admin/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: trimmed }),

@@ -315,6 +315,10 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
   const get=async(key:string)=>store.get(key,{type:'json',consistency:'strong'});
   const put=(key:string,value:unknown)=>store.set(key,JSON.stringify(value));
   const sessionKey=(id:string)=>`sessions/${id}.json`,jobKey=(id:string)=>`jobs/${id}.json`;
+  const adminSessionToken=(issuedAt:number)=>{
+    const payload=Buffer.from(JSON.stringify({issuedAt})).toString('base64url');
+    return `${payload}.${createHmac('sha256',env.ADMIN_SESSION_SECRET||'').update(payload).digest('base64url')}`;
+  };
   // Bounded cleanup makes progress across requests without loading large objects into memory.
   const cleanup=async(id:string)=>{
     const chunks=await store.list({prefix:`chunks/${id}/`,consistency:'strong'});
@@ -334,7 +338,23 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
     const path=new URL(request.url).pathname;
     if(path==='/health'&&request.method==='GET')return json({service:'busline-city-gateway',platform:'edgeone',version:1,
       configured:!!env.GITHUB_DISPATCH_TOKEN&&(env.CALLBACK_SECRET?.length||0)>=32&&(env.RATE_LIMIT_SALT?.length||0)>=16});
-    if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization,x-city-upload-token','Access-Control-Max-Age':'600'}});
+    if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization,x-admin-session,x-city-upload-token','Access-Control-Max-Age':'600'}});
+    if(path==='/admin/verify'){
+      if(request.method!=='POST')throw fail(405,'管理员验证只接受 POST 请求。');
+      if(!env.ADMIN_PASSWORD||!env.ADMIN_SESSION_SECRET)throw fail(503,'管理员服务尚未配置。');
+      const ip=clientIp||request.headers.get('X-Forwarded-For')||'unknown';
+      const attemptKey=`admin-login/${gatewaySignature(env.ADMIN_SESSION_SECRET,ip).slice(0,40)}.json`;
+      const previous=await get(attemptKey),now=Date.now(),windowMs=15*60_000;
+      const attempt=previous&&previous.resetAt>now?previous:{count:0,resetAt:now+windowMs};
+      if(attempt.count>=5)throw fail(429,'尝试次数过多，请 15 分钟后再试。');
+      const input=await jsonBody(request,512),password=typeof input.password==='string'?input.password:'';
+      if(!equal(password,env.ADMIN_PASSWORD)){
+        await put(attemptKey,{...attempt,count:attempt.count+1});
+        throw fail(401,'管理员密钥不正确。');
+      }
+      await store.delete(attemptKey);
+      return json({success:true,sessionToken:adminSessionToken(now),expiresIn:6*60*60_000});
+    }
     const wechatResponse=await handleWechatGateway(request,env,json,transport);if(wechatResponse)return wechatResponse;
     const gameResponse=await handleGameGateway(request,env,json,transport);if(gameResponse)return gameResponse;
     if(!env.GITHUB_DISPATCH_TOKEN||(env.CALLBACK_SECRET?.length||0)<32||(env.RATE_LIMIT_SALT?.length||0)<16)throw fail(503,'上传入口尚未配置完成。');
@@ -420,6 +440,6 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
       if(!response.ok){await put(jobKey(id),{...job,submitted:true,state:'failed',message:'无法确认远端保存任务是否启动，请稍后检查任务。',updatedAt:Date.now()});throw fail(502,'无法启动远端保存；本地地图不受影响。');}
       return json({id,city:job.city,state:'queued',message:'已提交，等待校验并保存到 GitHub。'},202);
     });
-  }catch(error:any){const status=[400,401,403,404,409,413,429,502,503].includes(error.status)?error.status:503;
+  }catch(error:any){const status=[400,401,403,404,405,409,413,429,502,503].includes(error.status)?error.status:503;
     return json({error:status===503?'上传服务暂时不可用，请稍后重试。':error.message},status);}
 }

@@ -7,6 +7,7 @@
    - `SUPABASE_ANON_KEY`：Supabase 的 anon/publishable key。它只保存在 EdgeOne，用于代理认证和受 RLS/RPC 约束的请求；不要填写 service_role key，也不要把它或任何密钥写入前端。
    - `ALLOWED_ORIGINS`：保留现有域名并按需加入预览域名。
 4. 前端构建变量填写 `VITE_GAME_GATEWAY_URL` 为同一个 EdgeOne 网关 HTTPS 地址，再重新部署前端；此变量只是网关地址，不含任何密钥。未填写时，小游戏照常离线运行，账号和排行榜显示为未启用。
+5. 如需使用隐藏管理员测试入口，在同一 EdgeOne Pages Function 配置服务端变量 `ADMIN_PASSWORD`（按管理员约定的密钥填写）与随机的 `ADMIN_SESSION_SECRET`。两者都不能使用 `VITE_` 前缀，也不能写进前端或仓库。管理员校验会通过游戏网关而非静态网站的 `/api` 路径完成。
 
 网关继续保留原 `/uploads` 与 GitHub Actions 写入流程。账号接口使用 `/game-auth/*`、`/game-runs*` 和 `/leaderboards`，与城市上传的 GitHub Token、Blob 存储和回调密钥完全分离。
 
