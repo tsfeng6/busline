@@ -28,7 +28,11 @@ export const PROVINCE_CITIES:Record<string,string[]>={
     '西藏自治区': ['拉萨市', '日喀则市', '昌都市', '林芝市', '山南市', '那曲市'],
     '陕西省': ['西安市', '铜川市', '宝鸡市', '咸阳市', '渭南市', '延安市', '汉中市', '榆林市', '安康市', '商洛市'],
     '甘肃省': ['兰州市', '嘉峪关市', '金昌市', '白银市', '天水市', '武威市', '张掖市', '平凉市', '酒泉市', '庆阳市', '定西市', '陇南市'],
-    '青海省': ['西宁市', '海东市'],
+    // Qinghai has two prefecture-level cities and six autonomous prefectures.
+    // The game catalogue falls back to this table when an older published
+    // overview has no province field, so omitting the prefectures silently
+    // hid their already-published line snapshots from the province selector.
+    '青海省': ['西宁市', '海东市', '海北藏族自治州', '黄南藏族自治州', '海南藏族自治州', '果洛藏族自治州', '玉树藏族自治州', '海西蒙古族藏族自治州'],
     '宁夏回族自治区': ['银川市', '石嘴山市', '吴忠市', '固原市', '中卫市'],
     '新疆维吾尔自治区': ['乌鲁木齐市', '克拉玛依市', '吐鲁番市', '哈密市']
   };
