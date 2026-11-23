@@ -55,6 +55,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { getGameTimeLimit, formatGameTime } from './utils/gameTimer';
+import { gameAccountEnabled, finishGameRun, getGameAccount, getGameLeaderboard, signInGameAccount, signUpGameAccount, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
 
 const isFirebaseEnabled = () => true;
 
@@ -338,6 +339,20 @@ export default function App() {
   const [gameLoading, setGameLoading] = useState(false);
   const [gameLoadingText, setGameLoadingText] = useState('正在读取已有线路数据…');
   const [gameScore, setGameScore] = useState(0);
+  const [gameAccount, setGameAccount] = useState<GameAccount | null>(null);
+  const [gameAccessToken, setGameAccessToken] = useState(() => { try { return sessionStorage.getItem('busline_game_access_token') || ''; } catch { return ''; } });
+  const [gameAuthForm, setGameAuthForm] = useState({ email: '', password: '', displayName: '' });
+  const [gameAuthBusy, setGameAuthBusy] = useState(false);
+  const [gameAuthMessage, setGameAuthMessage] = useState('');
+  const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  useEffect(() => {
+    if (!gameAccessToken || !gameAccountEnabled) return;
+    getGameAccount(gameAccessToken).then(result => setGameAccount(result.account)).catch(() => {
+      try { sessionStorage.removeItem('busline_game_access_token'); } catch {}
+      setGameAccessToken('');
+    });
+  }, [gameAccessToken]);
   const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [gameCatalog,setGameCatalog]=useState<PublishedCity[]>([]);
   const [gameDataError,setGameDataError]=useState('');
@@ -415,7 +430,28 @@ export default function App() {
   const [reviewHoveredStop, setReviewHoveredStop] = useState<string | null>(null);
   const prevMapModeBeforeGameRef = useRef<'normal' | 'satellite' | 'blank' | null>(null);
   const gameSessionIdRef = useRef(0);
+  const gameRunRef = useRef<GameRun | null>(null);
   const isMinigameActiveRef = useRef(false);
+  const leaderboardKey = (mode: 'line' | 'station' | 'city' | 'county', difficulty: 'easy' | 'medium' | 'hard' | 'hell'): GameLeaderboardKey =>
+    ({ game: mode, difficulty: (mode === 'line' || mode === 'station' ? difficulty : 'hard') as GameLeaderboardKey['difficulty'] });
+  const refreshLeaderboard = useCallback(async (key: GameLeaderboardKey) => {
+    if (!gameAccountEnabled) return;
+    setLeaderboardLoading(true);
+    try { setLeaderboardEntries((await getGameLeaderboard(key, gameAccessToken || undefined)).entries); }
+    catch { setLeaderboardEntries([]); }
+    finally { setLeaderboardLoading(false); }
+  }, [gameAccessToken]);
+  useEffect(() => {
+    if (showMinigameModal && gameMode) void refreshLeaderboard(leaderboardKey(gameMode, gameDifficulty));
+  }, [showMinigameModal, gameMode, gameDifficulty, refreshLeaderboard]);
+  const settleGameLeaderboard = useCallback((score: number) => {
+    const run = gameRunRef.current;
+    gameRunRef.current = null;
+    if (!run || !gameAccessToken) return;
+    void finishGameRun(run.id, score, gameAccessToken)
+      .then(() => refreshLeaderboard({ game: run.game, difficulty: run.difficulty }))
+      .catch(() => setGameAuthMessage('本局未能写入排行榜，不影响本地成绩。'));
+  }, [gameAccessToken, refreshLeaderboard]);
   const finishGameOnTimeout = useCallback(() => {
     if (gameTimedOutRef.current) return;
     gameTimedOutRef.current = true;
@@ -428,7 +464,8 @@ export default function App() {
     setGameFeedback(null);
     setConfirmQuitGame(false);
     setGameState('gameover');
-  }, []);
+    settleGameLeaderboard(gameScore);
+  }, [gameScore, settleGameLeaderboard]);
 
   // Use a deadline so background-tab throttling cannot extend the challenge.
   // Loading questions pauses the clock; each new question keeps the same budget.
@@ -643,6 +680,12 @@ export default function App() {
     setReviewIndex(0);
     setReviewAutoPlay(false);
     setReviewHoveredStop(null);
+    gameRunRef.current = null;
+    if (gameAccount && gameAccessToken && gameAccountEnabled) {
+      void startGameRun(leaderboardKey(mode, diff), gameAccessToken)
+        .then(result => { gameRunRef.current = result.run; })
+        .catch(() => setGameAuthMessage('本局未接入排行榜，不影响本地挑战。'));
+    }
 
     setMapMode('normal');
 
@@ -852,6 +895,7 @@ export default function App() {
         setGameUserInput('');
         const nextNum = gameQuestionNum + 1;
         if (gameMode === 'city' && nextNum > 10) {
+          settleGameLeaderboard(newScore);
           setGameState('gameover');
           return;
         }
@@ -862,6 +906,7 @@ export default function App() {
       setGameFeedback({ correct: false, msg: `回答错误！正确答案是：${gameQuestionData.correctAnswer}` });
       setTimeout(() => {
         if (gameSessionIdRef.current !== submittedSessionId || gameTimedOutRef.current) return;
+        settleGameLeaderboard(gameScore);
         setGameState('gameover');
       }, 1500);
     }
@@ -8033,6 +8078,35 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       </div>
                       <p className="text-xs text-slate-500 font-medium">挑战你的路网知识，解锁“巴士之神”至高荣誉！</p>
                     </div>
+
+                    {gameAccountEnabled && (
+                      <div className="rounded-2xl border border-m3-outline-variant/30 bg-m3-surface p-3 space-y-2">
+                        {gameAccount ? (
+                          <div className="flex items-center justify-between gap-3 text-xs">
+                            <span className="font-black text-slate-800">玩家：{gameAccount.displayName}</span>
+                            <button type="button" onClick={() => { try { sessionStorage.removeItem('busline_game_access_token'); } catch {} setGameAccessToken(''); setGameAccount(null); }} className="text-slate-500 hover:text-slate-800">退出登录</button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="grid grid-cols-2 gap-2">
+                              <input value={gameAuthForm.email} onChange={e => setGameAuthForm(v => ({...v,email:e.target.value}))} placeholder="邮箱" className="px-2.5 py-2 rounded-lg border border-m3-outline-variant/30 text-xs" />
+                              <input type="password" value={gameAuthForm.password} onChange={e => setGameAuthForm(v => ({...v,password:e.target.value}))} placeholder="密码（至少8位）" className="px-2.5 py-2 rounded-lg border border-m3-outline-variant/30 text-xs" />
+                            </div>
+                            <div className="flex gap-2">
+                              <input value={gameAuthForm.displayName} onChange={e => setGameAuthForm(v => ({...v,displayName:e.target.value}))} placeholder="昵称（注册时填写）" className="flex-1 px-2.5 py-2 rounded-lg border border-m3-outline-variant/30 text-xs" />
+                              <button type="button" disabled={gameAuthBusy} onClick={async () => { setGameAuthBusy(true); setGameAuthMessage(''); try { const r=await signInGameAccount(gameAuthForm.email,gameAuthForm.password); setGameAccount(r.account); setGameAccessToken(r.accessToken); sessionStorage.setItem('busline_game_access_token',r.accessToken); } catch(e:any) { setGameAuthMessage(e.message); } finally { setGameAuthBusy(false); } }} className="px-3 rounded-lg bg-m3-surface-container text-xs font-bold">登录</button>
+                              <button type="button" disabled={gameAuthBusy} onClick={async () => { setGameAuthBusy(true); setGameAuthMessage(''); try { const r=await signUpGameAccount(gameAuthForm.email,gameAuthForm.password,gameAuthForm.displayName); if (r.accessToken && r.account) { setGameAccount(r.account); setGameAccessToken(r.accessToken); sessionStorage.setItem('busline_game_access_token',r.accessToken); } else setGameAuthMessage('注册成功，请先完成邮箱验证后登录。'); } catch(e:any) { setGameAuthMessage(e.message); } finally { setGameAuthBusy(false); } }} className="px-3 rounded-lg bg-m3-primary text-m3-on-primary text-xs font-bold">注册</button>
+                            </div>
+                          </>
+                        )}
+                        {gameAuthMessage && <p className="text-[11px] text-slate-500">{gameAuthMessage}</p>}
+                        {gameMode && <div className="border-t border-m3-outline-variant/20 pt-2 text-[11px]">
+                          <div className="flex justify-between text-slate-600"><span className="font-bold">本榜前五</span><button type="button" onClick={() => void refreshLeaderboard(leaderboardKey(gameMode,gameDifficulty))} className="text-m3-primary">刷新</button></div>
+                          {leaderboardLoading ? <p className="mt-1 text-slate-500">读取中…</p> : leaderboardEntries.slice(0,5).map(item => <p key={item.rank + '-' + item.displayName} className={'mt-1 flex justify-between ' + (item.isCurrentUser ? 'font-black text-m3-primary' : 'text-slate-600')}><span>{item.rank}. {item.displayName}</span><span>{item.score} 分</span></p>)}
+                          {!leaderboardLoading && !leaderboardEntries.length && <p className="mt-1 text-slate-500">暂无成绩</p>}
+                        </div>}
+                      </div>
+                    )}
 
                     {/* Mode selection */}
                     <div className="space-y-3">

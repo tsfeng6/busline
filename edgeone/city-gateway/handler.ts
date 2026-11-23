@@ -16,6 +16,58 @@ const fail=(status:number,message:string)=>Object.assign(Error(message),{status}
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 const equal=(a:string,b:string)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 export const gatewaySignature=(secret:string,text:string)=>createHmac('sha256',secret).update(text).digest('hex');
+type GameName='line'|'station'|'city'|'county';type GameDifficulty='easy'|'hell'|'hard';
+const validLeaderboard=(game:any,difficulty:any):game is GameName=>
+  (['line','station'].includes(game)&&['easy','hell'].includes(difficulty))||(['city','county'].includes(game)&&difficulty==='hard');
+const gameAccount=(user:any):{id:string;email?:string;displayName:string}=>({id:String(user?.id||''),email:user?.email?String(user.email):undefined,displayName:String(user?.user_metadata?.display_name||'巴士玩家').slice(0,24)});
+async function handleGameGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
+  const url=new URL(request.url),path=url.pathname;
+  const configured=!!env.SUPABASE_URL&&!!env.SUPABASE_ANON_KEY;
+  if(path==='/leaderboards'&&request.method==='GET'&&!configured)return json({entries:[],disabled:true},200);
+  if(!path.startsWith('/game-auth/')&&!path.startsWith('/game-runs')&&path!=='/leaderboards')return null;
+  if(!configured)throw fail(503,'账号与排行榜服务尚未配置。');
+  const base=env.SUPABASE_URL!.replace(/\/$/,'');
+  if(!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(base))throw fail(503,'账号服务配置无效。');
+  const bearer=request.headers.get('authorization')||'';
+  const supabase=async(pathname:string,init:RequestInit={},needsUser=false)=>{
+    if(needsUser&&!/^Bearer\s+\S+$/i.test(bearer))throw fail(401,'请先登录。');
+    const response=await transport(base+pathname,{...init,headers:{apikey:env.SUPABASE_ANON_KEY!,...(needsUser?{Authorization:bearer}:{}),'Content-Type':'application/json',...(init.headers||{})},signal:AbortSignal.timeout(15000)});
+    const body=await response.json().catch(()=>({}));
+    if(!response.ok){const message=String(body.msg||body.message||body.error_description||'账号服务暂时不可用。');throw fail(response.status===401?401:400,message.slice(0,160));}
+    return body;
+  };
+  if(path==='/game-auth/sign-up'&&request.method==='POST'){
+    const input=await jsonBody(request,2048),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||''),displayName=String(input.displayName||'').trim();
+    if(!/^\S+@\S+\.\S+$/.test(email)||password.length<8||password.length>128||displayName.length<2||displayName.length>24)throw fail(400,'请填写有效邮箱、至少 8 位密码和 2–24 字昵称。');
+    const data=await supabase('/auth/v1/signup',{method:'POST',body:JSON.stringify({email,password,data:{display_name:displayName}})});
+    return json({account:data.user?gameAccount(data.user):undefined,accessToken:data.session?.access_token,confirmationRequired:!data.session});
+  }
+  if(path==='/game-auth/sign-in'&&request.method==='POST'){
+    const input=await jsonBody(request,2048),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||'');
+    if(!/^\S+@\S+\.\S+$/.test(email)||!password)throw fail(400,'邮箱或密码无效。');
+    const data=await supabase('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})});
+    return json({account:gameAccount(data.user),accessToken:data.access_token});
+  }
+  if(path==='/game-auth/me'&&request.method==='GET')return json({account:gameAccount(await supabase('/auth/v1/user',{},true))});
+  if(path==='/leaderboards'&&request.method==='GET'){
+    const game=url.searchParams.get('game'),difficulty=url.searchParams.get('difficulty');if(!validLeaderboard(game,difficulty))throw fail(400,'不存在这个游戏榜单。');
+    const data=await supabase('/rest/v1/rpc/get_game_leaderboard',{method:'POST',body:JSON.stringify({p_game:game,p_difficulty:difficulty})},/^Bearer\s+\S+$/i.test(bearer));
+    return json({entries:(Array.isArray(data)?data:[]).map((item:any)=>({rank:Number(item.rank),displayName:String(item.display_name),score:Number(item.score),achievedAt:String(item.achieved_at),isCurrentUser:item.is_current_user===true}))});
+  }
+  if(path==='/game-runs'&&request.method==='POST'){
+    const input=await jsonBody(request,512);if(!validLeaderboard(input.game,input.difficulty))throw fail(400,'不存在这个游戏榜单。');
+    const data=await supabase('/rest/v1/rpc/start_game_run',{method:'POST',body:JSON.stringify({p_game:input.game,p_difficulty:input.difficulty})},true);
+    const run=Array.isArray(data)?data[0]:data;
+    return json({run:{id:run.id,game:run.game,difficulty:run.difficulty,startedAt:run.started_at}},201);
+  }
+  const finish=/^\/game-runs\/([a-f0-9-]{36})\/finish$/.exec(path);
+  if(finish&&request.method==='POST'){
+    const input=await jsonBody(request,512),score=Number(input.score);if(!Number.isInteger(score)||score<0||score>2000)throw fail(400,'分数无效。');
+    const data=await supabase('/rest/v1/rpc/finish_game_run',{method:'POST',body:JSON.stringify({p_run_id:finish[1],p_score:score})},true);
+    const row=Array.isArray(data)?data[0]:data;return json({accepted:row?.accepted===true,bestScore:Number(row?.best_score||0),rank:row?.rank===null?undefined:Number(row?.rank)});
+  }
+  throw fail(404,'没有这个账号接口。');
+}
 async function bodyBytes(request:Request,limit:number){
   if(Number(request.headers.get('content-length')||0)>limit)throw fail(413,'请求内容过大。');
   // Some Node function adapters expose arrayBuffer()/text(), but not a Web ReadableStream body.
@@ -63,6 +115,8 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
     const path=new URL(request.url).pathname;
     if(path==='/health'&&request.method==='GET')return json({service:'busline-city-gateway',platform:'edgeone',version:1,
       configured:!!env.GITHUB_DISPATCH_TOKEN&&(env.CALLBACK_SECRET?.length||0)>=32&&(env.RATE_LIMIT_SALT?.length||0)>=16});
+    if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization,x-city-upload-token','Access-Control-Max-Age':'600'}});
+    const gameResponse=await handleGameGateway(request,env,json,transport);if(gameResponse)return gameResponse;
     if(!env.GITHUB_DISPATCH_TOKEN||(env.CALLBACK_SECRET?.length||0)<32||(env.RATE_LIMIT_SALT?.length||0)<16)throw fail(503,'上传入口尚未配置完成。');
     const repo=env.GITHUB_REPO||'tsfeng6/busline',ref=env.GITHUB_WORKFLOW_REF||'main';
     if(!/^[\w.-]+\/[\w.-]+$/.test(repo)||!/^[-\w/]+$/.test(ref))throw fail(503,'仓库配置无效。');
@@ -96,7 +150,6 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
       return new Response(part,{headers:{'Content-Type':'application/octet-stream','Cache-Control':'no-store'}});
     }
     if(!allowed.includes(origin))throw fail(403,'此来源不允许访问上传入口。');
-    if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,x-city-upload-token','Access-Control-Max-Age':'600'}});
     if(request.method==='GET'&&/^\/jobs\/[^/]+$/.test(path)){
       const id=path.split('/')[2];if(!uuid.test(id))throw fail(400,'任务编号无效。');
       const job=await get(jobKey(id));if(!job)throw fail(404,'任务不存在。');
