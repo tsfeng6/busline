@@ -16,7 +16,7 @@
 
 在同一个 EdgeOne Pages Function 的 Production 环境变量中追加（全部为服务端变量）：
 
-- `SUPABASE_SERVICE_ROLE_KEY`：仅供 `/wechat/*` 使用的 Supabase service_role key。绝不能使用 `VITE_` 前缀或提交到仓库。
+- `SUPABASE_SECRET_KEY`：仅供 `/wechat/*` 使用的 Supabase `sb_secret_...` key。绝不能使用 `VITE_` 前缀或提交到仓库。旧的 `SUPABASE_SERVICE_ROLE_KEY` 仍可作为兼容回退，但优先使用新版 Secret key。
 - `WECHAT_CALLBACK_TOKEN`：自行生成至少 16 个随机字符；在微信公众平台“基本配置”的 Token 填入完全相同的值。
 - `PUBLIC_APP_URL`：正式前端 HTTPS 地址，例如 `https://busline.cc`。
 - `PUBLIC_GATEWAY_URL`：本 EdgeOne Function 的正式 HTTPS 地址，例如 `https://gateway.busline.cc`。

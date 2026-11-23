@@ -28,12 +28,14 @@ const publicUrl=(value:string|undefined)=>{try{const url=new URL(value||'');retu
 async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
   const url=new URL(request.url),path=url.pathname;
   if(path!=='/wechat/callback'&&path!=='/wechat/login')return null;
-  const base=env.SUPABASE_URL?.replace(/\/$/,'')||'',serviceKey=env.SUPABASE_SERVICE_ROLE_KEY;
+  // Supabase's sb_secret keys supersede the legacy service_role JWT. Accept
+  // both during migration, but only send a legacy JWT as Authorization.
+  const base=env.SUPABASE_URL?.replace(/\/$/,'')||'',serviceKey=env.SUPABASE_SECRET_KEY||env.SUPABASE_SERVICE_ROLE_KEY;
   const callbackToken=env.WECHAT_CALLBACK_TOKEN||'',appUrl=publicUrl(env.PUBLIC_APP_URL),gatewayUrl=publicUrl(env.PUBLIC_GATEWAY_URL);
   if(!base||!serviceKey||!callbackToken||!appUrl||!gatewayUrl)throw fail(503,'微信公众号账号服务尚未配置。');
   if(!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(base)||callbackToken.length<16)throw fail(503,'微信公众号账号服务配置无效。');
   const admin=async(pathname:string,init:RequestInit={})=>{
-    const response=await transport(base+pathname,{...init,headers:{apikey:serviceKey,Authorization:`Bearer ${serviceKey}`,'Content-Type':'application/json',...(init.headers||{})},signal:AbortSignal.timeout(15000)});
+    const legacyJwt=/^eyJ/.test(serviceKey);const response=await transport(base+pathname,{...init,headers:{apikey:serviceKey,...(legacyJwt?{Authorization:`Bearer ${serviceKey}`} : {}),'Content-Type':'application/json',...(init.headers||{})},signal:AbortSignal.timeout(15000)});
     const body=await response.json().catch(()=>({}));if(!response.ok)throw fail(503,String(body.message||body.msg||'账号服务暂时不可用。').slice(0,120));return body;
   };
   const xml=(content:string,status=200)=>new Response(content,{status,headers:{'Content-Type':'application/xml; charset=utf-8','Cache-Control':'no-store'}});
