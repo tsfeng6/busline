@@ -989,7 +989,6 @@ export default function App() {
   timelineMinuteRef.current = timelineMinute;
   const displayedLineNamesRef = useRef<string[]>([]);
   const timelineActiveCount = useMemo(() => timelineLines.filter(line => isLineOperating(line, timelineMinute) === true).length, [timelineLines, timelineMinute]);
-  const timelineUnknownCount = useMemo(() => timelineLines.filter(line => isLineOperating(line, 0) === null).length, [timelineLines]);
 
   const [aiSearchProgress, setAISearchProgress] = useState('');
   const [aiRegionContext, setAIRegionContext] = useState<AIRegionContext | null>(null);
@@ -3250,6 +3249,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         if (version === searchVersionRef.current) setIsSearching(false);
       }
     }
+    // The timeline is an estimate based on a concrete first/last departure.
+    // Date-specific schedules cannot be placed on one daily axis.
+    lines = lines.filter(line => isLineOperating(line, 0) !== null);
     if (version !== searchVersionRef.current || map !== mapRef.current || isMinigameActiveRef.current || !lines.length) return;
     setTimelineLines(lines);
     setSelectedStop(null); setSelectedSegmentLines(null); setActiveBusLine(null); setStationConnectivityCard(null);
@@ -6210,7 +6212,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     if (!showTimeline || !timelinePlaying) return;
     const timer = window.setInterval(() => {
       setTimelineMinute(minute => minute >= 1439 ? 0 : minute + 1);
-    }, 750);
+    }, 3000);
     return () => window.clearInterval(timer);
   }, [showTimeline, timelinePlaying]);
 
@@ -7076,7 +7078,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
 
         {showTimeline && <TimelineBar minute={timelineMinute} onChange={minute => { setTimelinePlaying(false); setTimelineMinute(minute); setSelectedSegmentLines(null); setSelectedStop(null); }} onClose={() => setShowTimeline(false)} onTogglePlayback={() => setTimelinePlaying(value => !value)} playing={timelinePlaying}
-          active={timelineActiveCount} total={timelineLines.length} unknown={timelineUnknownCount} />}
+          active={timelineActiveCount} total={timelineLines.length} />}
 
         {/* Custom Drawing Mode HUD Floating Toolbar Panel */}
         {isDrawingMode && (

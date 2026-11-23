@@ -1,8 +1,8 @@
 import React from 'react';
 import { Pause, Play, X } from 'lucide-react';
 import { formatTimelineMinute } from '../utils/timeline';
-export function TimelineBar({ minute, onChange, onClose, onTogglePlayback, playing, active, total, unknown }: {
-  minute: number; onChange: (value: number) => void; onClose: () => void; onTogglePlayback: () => void; playing: boolean; active: number; total: number; unknown: number;
+export function TimelineBar({ minute, onChange, onClose, onTogglePlayback, playing, active, total }: {
+  minute: number; onChange: (value: number) => void; onClose: () => void; onTogglePlayback: () => void; playing: boolean; active: number; total: number;
 }) {
   return <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-40 w-[min(640px,calc(100vw-32px))] rounded-3xl bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 shadow-xl px-5 py-3 pointer-events-auto">
     <div className="flex items-center justify-between gap-2 mb-2">
