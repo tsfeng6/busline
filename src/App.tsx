@@ -3151,13 +3151,26 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const getDistSq = (p1: [number, number], p2: [number, number]) => {
       return Math.pow(p1[0] - p2[0], 2) + Math.pow(p1[1] - p2[1], 2);
     };
+    const normalized = (value: string) => value.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').replace(/\s*-\s*\d+$/, '').trim();
+    const cleanStopName = normalized(name);
+    const matchesStop = (stop: any) => normalized(stop?.name || '') === cleanStopName
+      && getDistSq(getLatLng(stop.location), location) < 0.0000005;
 
-    if (sharedMapDataRef.current) {
-      const normalized = (value: string) => value.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').trim();
-      const lines = [...fetchedLinesCache.current.values()].filter(line => !isLineNameBlockedRef(line.name)
-        && line.via_stops?.some(stop => normalized(stop.name || '') === normalized(name)
-          && getDistSq(getLatLng(stop.location), location) < 0.0000005)).map(line => line.name);
-      if (lines.length) return { name, address: '', lines, isBusStop: true };
+    // A viewport tile can contain only the routes available in its currently
+    // loaded area. Always consult the complete saved city snapshot as well,
+    // otherwise clicking a stop may show merely a subset of its routes.
+    const savedCity = await cityDataCache.get(city || currentCity).catch(() => null);
+    const localLines = new Set<string>();
+    for (const line of fetchedLinesCache.current.values()) {
+      if (!isLineNameBlockedRef(line.name) && line.via_stops?.some(matchesStop)) localLines.add(line.name);
+    }
+    for (const line of savedCity?.lines || []) {
+      if (!isLineNameBlockedRef(line.name) && line.via_stops?.some(matchesStop)) localLines.add(line.name);
+    }
+    // A retrieval-complete city snapshot is the authoritative local source;
+    // it already includes every collected direction and returns immediately.
+    if (savedCity?.retrievalComplete && localLines.size) {
+      return { name, address: '', lines: [...localLines], isBusStop: true };
     }
     const stationSupplement = discoverStationLines(AMap, city || currentCity,
       [{ name, location: { lng: location[0], lat: location[1] } }], () => false);
@@ -3170,8 +3183,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           val = { name, address: '', isBusStop: true, ...val,
             lines: [...new Set([...(val?.lines || []), ...stationLines])] };
         }
-        if (val && val.lines) {
-          const cleanStopName = name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').replace(/\s*-\s*\d+$/, '').trim();
+        if (val || localLines.size) {
+          val = { name, address: '', isBusStop: true, ...val,
+            lines: [...new Set([...localLines, ...(val?.lines || [])])] };
+        }
+        if (val?.lines) {
           const matchUserLines = showUserSubmittedData
             ? approvedUserLines
               .filter(ul => {
@@ -3348,6 +3364,24 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       setSelectionPos(getLatLng(selected.location));
       setTopCard('stop');
       setSelectedStop(selected);
+      // Tile payloads are intentionally compact and may not include every
+      // route serving this stop. Keep the card responsive with those lines,
+      // then hydrate it from the full city dataset and station lookup.
+      const selectedKey = selected.key;
+      void fetchStopDetails(selected.name, getLatLng(selected.location), (window as any).AMap, selected.city || currentCity)
+        .then(details => {
+          if (!details) return;
+          setSelectedStop((previous: any) => {
+            if (!previous || previous.key !== selectedKey) return previous;
+            return {
+              ...previous,
+              ...details,
+              key: selectedKey,
+              city: selected.city || currentCity,
+              lines: Array.from(new Set([...(previous.lines || []), ...(details.lines || [])]))
+            };
+          });
+        });
       return true;
     }
     const routes = layer.routesAt(point);
