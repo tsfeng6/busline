@@ -163,7 +163,7 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     if(needsUser&&!/^Bearer\s+\S+$/i.test(bearer))throw fail(401,'请先登录。');
     const response=await transport(base+pathname,{...init,headers:{apikey:env.SUPABASE_ANON_KEY!,...(needsUser?{Authorization:bearer}:{}),'Content-Type':'application/json',...(init.headers||{})},signal:AbortSignal.timeout(15000)});
     const body=await response.json().catch(()=>({}));
-    if(!response.ok){const message=String(body.msg||body.message||body.error_description||'账号服务暂时不可用。');throw fail(response.status===401?401:400,message.slice(0,160));}
+    if(!response.ok){const message=String(body.msg||body.message||body.error_description||'账号服务暂时不可用。');if(/get_game_leaderboard|start_game_run/.test(message))throw fail(409,'排行榜数据库尚未升级，请在 Supabase SQL Editor 重新执行 docs/supabase-game-auth.sql。');throw fail(response.status===401?401:400,message.slice(0,160));}
     return body;
   };
   const profileFor=async(auth:string)=>{
