@@ -4,7 +4,7 @@ import {clipRouteToRadius,distanceMeters,eligibleGameLines,regularGameRoute,rout
 export type GameMode='line'|'station'|'city'|'county';
 export type GameDifficulty='easy'|'medium'|'hard'|'hell';
 export type OfflineQuestion={targetCity:string;correctAnswer:string;promptText:string;options:string[];isFillIn:boolean;
- lineInfos?:BusLine[];networkPaths?:Point[][];networkStops?:{name:string;lngLat:Point}[];targetPoint?:{name:string;lngLat:Point};fallbackCenter?:Point;countyWindow?:{center:Point;radius:number};showBasemap?:boolean;showStops?:boolean;terminalLabels?:string[]};
+ lineInfos?:BusLine[];networkPaths?:Point[][];networkStops?:{name:string;lngLat:Point}[];targetPoint?:{name:string;lngLat:Point};fallbackCenter?:Point;countyWindow?:{center:Point;radius:number};showBasemap?:boolean;showStops?:boolean};
 export function shuffle<T>(array:T[],random= Math.random){const copy=[...array];for(let i=copy.length-1;i>0;i--){const j=Math.floor(random()*(i+1));[copy[i],copy[j]]=[copy[j],copy[i]];}return copy;}
 const stopName=(name:string)=>name.replace(/[（(].*?[）)]/g,'').replace(/公交站$/,'').trim();
 function compact(path:Point[]):Point[]{
@@ -19,7 +19,6 @@ function intermediateStops(lines:BusLine[]){
  for(const line of lines){const valid=(line.via_stops||[]).filter(stop=>stop.location);for(const stop of valid.slice(1,-1)){const key=`${stop.name}:${stop.location.lng},${stop.location.lat}`;found.set(key,{name:stop.name,lngLat:[stop.location.lng,stop.location.lat]});}}
  return [...found.values()];
 }
-function terminals(line:BusLine){const valid=(line.via_stops||[]).filter(stop=>stop.location);const start=line.start_stop||valid[0]?.name||'始发站',end=line.end_stop||valid.at(-1)?.name||'终点站';return `${start} → ${end}`;}
 function routeShape(name:string){const label=routeName(name).replace(/路$/,'');const match=label.match(/^([^\d]*)(\d+)(.*)$/);return {prefix:match?.[1]||'',digits:match?.[2]||'',suffix:match?.[3]||'',label};}
 function confusingLineChoices(answer:string,pool:BusLine[],random:()=>number){
  const a=routeShape(answer);const ranked=pool.map(line=>routeName(line.name)).filter(name=>name!==answer).map(name=>{const b=routeShape(name);let score=0;if(a.prefix&&a.prefix===b.prefix)score+=8;if(a.digits.length===b.digits.length)score+=4;if(a.suffix===b.suffix)score+=2;if(a.prefix===b.prefix&&a.digits&&b.digits)score+=2;return {name,score};}).sort((x,y)=>y.score-x.score||x.name.localeCompare(y.name,'zh-CN'));
@@ -36,7 +35,7 @@ export function createOfflineQuestion(mode:GameMode,difficulty:GameDifficulty,da
   const pool=eligibleGameLines(data.lines,difficulty),available=pool.filter(line=>routeName(line.name)!==previous);
   const line=shuffle(available.length?available:pool,random)[0];if(!line)throw Error('该城市暂无符合要求的常规线路，请更换城市。');
   const config=stage(mode,difficulty,number),answer=routeName(line.name),options=config.confusing?confusingLineChoices(answer,pool,random):choices(answer,pool.map(line=>routeName(line.name)),random);
-  return {targetCity:data.city,correctAnswer:answer,promptText:`请根据线路走向猜出线路名称（${data.city}）。`,options,isFillIn:config.isFillIn||options.length<2,lineInfos:[line],networkStops:intermediateStops([line]),showBasemap:config.showBasemap,showStops:config.showStops,terminalLabels:[terminals(line)]};
+  return {targetCity:data.city,correctAnswer:answer,promptText:`请根据线路走向猜出线路名称（${data.city}）。`,options,isFillIn:config.isFillIn||options.length<2,lineInfos:[line],networkStops:intermediateStops([line]),showBasemap:config.showBasemap,showStops:config.showStops};
  }
  if(mode==='station'){
   const config=stage(mode,difficulty,number),lines=data.lines.filter(line=>regularGameRoute(line.name));
@@ -51,7 +50,7 @@ export function createOfflineQuestion(mode:GameMode,difficulty:GameDifficulty,da
   if(!chosen)throw Error('该城市暂无符合此难度的已保存站点数据，请更换城市或难度。');
   const nearby=all.filter(item=>item.name!==chosen.name).sort((a,b)=>distanceMeters(a.lngLat,chosen.lngLat)-distanceMeters(b.lngLat,chosen.lngLat)).map(item=>item.name);
   const options=choices(chosen.name,config.confusing&&nearby.length?nearby:all.map(item=>item.name),random);
-  return {targetCity:data.city,correctAnswer:chosen.name,promptText:`请根据目标站点及经过的公交线路猜站名（${data.city}）。`,options,isFillIn:config.isFillIn||options.length<2,lineInfos:chosen.lines,networkStops:stops(chosen.lines).filter(stop=>distanceMeters(stop.lngLat,chosen.lngLat)>5),targetPoint:{name:chosen.name,lngLat:chosen.lngLat},fallbackCenter:chosen.lngLat,showBasemap:config.showBasemap,showStops:config.showStops,terminalLabels:chosen.lines.map(terminals)};
+  return {targetCity:data.city,correctAnswer:chosen.name,promptText:`请根据目标站点及经过的公交线路猜站名（${data.city}）。`,options,isFillIn:config.isFillIn||options.length<2,lineInfos:chosen.lines,networkStops:stops(chosen.lines).filter(stop=>distanceMeters(stop.lngLat,chosen.lngLat)>5),targetPoint:{name:chosen.name,lngLat:chosen.lngLat},fallbackCenter:chosen.lngLat,showBasemap:config.showBasemap,showStops:config.showStops};
  }
  if(mode==='county'){
   if(!county)throw Error('该省份暂无已保存的县政府站点定位信息。');

@@ -386,7 +386,6 @@ export default function App() {
     options?: string[];
     isFillIn: boolean;
     promptText: string;
-    terminalLabels?: string[];
   } | null>(null);
   const [gameUserInput, setGameUserInput] = useState('');
   const [gameFeedback, setGameFeedback] = useState<{ correct: boolean; msg: string } | null>(null);
@@ -406,7 +405,6 @@ export default function App() {
     targetPoint?: { name: string; lngLat: [number, number] };
     fallbackCenter?: [number, number];
     countyWindow?: {center: Point; radius:number};
-    terminalLabels?: string[];
   };
   const [gameHistory, setGameHistory] = useState<GameHistoryItem[]>([]);
   const currentGameQuestionRef = useRef<Omit<GameHistoryItem, 'userAnswer' | 'isCorrect'> | null>(null);
@@ -718,7 +716,7 @@ export default function App() {
         gameDeadlineRef.current = null;
         setGameTimeLeft(timeLimit);
       }
-      setGameQuestionData({correctAnswer:question.correctAnswer,options:question.options,isFillIn:question.isFillIn,promptText:question.promptText,terminalLabels:question.terminalLabels});
+      setGameQuestionData({correctAnswer:question.correctAnswer,options:question.options,isFillIn:question.isFillIn,promptText:question.promptText});
     } catch(error:any) {
       if(gameSessionIdRef.current===sessionId){setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
     } finally {if(gameSessionIdRef.current===sessionId)setGameLoading(false);}
@@ -8234,15 +8232,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         <span className="tabular-nums">{gameHints.remaining}/7</span>
                       </motion.button>
                     </div>
-                    {gameQuestionData.terminalLabels && gameQuestionData.terminalLabels.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5" aria-label="线路始末站">
-                        {gameQuestionData.terminalLabels.map((label, index) => (
-                          <span key={`${label}-${index}`} className="max-w-full truncate rounded-lg bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-800 border border-emerald-200">
-                            始末站：{label}
-                          </span>
-                        ))}
-                      </div>
-                    )}
                     <AnimatePresence>
                       {gameHints.usedOnQuestion > 0 && !gameLoading && (
                         <motion.div
