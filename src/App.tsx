@@ -704,9 +704,12 @@ export default function App() {
         const markers=(question.networkStops||[]).map(stop=>new AMap.CircleMarker({center:stop.lngLat,radius:3.5,fillColor:'#52796F',strokeColor:'#fff',strokeWeight:1,zIndex:60,bubble:true}));
         markerGroupRef.current?.addOverlays(markers);
       }
-      if (mode==='line'&&paths[0]?.length) {
-        const first=paths[0][0],last=paths[0][paths[0].length-1];
-        markerGroupRef.current?.addOverlays([new AMap.CircleMarker({center:first,radius:7,fillColor:'#16a34a',strokeColor:'#fff',strokeWeight:2,zIndex:90}),new AMap.CircleMarker({center:last,radius:5,fillColor:'#ef4444',strokeColor:'#fff',strokeWeight:2,zIndex:92})]);
+      if ((mode==='line'||mode==='station') && paths.length) {
+        const terminalMarkers=paths.filter(path=>path.length).flatMap(path=>{
+          const first=path[0],last=path[path.length-1];
+          return [new AMap.CircleMarker({center:first,radius:7,fillColor:'#16a34a',strokeColor:'#fff',strokeWeight:2,zIndex:90}),new AMap.CircleMarker({center:last,radius:5,fillColor:'#ef4444',strokeColor:'#fff',strokeWeight:2,zIndex:92})];
+        });
+        markerGroupRef.current?.addOverlays(terminalMarkers);
       }
       if(question.targetPoint)markerGroupRef.current?.addOverlay(new AMap.CircleMarker({center:question.targetPoint.lngLat,radius:9,fillColor:'#ef4444',strokeColor:'#fff',strokeWeight:2,zIndex:95}));
       currentGameQuestionRef.current={...question,questionNum:qNum,mode,difficulty:diff,province};

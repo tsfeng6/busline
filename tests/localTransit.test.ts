@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
 import {regularGameRoute,eligibleGameLines,clipRouteToRadius,distanceMeters,nearbyLines,gpsToMap,claimDailyLocation,savedCountySeats,provinceForCity,radiusRing} from '../src/utils/localTransit';
-import {createOfflineQuestion,shuffle} from '../src/utils/offlineGame';
+import {createOfflineQuestion,gameStage,shuffle} from '../src/utils/offlineGame';
 import {getGameTimeLimit} from '../src/utils/gameTimer';
 import {CityDataCache} from '../src/utils/cityDataCache';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
@@ -57,15 +57,23 @@ test('all offline modes use real saved answers and the chosen city; county windo
  }
  const station=createOfflineQuestion('station','hell',snapshot,[],1);assert.ok(station.lineInfos?.every(line=>regularGameRoute(line.name)));
 });
-test('redesigned ladders apply staged map clues and preserve distinguishing line text',()=>{
+test('redesigned ladders apply the requested stage boundaries in both games',()=>{
  const snapshot=data();
  snapshot.lines.push(
   {id:'4',name:'12路(甲--乙)',city:'北京市',path:[[115.96,39.01],[116.06,39.01]],via_stops:[{name:'甲',location:{lng:115.96,lat:39.01}},{name:'中间',location:{lng:116,lat:39.01}},{name:'乙',location:{lng:116.06,lat:39.01}}]},
   {id:'5',name:'31路(甲--乙)',city:'北京市',path:[[115.96,39.02],[116.06,39.02]],via_stops:[{name:'甲',location:{lng:115.96,lat:39.02}},{name:'中间',location:{lng:116,lat:39.02}},{name:'乙',location:{lng:116.06,lat:39.02}}]}
  );
- const early=createOfflineQuestion('line','easy',snapshot,[],5),late=createOfflineQuestion('line','easy',snapshot,[],21),hell=createOfflineQuestion('line','hell',snapshot,[],11);
+ for(const mode of ['line','station'] as const){
+  assert.deepEqual(gameStage(mode,'easy',5),{showBasemap:true,showStops:true,isFillIn:false,confusing:false});
+  assert.deepEqual(gameStage(mode,'easy',6),{showBasemap:true,showStops:true,isFillIn:false,confusing:true});
+  assert.deepEqual(gameStage(mode,'easy',11),{showBasemap:false,showStops:true,isFillIn:false,confusing:true});
+  assert.deepEqual(gameStage(mode,'easy',21),{showBasemap:false,showStops:false,isFillIn:false,confusing:true});
+  assert.deepEqual(gameStage(mode,'hell',5),{showBasemap:true,showStops:true,isFillIn:true,confusing:false});
+  assert.deepEqual(gameStage(mode,'hell',6),{showBasemap:false,showStops:true,isFillIn:true,confusing:false});
+  assert.deepEqual(gameStage(mode,'hell',11),{showBasemap:false,showStops:false,isFillIn:true,confusing:false});
+ }
+ const early=createOfflineQuestion('line','easy',snapshot,[],5),late=createOfflineQuestion('line','easy',snapshot,[],21);
  assert.equal(early.showBasemap,true);assert.equal(early.showStops,true);assert.equal(late.showBasemap,false);assert.equal(late.showStops,false);
- assert.equal(hell.isFillIn,true);assert.equal(hell.showBasemap,false);assert.equal(hell.showStops,false);assert.ok(early.terminalLabels?.[0].includes('→'));
 });
 test('actual game generation never invokes provider search services and accepts only catalog cities',async()=>{
  const source=fs.readFileSync('src/App.tsx','utf8'),ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let declaration:ts.VariableDeclaration|undefined;
