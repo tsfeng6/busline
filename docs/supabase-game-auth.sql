@@ -109,7 +109,10 @@ begin
 end;
 $$;
 
-create or replace function public.get_game_leaderboard(p_game text, p_difficulty text)
+-- PostgreSQL cannot replace a function when its OUT-column shape changes.
+-- This function has no dependent database objects and reads existing runs.
+drop function if exists public.get_game_leaderboard(text, text);
+create function public.get_game_leaderboard(p_game text, p_difficulty text)
 returns table (rank bigint, display_name text, avatar_path text, score integer, achieved_at timestamptz, is_current_user boolean) language sql security definer set search_path = public as $$
   with best as (
     select distinct on (r.user_id) r.user_id, r.score, r.finished_at
