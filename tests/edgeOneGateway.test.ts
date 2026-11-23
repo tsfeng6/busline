@@ -50,6 +50,40 @@ test('session restore rejects anonymous and empty profiles, and resolves IDs for
  assert.match(logout.headers.get('Set-Cookie') || '', /busline_game_session=;.*Max-Age=0/);
  assert.equal((await restore()).status, 401);
 });
+test('password login and callback return the verified profile with the session cookie', async () => {
+ const {store} = fixture();
+ const accountEnv = {...env, SUPABASE_URL:'https://project.supabase.co', SUPABASE_ANON_KEY:'test-key'};
+ const id = '00000000-0000-0000-0000-000000000001';
+ const paths: string[] = [];
+ let profile: unknown[] = [{display_name:'测试用户'}];
+ const upstream: typeof fetch = async (input, init) => {
+   const path = new URL(String(input)).pathname;
+   paths.push(path);
+   if (path === '/auth/v1/token') return Response.json({access_token:'test-token', user:{id}});
+   assert.equal(path, '/rest/v1/rpc/current_game_profile');
+   assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer test-token');
+   return Response.json(profile);
+ };
+ const signIn = (path: string, init: RequestInit) => handleEdgeOneGateway(
+   new Request('https://gateway.example/game-auth/' + path, {...init, method:'POST'}), accountEnv, store, upstream,
+ );
+ const password = () => signIn('password-login', {body:JSON.stringify({accountName:'test_user', password:'test-password'})});
+ const callback = () => signIn('session', {headers:{Authorization:'Bearer test-token'}});
+ const result = await password();
+ assert.deepEqual(await result.json(), {signedIn:true, account:{id, displayName:'测试用户'}});
+ assert.match(result.headers.get('Set-Cookie') || '', /busline_game_session=test-token;.*Secure; HttpOnly/);
+ assert.deepEqual(paths.splice(0), ['/auth/v1/token', '/rest/v1/rpc/current_game_profile']);
+ profile = [{id, display_name:'测试用户'}];
+ const exchanged = await callback();
+ assert.deepEqual(await exchanged.json(), {signedIn:true, account:{id, displayName:'测试用户'}});
+ assert.ok(exchanged.headers.has('Set-Cookie'));
+ assert.deepEqual(paths.splice(0), ['/rest/v1/rpc/current_game_profile']);
+ profile = [];
+ const denied = await callback();
+ assert.equal(denied.status, 401);
+ assert.equal(denied.headers.has('Set-Cookie'), false);
+});
+
 test('EdgeOne browser upload -> HMAC Actions download preserves exact coordinates without AMap or Cloudflare',async()=>{
  const f=fixture();const original=sample();const job=await uploadCitySnapshot('https://upload.example',original,()=>{},f.browser);
  assert.equal(f.requests.length,1);

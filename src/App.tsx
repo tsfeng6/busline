@@ -371,7 +371,7 @@ export default function App() {
     if (!gameSessionRestoreRef.current) {
       if (accessToken) window.history.replaceState({}, '', window.location.pathname + window.location.search);
       gameSessionRestoreRef.current = accessToken
-        ? establishGameSession(accessToken).then(() => getGameAccount())
+        ? establishGameSession(accessToken)
         : getGameAccount();
     }
     const pendingProfile = gameSessionRestoreRef.current;

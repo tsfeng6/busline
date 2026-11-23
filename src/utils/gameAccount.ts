@@ -13,7 +13,7 @@ async function request<T>(path: string, init: RequestInit = {}, accessToken?: st
     ...init,
     credentials: 'include',
     signal: init.signal ?? AbortSignal.timeout(20000),
-    headers: { 'Content-Type': 'application/json', ...(accessToken && accessToken !== 'cookie' ? { Authorization: `Bearer ${accessToken}` } : {}), ...(init.headers || {}) }
+    headers: { ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...(accessToken && accessToken !== 'cookie' ? { Authorization: `Bearer ${accessToken}` } : {}), ...(init.headers || {}) }
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw Object.assign(Error(body.error || '排行榜服务暂时不可用。'), { status: response.status });
@@ -30,7 +30,7 @@ export async function completeWechatLink(token: string, accessToken: string) {
   return request<{ bound: true }>('/wechat/complete', { method: 'POST', body: JSON.stringify({ token }) }, accessToken);
 }
 export async function establishGameSession(accessToken: string) {
-  return request<{ signedIn: true }>('/game-auth/session', { method: 'POST' }, accessToken);
+  return sessionProfile(await request<SignInResponse>('/game-auth/session', { method: 'POST' }, accessToken));
 }
 export async function endGameSession() {
   const result = await request<{ signedOut: true }>('/game-auth/logout', { method: 'POST' });
@@ -40,14 +40,28 @@ export async function deleteGameAccount(accessToken?: string) {
   return request<{ deleted: true }>('/game-auth/delete', { method: 'POST', body: JSON.stringify({ confirm: 'DELETE' }) }, accessToken);
 }
 export async function passwordLogin(accountName: string, password: string) {
-  return request<{ signedIn: true }>('/game-auth/password-login', { method: 'POST', body: JSON.stringify({ accountName, password }) });
+  return sessionProfile(await request<SignInResponse>('/game-auth/password-login', {
+    method: 'POST', body: JSON.stringify({ accountName, password }),
+  }));
 }
-export async function getGameAccount() {
-  const result = await request<{ account: GameAccount }>('/game-auth/me');
-  if (typeof result?.account?.id !== 'string' || !result.account.id.trim()) {
+type SignInResponse = { signedIn: true; account?: GameAccount };
+
+function requireAccount(account?: GameAccount) {
+  if (typeof account?.id !== 'string' || !account.id.trim()) {
     throw Object.assign(Error('没有有效的登录资料。'), { status: 401 });
   }
-  return result;
+  return { account };
+}
+
+function sessionProfile(result: SignInResponse) {
+  if (result?.signedIn !== true) throw Error('登录未获确认，请重试。');
+  // During rollout an older gateway may still return only signedIn.
+  return result.account === undefined ? getGameAccount() : requireAccount(result.account);
+}
+
+export async function getGameAccount() {
+  const result = await request<{ account: GameAccount }>('/game-auth/me');
+  return requireAccount(result?.account);
 }
 export async function updateGameProfile(displayName: string, avatar?: File, accessToken?: string) {
   let avatarData: string | undefined;

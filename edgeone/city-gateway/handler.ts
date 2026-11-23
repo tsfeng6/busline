@@ -181,10 +181,28 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     return response.json();
   };
   const withAvatarUrl=(account:ReturnType<typeof gameAccount>)=>{if(account.avatarUrl)account.avatarUrl=base+'/storage/v1/object/public/game-avatars/'+account.avatarUrl;return account;};
+  const authenticatedProfile = async (auth: string, verifiedUser?: { id?: string }) => {
+    if (!auth) throw fail(401, '请先登录。');
+    const profile = await profileFor(auth);
+    const row = Array.isArray(profile) ? profile[0] : profile;
+    if (typeof row?.display_name !== 'string') throw fail(401, '未找到登录资料，请重新登录。');
+    // Older versions of the profile RPC omit the ID.
+    const user = uuid.test(row.id || '') ? null
+      : uuid.test(verifiedUser?.id || '') ? verifiedUser
+      : await supabase('/auth/v1/user', {}, true);
+    const account = withAvatarUrl(gameAccount(user, row));
+    if (!uuid.test(account.id)) throw fail(401, '登录已失效，请重新登录。');
+    return account;
+  };
+  const signedIn = (token: string, account: ReturnType<typeof gameAccount>) => {
+    const response = json({signedIn: true, account});
+    response.headers.set('Set-Cookie', sessionCookie(token, 3600));
+    return response;
+  };
   if(path==='/game-auth/session'&&request.method==='POST'){
     if(!/^Bearer\s+\S+$/i.test(headerBearer))throw fail(401,'请先登录。');
-    await supabase('/auth/v1/user',{},true);
-    const response=json({signedIn:true});response.headers.set('Set-Cookie',sessionCookie(headerBearer.replace(/^Bearer\s+/i,''),3600));return response;
+    const account = await authenticatedProfile(headerBearer);
+    return signedIn(headerBearer.replace(/^Bearer\s+/i, ''), account);
   }
   if(path==='/game-auth/logout'&&request.method==='POST'){
     const response=json({signedOut:true});response.headers.set('Set-Cookie',sessionCookie('',0));return response;
@@ -218,8 +236,11 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     if(!/^[a-z0-9_]{3,24}$/.test(accountName)||password.length<8||password.length>128)throw fail(400,'账号或密码格式无效。');
     const email=`acct-${hash(accountName).slice(0,32)}@login.busline.invalid`;
     const response=await transport(base+'/auth/v1/token?grant_type=password',{method:'POST',headers:{apikey:env.SUPABASE_ANON_KEY!,'Content-Type':'application/json'},body:JSON.stringify({email,password}),signal:AbortSignal.timeout(15000)}),data=await response.json().catch(()=>({}));
-    if(!response.ok||!data.access_token)throw fail(401,'账号或密码错误。');
-    const result=json({signedIn:true});result.headers.set('Set-Cookie',sessionCookie(String(data.access_token),3600));return result;
+    if (response.status === 429) throw fail(429, '登录尝试过于频繁，请稍后再试。');
+    if (response.status >= 500) throw fail(503, '登录服务暂时不可用。');
+    if(!response.ok||typeof data.access_token!=='string'||!data.access_token)throw fail(401,'账号或密码错误。');
+    const account = await authenticatedProfile('Bearer ' + data.access_token, data.user);
+    return signedIn(data.access_token, account);
   }
   if(path==='/game-auth/otp'&&request.method==='POST'){
     const input=await jsonBody(request,1024),phone=String(input.phone||'').trim();
@@ -239,14 +260,7 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
   // also returns the profile id. This avoids a second, serial /auth/v1/user
   // round trip on every page-load session restore.
   if(path==='/game-auth/me'&&request.method==='GET'){
-    if(!bearer)throw fail(401,'请先登录。');
-    const profile=await profileFor(bearer),row=Array.isArray(profile)?profile[0]:profile;
-    if(typeof row?.display_name!=='string')throw fail(401,'未找到登录资料，请重新登录。');
-    // Older deployments return profile fields without including the user ID.
-    const user=uuid.test(row.id||'')?null:await supabase('/auth/v1/user',{},true);
-    const account=withAvatarUrl(gameAccount(user,row));
-    if(!uuid.test(account.id))throw fail(401,'登录已失效，请重新登录。');
-    return json({account});
+    return json({account:await authenticatedProfile(bearer)});
   }
   if(path==='/game-profile'&&request.method==='POST'){
     const input=await jsonBody(request,300000),displayName=String(input.displayName||'').trim(),avatarData=input.avatarData===undefined?undefined:String(input.avatarData);

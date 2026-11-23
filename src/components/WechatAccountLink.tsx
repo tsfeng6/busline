@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { compressAvatar, deleteGameAccount, endGameSession, getGameAccount, passwordLogin, updateGameProfile, type GameAccount } from '../utils/gameAccount';
+import { compressAvatar, deleteGameAccount, endGameSession, passwordLogin, updateGameProfile, type GameAccount } from '../utils/gameAccount';
 
 const gateway = (import.meta.env.VITE_GAME_GATEWAY_URL || import.meta.env.VITE_CITY_UPDATE_GATEWAY_URL || '').replace(/\/$/, '');
 type ProfilePage = 'data' | 'settings' | 'about';
@@ -24,7 +24,20 @@ export function WechatAccountLink({ account, accessToken, authLoading, onSignedI
   useEffect(() => { if (!registrationToken) return; void fetch(`${gateway}/wechat/registration?token=${encodeURIComponent(registrationToken)}`, { credentials: 'include' }).then(async response => { const body = await response.json(); if (!response.ok) throw Error(body.error); setName(body.nickname || '巴士玩家'); }).catch((error: any) => setMessage(error.message || '注册链接无效或已过期。')); }, [registrationToken]);
 
   const save = async () => { try { setBusy('save'); setMessage(avatar ? '正在上传头像并保存资料…' : '正在保存资料…'); const result = await updateGameProfile(name || account!.displayName, avatar || undefined, accessToken); onSignedIn(result.account, accessToken); setAvatar(null); setAvatarPreview(''); setMessage('资料已保存。'); } catch (error: any) { setMessage(error.message || '保存失败。'); } finally { setBusy(null); } };
-  const loginWithPassword = async () => { try { setBusy('login'); setMessage('正在登录…'); await passwordLogin(accountName, password); const result = await getGameAccount(); onSignedIn(result.account, 'cookie'); setOpen(false); } catch (error: any) { setMessage(error.message || '登录失败。'); } finally { setBusy(null); } };
+  const loginWithPassword = async () => {
+    setBusy('login');
+    setMessage('正在登录…');
+    try {
+      const { account: signedInAccount } = await passwordLogin(accountName, password);
+      onSignedIn(signedInAccount, 'cookie');
+      setPassword('');
+      setOpen(false);
+    } catch (error: any) {
+      setMessage(error.message || '登录失败。');
+    } finally {
+      setBusy(null);
+    }
+  };
   const confirmWechatCode = async () => { try { setBusy('login'); setMessage('正在核验登录码…'); if (!gateway) throw Error('账号服务尚未配置。'); const response = await fetch(`${gateway}/wechat/web-login?code=${encodeURIComponent(loginCode.trim().toUpperCase())}`, { credentials: 'include' }), body = await response.json(); if (!response.ok) throw Error(body.error || '登录码无效。'); if (!body.actionUrl) throw Error('登录码无效或已过期。'); window.location.assign(body.actionUrl); } catch (error: any) { setMessage(error.message || '登录失败。'); setBusy(null); } };
   const register = async () => { try { if (password !== confirmPassword) throw Error('两次密码输入不一致。'); setBusy('register'); setMessage(avatar ? '正在上传头像并创建账号…' : '正在创建账号…'); const avatarData = avatar ? await compressAvatar(avatar) : undefined; const response = await fetch(`${gateway}/wechat/registration?token=${encodeURIComponent(registrationToken)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountName, displayName: name, password, avatarData }) }), body = await response.json(); if (!response.ok) throw Error(body.error || '注册失败。'); window.location.assign(body.actionUrl); } catch (error: any) { setMessage(error.message || '注册失败。'); setBusy(null); } };
   const logout = async () => {
