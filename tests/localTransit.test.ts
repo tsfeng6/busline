@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
 import {regularGameRoute,eligibleGameLines,clipRouteToRadius,distanceMeters,nearbyLines,gpsToMap,claimDailyLocation,savedCountySeats,provinceForCity,radiusRing} from '../src/utils/localTransit';
-import {createOfflineQuestion,gameStage,shuffle} from '../src/utils/offlineGame';
+import {createOfflineQuestion,gameStage,nearbyStationChoices,shuffle} from '../src/utils/offlineGame';
 import {getGameTimeLimit} from '../src/utils/gameTimer';
 import {CityDataCache} from '../src/utils/cityDataCache';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
@@ -74,6 +74,10 @@ test('redesigned ladders apply the requested stage boundaries in both games',()=
  }
  const early=createOfflineQuestion('line','easy',snapshot,[],5),late=createOfflineQuestion('line','easy',snapshot,[],21);
  assert.equal(early.showBasemap,true);assert.equal(early.showStops,true);assert.equal(late.showBasemap,false);assert.equal(late.showStops,false);
+});
+test('station distractors stay local and favour the nearest stops',()=>{
+ const options=nearbyStationChoices('目标站',['最近甲','最近乙','最近丙','较远丁','更远戊'],()=>0);
+ assert.ok(options.includes('目标站'));assert.deepEqual(options.filter(name=>name!=='目标站'),['最近甲','最近乙','最近丙']);
 });
 test('actual game generation never invokes provider search services and accepts only catalog cities',async()=>{
  const source=fs.readFileSync('src/App.tsx','utf8'),ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let declaration:ts.VariableDeclaration|undefined;

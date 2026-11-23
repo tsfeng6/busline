@@ -14,6 +14,16 @@ function compact(path:Point[]):Point[]{
  result.push(path[path.length-1]);return result;
 }
 function choices(answer:string,candidates:string[],random:()=>number){return shuffle([answer,...shuffle([...new Set(candidates)].filter(name=>name!==answer),random).slice(0,3)],random);}
+/** Choose only from a local neighbourhood, weighting closer stops more heavily. */
+export function nearbyStationChoices(answer:string,nearby:string[],random:()=>number){
+ const pool=[...new Set(nearby)].filter(name=>name!==answer).slice(0,12),picked:string[]=[];
+ while(pool.length&&picked.length<3){
+  const weight=pool.reduce((sum,_,index)=>sum+1/(index+1),0);let cursor=random()*weight,index=0;
+  for(;index<pool.length-1;index++){cursor-=1/(index+1);if(cursor<=0)break;}
+  picked.push(pool.splice(index,1)[0]);
+ }
+ return shuffle([answer,...picked],random);
+}
 function stops(lines:BusLine[]){const found=new Map<string,{name:string;lngLat:Point}>();for(const line of lines)for(const stop of line.via_stops||[])if(stop.location){const key=`${stop.name}:${stop.location.lng},${stop.location.lat}`;found.set(key,{name:stop.name,lngLat:[stop.location.lng,stop.location.lat]});}return [...found.values()];}
 function intermediateStops(lines:BusLine[]){
  const found=new Map<string,{name:string;lngLat:Point}>();
@@ -52,7 +62,7 @@ export function createOfflineQuestion(mode:GameMode,difficulty:GameDifficulty,da
   const rich=available.filter(item=>new Set(item.lines.map(line=>routeName(line.name))).size>=2),chosen=shuffle(rich.length?rich:available,random)[0];
   if(!chosen)throw Error('该城市暂无符合此难度的已保存站点数据，请更换城市或难度。');
   const nearby=all.filter(item=>item.name!==chosen.name).sort((a,b)=>distanceMeters(a.lngLat,chosen.lngLat)-distanceMeters(b.lngLat,chosen.lngLat)).map(item=>item.name);
-  const options=choices(chosen.name,config.confusing&&nearby.length?nearby:all.map(item=>item.name),random);
+  const options=config.confusing&&nearby.length?nearbyStationChoices(chosen.name,nearby,random):choices(chosen.name,all.map(item=>item.name),random);
   return {targetCity:data.city,correctAnswer:chosen.name,promptText:`请根据目标站点及经过的公交线路猜站名（${data.city}）。`,options,isFillIn:config.isFillIn,lineInfos:chosen.lines,networkStops:stops(chosen.lines).filter(stop=>distanceMeters(stop.lngLat,chosen.lngLat)>5),targetPoint:{name:chosen.name,lngLat:chosen.lngLat},fallbackCenter:chosen.lngLat,showBasemap:config.showBasemap,showStops:config.showStops};
  }
  if(mode==='county'){
