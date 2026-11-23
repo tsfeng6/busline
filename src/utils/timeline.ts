@@ -8,7 +8,8 @@ export function isLineOperating(line: { stime?: unknown; etime?: unknown }, minu
   return minute >= start || minute <= end;
 }
 export function formatTimelineMinute(minute: number): string {
-  return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+  const wholeMinute = Math.floor(minute);
+  return `${String(Math.floor(wholeMinute / 60)).padStart(2, '0')}:${String(wholeMinute % 60).padStart(2, '0')}`;
 }
 
 export interface TimelineOverlayEntry {

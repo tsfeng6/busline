@@ -1,5 +1,5 @@
 /** Timeline visibility and viewport visibility are independent; offscreen geometry stays out of the SDK. */
-export function lazyTimelineRoute(map:any, AMap:any, options:any, onClick:()=>void) {
+export function lazyTimelineRoute(map:any, AMap:any, options:any, onClick:(event?: any)=>void) {
   let paths:any[] = [], enabled = true, overlay:any = null;
   const release = () => {
     if (!overlay) return;

@@ -6177,6 +6177,24 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
     const map = mapRef.current;
     const AMap = (window as any).AMap;
+    const indexedRoutes = timelineLines
+      .filter(line => line.path?.length > 1)
+      .map(line => ({ name: line.name, path: line.path.map(getLatLng), displayPath: line.path.map(getLatLng) }));
+    const routeIndex = new RouteRenderIndex(indexedRoutes);
+    const selectTimelineRoad = (event?: any) => {
+      const lnglat = event?.lnglat;
+      if (!lnglat) return;
+      const point: [number, number] = [lnglat.getLng(), lnglat.getLat()];
+      const names = [...new Set(routeIndex.query(point, 0.00018).flatMap(hit => [...hit.lines]))];
+      if (!names.length) return;
+      setSelectedStop(null);
+      setActiveBusLine(null);
+      setSelectionPos(point);
+      setSelectedSegmentName('当前路段');
+      setSelectedSegmentAddress(null);
+      setSelectedSegmentLines(names);
+      setTopCard('stop');
+    };
     const entries: TimelineOverlayEntry[] = timelineLines.flatMap((line) => {
       const path = (line.path || []).map(getLatLng);
       if (path.length < 2) return [];
@@ -6191,7 +6209,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
         zIndex: 55,
         bubble: true,
-      }, () => { setActiveBusLine(line); });
+      }, selectTimelineRoad);
       overlay.setPaths([path]);
       return [{ line, overlay, visible: true }];
     });
@@ -6211,8 +6229,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   useEffect(() => {
     if (!showTimeline || !timelinePlaying) return;
     const timer = window.setInterval(() => {
-      setTimelineMinute(minute => minute >= 1439 ? 0 : minute + 1);
-    }, 3000);
+      setTimelineMinute(minute => minute >= 1439 ? 0 : minute + 1 / 3);
+    }, 1000);
     return () => window.clearInterval(timer);
   }, [showTimeline, timelinePlaying]);
 
@@ -9161,7 +9179,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       // The compact viewport tile includes the two display times,
                       // avoiding a duplicate AMap request for a route just picked
                       // from the map.
-                      || viewportRoute;
+                      || viewportRoute
+                      || timelineLines.find(candidate => candidate.name === line);
+                    const inactiveOnTimeline = showTimeline && !!schedule && isLineOperating(schedule, timelineMinute) === false;
                     return (
                       <div 
                         key={line + idx}
@@ -9170,7 +9190,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                           void handleManualSearch({ name: line, type: 'busline', routeId: route ? route.id : undefined,
                             sourceCity: selectedStop?.key?.startsWith('tile:') ? selectedStop.city : route ? route.city : undefined });
                         }}
-                        className="md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-3.5 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/30 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[220px] md:max-w-none md:w-auto md:h-[72px] border border-transparent shadow-xs"
+                        className={`md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-3.5 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/30 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[220px] md:max-w-none md:w-auto md:h-[72px] border border-transparent shadow-xs ${inactiveOnTimeline ? 'opacity-45 grayscale' : ''}`}
                       >
                         <div className="hidden md:block absolute left-0 top-0 bottom-0 w-1 bg-m3-primary/0 md:group-hover:bg-m3-primary transition-all" />
 
