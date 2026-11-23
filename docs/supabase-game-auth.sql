@@ -168,7 +168,7 @@ drop trigger if exists on_auth_user_game_profile on auth.users;
 create trigger on_auth_user_game_profile after insert on auth.users
 for each row execute procedure public.set_game_profile_name();
 
-drop function if exists public.start_game_run(text, text);
+drop function if exists public.start_game_run(text, text, text);
 create function public.start_game_run(p_game text, p_difficulty text, p_city text)
 returns public.game_runs language plpgsql security definer set search_path = public as $$
 declare result public.game_runs;
