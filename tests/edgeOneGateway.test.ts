@@ -96,12 +96,13 @@ test('WeChat callback verifies its signature and issues only a one-time registra
    const path=new URL(String(input)).pathname;
    if(path.endsWith('/claim_wechat_inbound'))return new Response('true',{headers:{'Content-Type':'application/json'}});
    if(path==='/rest/v1/wechat_bindings')return new Response('[]',{headers:{'Content-Type':'application/json'}});
-   if(path.endsWith('/create_wechat_link_token'))return new Response('{}',{headers:{'Content-Type':'application/json'}});
+   if(path==='/auth/v1/admin/users')return new Response('{"id":"00000000-0000-0000-0000-000000000001"}',{headers:{'Content-Type':'application/json'}});
+   if(path==='/rest/v1/wechat_bindings'||path==='/rest/v1/game_profiles')return new Response('{}',{headers:{'Content-Type':'application/json'}});
    throw Error('unexpected upstream '+path);
  };
  const timestamp=String(Math.floor(Date.now()/1000)),nonce='nonce-1',signature=createHash('sha1').update([wechatEnv.WECHAT_CALLBACK_TOKEN!,timestamp,nonce].sort().join('')).digest('hex');
  const raw='<xml><ToUserName><![CDATA[busline]]></ToUserName><FromUserName><![CDATA[openid-123]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[注册账号]]></Content><MsgId>42</MsgId></xml>';
  const response=await handleEdgeOneGateway(new Request(`https://gateway.example/wechat/callback?timestamp=${timestamp}&nonce=${nonce}&signature=${signature}`,{method:'POST',body:raw}),wechatEnv,store,transport);
- assert.equal(response.status,200);const body=await response.text();assert.match(body,/busline\.cc\/\?wechat=register&amp;token=/);assert.match(body,/15 分钟/);
+ assert.equal(response.status,200);const body=await response.text();assert.match(body,/注册成功/);assert.match(body,/登录 \+ 8位登录码/);
  assert.equal((await handleEdgeOneGateway(new Request('https://gateway.example/wechat/callback?timestamp='+timestamp+'&nonce='+nonce+'&signature=bad',{method:'POST',body:raw}),wechatEnv,store,transport)).status,401);
 });

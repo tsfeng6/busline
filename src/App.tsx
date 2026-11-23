@@ -55,7 +55,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { getGameTimeLimit, formatGameTime } from './utils/gameTimer';
-import { gameAccountEnabled, finishGameRun, getGameAccount, getGameLeaderboard, requestPhoneOtp, startGameRun, updateGameProfile, verifyPhoneOtp, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
+import { gameAccountEnabled, finishGameRun, getGameAccount, getGameLeaderboard, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
 import { WechatAccountLink } from './components/WechatAccountLink';
 
 const isFirebaseEnabled = () => true;
@@ -342,9 +342,6 @@ export default function App() {
   const [gameScore, setGameScore] = useState(0);
   const [gameAccount, setGameAccount] = useState<GameAccount | null>(null);
   const [gameAccessToken, setGameAccessToken] = useState(() => { try { return sessionStorage.getItem('busline_game_access_token') || ''; } catch { return ''; } });
-  const [gameAuthForm, setGameAuthForm] = useState({ phone: '', token: '', displayName: '' });
-  const [gameAvatar, setGameAvatar] = useState<File | null>(null);
-  const [gameAuthBusy, setGameAuthBusy] = useState(false);
   const [gameAuthMessage, setGameAuthMessage] = useState('');
   const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
 
@@ -661,6 +658,11 @@ export default function App() {
     province?: string
   ) => {
     if (gameState === 'playing' && isMinigameActiveRef.current) return;
+    if (!gameAccount || !gameAccessToken || !gameAccountEnabled) {
+      window.dispatchEvent(new Event('busline-account'));
+      setGameAuthMessage('开始挑战前请先通过微信公众号登录。');
+      return;
+    }
     if (!(window as any).AMap || !mapInstance) {
       setApiErrorNotification('地图尚未就绪，请稍后再开始游戏。');
       return;
@@ -696,11 +698,9 @@ export default function App() {
     setReviewAutoPlay(false);
     setReviewHoveredStop(null);
     gameRunRef.current = null;
-    if (gameAccount && gameAccessToken && gameAccountEnabled) {
-      void startGameRun(leaderboardKey(mode, diff), gameAccessToken)
-        .then(result => { gameRunRef.current = result.run; })
-        .catch(() => setGameAuthMessage('本局未接入排行榜，不影响本地挑战。'));
-    }
+    void startGameRun(leaderboardKey(mode, diff), gameAccessToken)
+      .then(result => { gameRunRef.current = result.run; })
+      .catch(() => setGameAuthMessage('排行榜会话创建失败，请重新登录后再试。'));
 
     setMapMode('normal');
 
@@ -6584,7 +6584,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
   return (
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
-      <WechatAccountLink onSignedIn={(account, accessToken) => { setGameAccount(account); setGameAccessToken(accessToken); }} />
+      <WechatAccountLink account={gameAccount} accessToken={gameAccessToken} onSignedIn={(account, accessToken) => { setGameAccount(account); setGameAccessToken(accessToken); }} onLogout={()=>{try{sessionStorage.removeItem('busline_game_access_token');}catch{}setGameAccessToken('');setGameAccount(null);}} />
       {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
       {/* Global API Quota / Error Banner */}
       <AnimatePresence>
@@ -8097,32 +8097,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
                     {gameAccountEnabled && (
                       <div className="rounded-2xl border border-m3-outline-variant/30 bg-m3-surface p-3 space-y-2">
-                        {gameAccount ? (
-                          <>
-                            <div className="flex items-center justify-between gap-3 text-xs">
-                              <span className="font-black text-slate-800">玩家：{gameAccount.displayName}</span>
-                              <button type="button" onClick={() => { try { sessionStorage.removeItem('busline_game_access_token'); } catch {} setGameAccessToken(''); setGameAccount(null); }} className="text-slate-500 hover:text-slate-800">退出登录</button>
-                            </div>
-                            <div className="flex gap-2">
-                              <input value={gameAuthForm.displayName} onChange={e => setGameAuthForm(v => ({...v,displayName:e.target.value}))} placeholder="修改昵称" className="flex-1 px-2.5 py-2 rounded-lg border border-m3-outline-variant/30 text-xs" />
-                              <input type="file" accept="image/*" onChange={e => setGameAvatar(e.target.files?.[0] || null)} className="max-w-[120px] text-[10px]" />
-                              <button type="button" disabled={gameAuthBusy} onClick={async () => { setGameAuthBusy(true); setGameAuthMessage(''); try { const r=await updateGameProfile(gameAuthForm.displayName || gameAccount.displayName,gameAvatar || undefined,gameAccessToken); setGameAccount(r.account); setGameAvatar(null); } catch(e:any) { setGameAuthMessage(e.message); } finally { setGameAuthBusy(false); } }} className="px-3 rounded-lg bg-m3-surface-container text-xs font-bold">保存</button>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="grid grid-cols-2 gap-2">
-                              <input value={gameAuthForm.phone} onChange={e => setGameAuthForm(v => ({...v,phone:e.target.value}))} placeholder="手机号，如 +8613812345678" className="px-2.5 py-2 rounded-lg border border-m3-outline-variant/30 text-xs" />
-                              <input value={gameAuthForm.token} onChange={e => setGameAuthForm(v => ({...v,token:e.target.value}))} placeholder="短信验证码" className="px-2.5 py-2 rounded-lg border border-m3-outline-variant/30 text-xs" />
-                            </div>
-                            <div className="flex gap-2">
-                              <input value={gameAuthForm.displayName} onChange={e => setGameAuthForm(v => ({...v,displayName:e.target.value}))} placeholder="昵称（首次登录时填写）" className="flex-1 px-2.5 py-2 rounded-lg border border-m3-outline-variant/30 text-xs" />
-                              <button type="button" disabled={gameAuthBusy} onClick={async () => { setGameAuthBusy(true); setGameAuthMessage(''); try { await requestPhoneOtp(gameAuthForm.phone); setGameAuthMessage('验证码已发送。'); } catch(e:any) { setGameAuthMessage(e.message); } finally { setGameAuthBusy(false); } }} className="px-3 rounded-lg bg-m3-surface-container text-xs font-bold">发验证码</button>
-                              <button type="button" disabled={gameAuthBusy} onClick={async () => { setGameAuthBusy(true); setGameAuthMessage(''); try { const r=await verifyPhoneOtp(gameAuthForm.phone,gameAuthForm.token,gameAuthForm.displayName || undefined); setGameAccount(r.account); setGameAccessToken(r.accessToken); sessionStorage.setItem('busline_game_access_token',r.accessToken); } catch(e:any) { setGameAuthMessage(e.message); } finally { setGameAuthBusy(false); } }} className="px-3 rounded-lg bg-m3-primary text-m3-on-primary text-xs font-bold">登录</button>
-                            </div>
-                          </>
-                        )}
-                        {gameAuthMessage && <p className="text-[11px] text-slate-500">{gameAuthMessage}</p>}
                         {gameMode && <div className="border-t border-m3-outline-variant/20 pt-2 text-[11px]">
                           <div className="flex justify-between text-slate-600"><span className="font-bold">本榜前五</span><button type="button" onClick={() => void refreshLeaderboard(leaderboardKey(gameMode,gameDifficulty))} className="text-m3-primary">刷新</button></div>
                           {leaderboardLoading ? <p className="mt-1 text-slate-500">读取中…</p> : leaderboardEntries.slice(0,5).map(item => <p key={item.rank + '-' + item.displayName} className={'mt-1 flex justify-between ' + (item.isCurrentUser ? 'font-black text-m3-primary' : 'text-slate-600')}><span>{item.rank}. {item.displayName}</span><span>{item.score} 分</span></p>)}

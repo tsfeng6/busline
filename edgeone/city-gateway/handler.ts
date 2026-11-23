@@ -19,7 +19,7 @@ export const gatewaySignature=(secret:string,text:string)=>createHmac('sha256',s
 type GameName='line'|'station'|'city'|'county';type GameDifficulty='easy'|'hell'|'hard';
 const validLeaderboard=(game:any,difficulty:any):game is GameName=>
   (['line','station'].includes(game)&&['easy','hell'].includes(difficulty))||(['city','county'].includes(game)&&difficulty==='hard');
-const gameAccount=(user:any,profile?:any):{id:string;phone?:string;displayName:string;avatarUrl?:string}=>({id:String(user?.id||''),phone:user?.phone?String(user.phone):undefined,displayName:String(profile?.display_name||'巴士玩家').slice(0,24),avatarUrl:profile?.avatar_path?String(profile.avatar_path):undefined});
+const gameAccount=(user:any,profile?:any):{id:string;displayName:string;avatarUrl?:string}=>({id:String(user?.id||''),displayName:String(profile?.display_name||'巴士玩家').slice(0,24),avatarUrl:profile?.avatar_url||profile?.avatar_path?String(profile?.avatar_url||profile?.avatar_path):undefined});
 const xmlEscape=(value:string)=>value.replace(/[<>&'\"]/g,char=>({"<":'&lt;',">":'&gt;','&':'&amp;',"'":'&apos;','\"':'&quot;'}[char]!));
 const xmlValue=(xml:string,name:string)=>{const found=new RegExp(`<${name}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${name}>|<${name}>([\\s\\S]*?)<\\/${name}>`).exec(xml);return (found?.[1]||found?.[2]||'').trim();};
 const wechatSignature=(token:string,timestamp:string,nonce:string)=>createHash('sha1').update([token,timestamp,nonce].sort().join('')).digest('hex');
@@ -27,7 +27,7 @@ const wechatReply=(to:string,from:string,content:string)=>`<xml><ToUserName><![C
 const publicUrl=(value:string|undefined)=>{try{const url=new URL(value||'');return url.protocol==='https:'?url.toString().replace(/\/$/,''):null;}catch{return null;}};
 async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
   const url=new URL(request.url),path=url.pathname;
-  if(path!=='/wechat/callback'&&path!=='/wechat/login')return null;
+  if(path!=='/wechat/callback'&&path!=='/wechat/login'&&path!=='/wechat/web-login')return null;
   // Supabase's sb_secret keys supersede the legacy service_role JWT. Accept
   // both during migration, but only send a legacy JWT as Authorization.
   const base=env.SUPABASE_URL?.replace(/\/$/,'')||'',serviceKey=env.SUPABASE_SECRET_KEY||env.SUPABASE_SERVICE_ROLE_KEY;
@@ -39,16 +39,30 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
     const body=await response.json().catch(()=>({}));if(!response.ok)throw fail(503,String(body.message||body.msg||'账号服务暂时不可用。').slice(0,120));return body;
   };
   const xml=(content:string,status=200)=>new Response(content,{status,headers:{'Content-Type':'application/xml; charset=utf-8','Cache-Control':'no-store'}});
+  const magicLink=async(userId:string)=>{
+    const user=await admin('/auth/v1/admin/users/'+encodeURIComponent(userId),{method:'GET'});let email=String(user?.email||'');
+    if(!email){email=`wx-${hash(userId).slice(0,32)}@login.busline.invalid`;await admin('/auth/v1/admin/users/'+encodeURIComponent(userId),{method:'PUT',body:JSON.stringify({email,email_confirm:true})});}
+    const generated=await admin('/auth/v1/admin/generate_link',{method:'POST',body:JSON.stringify({type:'magiclink',email,options:{redirectTo:appUrl+'/?wechat=logged-in'}})});
+    const action=String(generated?.properties?.action_link||generated?.action_link||'');if(!/^https:\/\//.test(action))throw fail(503,'登录服务暂时不可用。');return action;
+  };
+  if(path==='/wechat/web-login'){
+    if(request.method==='POST'){
+      const code=randomBytes(6).toString('hex').slice(0,8).toUpperCase(),expires=new Date(Date.now()+5*60_000).toISOString();
+      await admin('/rest/v1/rpc/create_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(code),p_expires_at:expires})});return json({code,expiresAt:expires});
+    }
+    if(request.method==='GET'){
+      const code=url.searchParams.get('code')||'';if(!/^[A-Z0-9]{8}$/.test(code))throw fail(400,'登录码无效。');
+      const result=await admin('/rest/v1/rpc/consume_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(code)})});const row=Array.isArray(result)?result[0]:result;
+      return json({actionUrl:row?.user_id?await magicLink(String(row.user_id)):undefined,pending:!row?.user_id});
+    }
+    throw fail(404,'没有这个账号接口。');
+  }
   if(path==='/wechat/login'){
     if(request.method!=='GET')throw fail(404,'没有这个账号接口。');
     const token=url.searchParams.get('token')||'';if(!/^[A-Za-z0-9_-]{40,128}$/.test(token))throw fail(400,'登录链接无效或已过期。');
     const result=await admin('/rest/v1/rpc/consume_wechat_login_token',{method:'POST',body:JSON.stringify({p_token_hash:hash(token)})});
     const row=Array.isArray(result)?result[0]:result;if(!row?.user_id)throw fail(400,'登录链接无效或已过期。');
-    const user=await admin('/auth/v1/admin/users/'+encodeURIComponent(String(row.user_id)),{method:'GET'});
-    let email=String(user?.email||'');
-    if(!email){email=`wx-${String(row.user_id)}@login.busline.invalid`;await admin('/auth/v1/admin/users/'+encodeURIComponent(String(row.user_id)),{method:'PUT',body:JSON.stringify({email,email_confirm:true})});}
-    const generated=await admin('/auth/v1/admin/generate_link',{method:'POST',body:JSON.stringify({type:'magiclink',email,options:{redirectTo:appUrl+'/?wechat=logged-in'}})});
-    const action=String(generated?.properties?.action_link||generated?.action_link||'');if(!/^https:\/\//.test(action))throw fail(503,'登录服务暂时不可用。');
+    const action=await magicLink(String(row.user_id));
     return new Response(null,{status:302,headers:{Location:action,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
   }
   const timestamp=url.searchParams.get('timestamp')||'',nonce=url.searchParams.get('nonce')||'',signature=url.searchParams.get('signature')||'';
@@ -63,8 +77,14 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
   if(claimed!==true)return xml('success');
   const binding=await admin('/rest/v1/wechat_bindings?openid=eq.'+encodeURIComponent(from)+'&select=user_id');
   const userId=Array.isArray(binding)&&binding[0]?.user_id?String(binding[0].user_id):'';
-  let purpose:'register'|'bind'|'login'|null=null,message='可发送“注册账号”、“绑定账号”、“免密登录”或“账号状态”。';
-  if(content==='注册账号'){purpose=userId?null:'register';message=userId?'该微信已绑定 Busline 账号，无需重复注册。可发送“免密登录”。':'';}
+  let purpose:'register'|'bind'|'login'|null=null,message='可发送“注册账号”、“登录 8位登录码”或“账号状态”。';
+  const desktop=/^(?:登录|login)([A-Z0-9]{8})$/i.exec(content);
+  if(desktop){if(!userId)message='尚未注册。请先发送“注册账号”，再重新输入登录码。';else {const approved=await admin('/rest/v1/rpc/approve_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(desktop[1].toUpperCase()),p_user_id:userId})});message=approved===true?'登录已确认，请回网页继续。':'登录码无效或已过期，请在网页重新获取。';}}
+  else if(content==='注册账号'){
+    if(userId)message='该微信已注册 Busline 账号，无需重复注册。';
+    else {let nickname='巴士玩家',avatarUrl='';try{const appId=env.WECHAT_APP_ID||'',secret=env.WECHAT_APP_SECRET||'';if(appId&&secret){const token=await (await transport(`https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(secret)}`)).json(),info=token.access_token?await (await transport(`https://api.weixin.qq.com/cgi-bin/user/info?access_token=${encodeURIComponent(token.access_token)}&openid=${encodeURIComponent(from)}&lang=zh_CN`)).json():{};const candidate=String(info.nickname||'').replace(/\s/g,'').slice(0,24);if(candidate.length>=2)nickname=candidate;if(/^https:\/\//.test(String(info.headimgurl||'')))avatarUrl=String(info.headimgurl);}}catch{/* Registration must remain usable if WeChat profile API is unavailable. */}
+      const email=`wx-${hash(from).slice(0,32)}@login.busline.invalid`,created=await admin('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email,email_confirm:true,user_metadata:{display_name:nickname}})}),newId=String(created?.id||'');if(!newId)throw fail(503,'账号创建失败。');await admin('/rest/v1/wechat_bindings',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({openid:from,user_id:newId})});await admin('/rest/v1/game_profiles?id=eq.'+encodeURIComponent(newId),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({display_name:nickname,avatar_url:avatarUrl||null})});message='注册成功。回网页点击右上角头像，扫描二维码后发送“登录 + 8位登录码”即可登录。';}
+  }
   else if(content==='绑定账号'){purpose=userId?null:'bind';message=userId?'该微信已绑定 Busline 账号，无需重复绑定。':'';}
   else if(content==='免密登录'){purpose=userId?'login':null;message=userId?'':'该微信尚未绑定账号，请先发送“注册账号”或“绑定账号”。';}
   else if(content==='账号状态')message=userId?'此微信已绑定 Busline 账号。为保护隐私，不在消息中展示手机号或昵称。':'此微信尚未绑定 Busline 账号。可发送“注册账号”或“绑定账号”。';

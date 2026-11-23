@@ -18,6 +18,7 @@
 
 - `SUPABASE_SECRET_KEY`：仅供 `/wechat/*` 使用的 Supabase `sb_secret_...` key。绝不能使用 `VITE_` 前缀或提交到仓库。旧的 `SUPABASE_SERVICE_ROLE_KEY` 仍可作为兼容回退，但优先使用新版 Secret key。
 - `WECHAT_CALLBACK_TOKEN`：自行生成至少 16 个随机字符；在微信公众平台“基本配置”的 Token 填入完全相同的值。
+- `WECHAT_APP_ID`、`WECHAT_APP_SECRET`：公众号开发者凭据，仅用于首次注册时读取已关注用户的微信昵称和头像；AppSecret 不得进入浏览器、仓库或聊天记录。
 - `PUBLIC_APP_URL`：正式前端 HTTPS 地址，例如 `https://busline.cc`。
 - `PUBLIC_GATEWAY_URL`：本 EdgeOne Function 的正式 HTTPS 地址，例如 `https://gateway.busline.cc`。
 
@@ -25,4 +26,4 @@
 
 然后在微信公众号后台将“服务器地址(URL)”配置为 `PUBLIC_GATEWAY_URL/wechat/callback`，Token 使用 `WECHAT_CALLBACK_TOKEN`，消息加解密方式选“明文模式”。当前实现不处理安全模式的 `Encrypt` 载荷；如后台强制安全模式，需要再提供 EncodingAESKey 和 AppID 后才能启用。公众号还必须具备接收普通消息并被动回复的权限。
 
-用户发送“注册账号”“绑定账号”“免密登录”或“账号状态”即可使用。注册链接为 15 分钟、一次性令牌，数据库只保留 SHA-256 哈希；完成绑定时由已验证的 Supabase 登录态决定绑定对象，不能靠前端传入用户 ID。免密登录链接同样一次性消费，并由 EdgeOne 以 service_role 向 Supabase 生成短期 magic link；不会在公众号消息、浏览器 JavaScript 或日志中发送 service_role key。微信回调验证 SHA-1 签名、五分钟时间窗和消息去重键，以阻止伪造、重放和重复建链。
+网页右上角头像是唯一的账户入口。未登录用户扫描项目内展示的公众号二维码后，向公众号发送“注册账号”；系统以 OpenID 创建身份并读取微信昵称、头像作为初始资料。网页随后显示一个 5 分钟、一次性 8 位登录码；用户发送“登录 + 登录码”后，网页轮询到确认结果并跳转至短期 Supabase magic link。手机号和邮箱不会出现在用户界面；系统仅为 Supabase 身份内部使用不可投递的地址，用户无法通过它登录。小游戏必须已登录才能开始。

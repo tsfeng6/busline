@@ -6,11 +6,13 @@ create table if not exists public.game_profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text not null check (char_length(display_name) between 2 and 24),
   avatar_path text check (avatar_path is null or avatar_path ~ '^[0-9a-f-]{36}/avatar\.(webp|jpeg)$'),
+  avatar_url text check (avatar_url is null or avatar_url ~ '^https://'),
   created_at timestamptz not null default now()
 );
 -- Existing installations created before avatar support need this additive
 -- migration because CREATE TABLE IF NOT EXISTS does not alter old columns.
 alter table public.game_profiles add column if not exists avatar_path text;
+alter table public.game_profiles add column if not exists avatar_url text;
 alter table public.game_profiles drop constraint if exists game_profiles_avatar_path_check;
 alter table public.game_profiles add constraint game_profiles_avatar_path_check check (avatar_path is null or avatar_path ~ '^[0-9a-f-]{36}/avatar\.(webp|jpeg)$');
 create table if not exists public.game_runs (
@@ -47,20 +49,22 @@ begin
 end;
 $$;
 
-create or replace function public.current_game_profile()
-returns table (display_name text, avatar_path text) language sql security definer set search_path = public as $$
-  select p.display_name, p.avatar_path from public.game_profiles p where p.id = auth.uid();
+drop function if exists public.current_game_profile();
+create function public.current_game_profile()
+returns table (display_name text, avatar_path text, avatar_url text) language sql security definer set search_path = public as $$
+  select p.display_name, p.avatar_path, p.avatar_url from public.game_profiles p where p.id = auth.uid();
 $$;
 
-create or replace function public.update_game_profile(p_display_name text, p_avatar_path text default null)
-returns table (display_name text, avatar_path text) language plpgsql security definer set search_path = public as $$
+drop function if exists public.update_game_profile(text, text);
+create function public.update_game_profile(p_display_name text, p_avatar_path text default null)
+returns table (display_name text, avatar_path text, avatar_url text) language plpgsql security definer set search_path = public as $$
 begin
   if auth.uid() is null then raise exception '请先登录'; end if;
   if char_length(trim(p_display_name)) not between 2 and 24 then raise exception '昵称须为 2–24 个字'; end if;
   if p_avatar_path is not null and p_avatar_path !~ ('^' || auth.uid()::text || '/avatar\.(webp|jpeg)$') then raise exception '头像路径无效'; end if;
   insert into public.game_profiles (id, display_name, avatar_path) values (auth.uid(), trim(p_display_name), p_avatar_path)
-  on conflict (id) do update set display_name = excluded.display_name, avatar_path = coalesce(excluded.avatar_path, public.game_profiles.avatar_path);
-  return query select p.display_name, p.avatar_path from public.game_profiles p where p.id = auth.uid();
+  on conflict (id) do update set display_name = excluded.display_name, avatar_path = coalesce(excluded.avatar_path, public.game_profiles.avatar_path), avatar_url = case when excluded.avatar_path is null then public.game_profiles.avatar_url else null end;
+  return query select p.display_name, p.avatar_path, p.avatar_url from public.game_profiles p where p.id = auth.uid();
 end;
 $$;
 drop trigger if exists on_auth_user_game_profile on auth.users;
@@ -113,7 +117,7 @@ $$;
 -- This function has no dependent database objects and reads existing runs.
 drop function if exists public.get_game_leaderboard(text, text);
 create function public.get_game_leaderboard(p_game text, p_difficulty text)
-returns table (rank bigint, display_name text, avatar_path text, score integer, achieved_at timestamptz, is_current_user boolean) language sql security definer set search_path = public as $$
+returns table (rank bigint, display_name text, avatar_path text, avatar_url text, score integer, achieved_at timestamptz, is_current_user boolean) language sql security definer set search_path = public as $$
   with best as (
     select distinct on (r.user_id) r.user_id, r.score, r.finished_at
     from public.game_runs r where r.game = p_game and r.difficulty = p_difficulty and r.finished_at is not null
@@ -121,7 +125,7 @@ returns table (rank bigint, display_name text, avatar_path text, score integer, 
   ), ranked as (
     select dense_rank() over (order by score desc) as rank, user_id, score, finished_at from best
   )
-  select ranked.rank, coalesce(p.display_name, '巴士玩家'), p.avatar_path, ranked.score, ranked.finished_at, ranked.user_id = auth.uid()
+  select ranked.rank, coalesce(p.display_name, '巴士玩家'), p.avatar_path, p.avatar_url, ranked.score, ranked.finished_at, ranked.user_id = auth.uid()
   from ranked left join public.game_profiles p on p.id = ranked.user_id
   order by ranked.rank, ranked.finished_at asc limit 50;
 $$;
@@ -153,9 +157,18 @@ create table if not exists public.wechat_inbound_events (
   event_key text primary key check (char_length(event_key) between 5 and 160),
   received_at timestamptz not null default now()
 );
+create table if not exists public.wechat_web_logins (
+  code_hash text primary key check (code_hash ~ '^[0-9a-f]{64}$'),
+  expires_at timestamptz not null,
+  user_id uuid references auth.users(id) on delete cascade,
+  approved_at timestamptz,
+  used_at timestamptz,
+  created_at timestamptz not null default now()
+);
 alter table public.wechat_bindings enable row level security;
 alter table public.wechat_link_tokens enable row level security;
 alter table public.wechat_inbound_events enable row level security;
+alter table public.wechat_web_logins enable row level security;
 
 create or replace function public.claim_wechat_inbound(p_event_key text)
 returns boolean language plpgsql security definer set search_path = public as $$
@@ -202,11 +215,42 @@ begin
 end;
 $$;
 
+create or replace function public.create_wechat_web_login(p_code_hash text, p_expires_at timestamptz)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if p_code_hash !~ '^[0-9a-f]{64}$' or p_expires_at <= now() or p_expires_at > now() + interval '6 minutes' then raise exception 'invalid web login'; end if;
+  delete from public.wechat_web_logins where expires_at <= now() or used_at is not null;
+  insert into public.wechat_web_logins(code_hash, expires_at) values (p_code_hash, p_expires_at);
+end;
+$$;
+
+create or replace function public.approve_wechat_web_login(p_code_hash text, p_user_id uuid)
+returns boolean language plpgsql security definer set search_path = public as $$
+begin
+  update public.wechat_web_logins set user_id = p_user_id, approved_at = now() where code_hash = p_code_hash and expires_at > now() and approved_at is null and used_at is null;
+  return found;
+end;
+$$;
+
+create or replace function public.consume_wechat_web_login(p_code_hash text)
+returns table(user_id uuid) language plpgsql security definer set search_path = public as $$
+begin
+  update public.wechat_web_logins set used_at = now() where code_hash = p_code_hash and expires_at > now() and approved_at is not null and used_at is null returning wechat_web_logins.user_id into user_id;
+  if user_id is not null then return next; end if;
+end;
+$$;
+
 revoke all on function public.claim_wechat_inbound(text) from public, anon, authenticated;
 revoke all on function public.create_wechat_link_token(text, text, text, timestamptz) from public, anon, authenticated;
 revoke all on function public.consume_wechat_login_token(text) from public, anon, authenticated;
 revoke all on function public.complete_wechat_link_token(text) from public, anon;
+revoke all on function public.create_wechat_web_login(text, timestamptz) from public, anon, authenticated;
+revoke all on function public.approve_wechat_web_login(text, uuid) from public, anon, authenticated;
+revoke all on function public.consume_wechat_web_login(text) from public, anon, authenticated;
 grant execute on function public.claim_wechat_inbound(text) to service_role;
 grant execute on function public.create_wechat_link_token(text, text, text, timestamptz) to service_role;
 grant execute on function public.consume_wechat_login_token(text) to service_role;
 grant execute on function public.complete_wechat_link_token(text) to authenticated, service_role;
+grant execute on function public.create_wechat_web_login(text, timestamptz) to service_role;
+grant execute on function public.approve_wechat_web_login(text, uuid) to service_role;
+grant execute on function public.consume_wechat_web_login(text) to service_role;
