@@ -223,15 +223,15 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     return json({bound:true});
   }
   if(path==='/leaderboards'&&request.method==='GET'){
-    const game=url.searchParams.get('game'),difficulty=url.searchParams.get('difficulty');if(!validLeaderboard(game,difficulty))throw fail(400,'不存在这个游戏榜单。');
-    const data=await supabase('/rest/v1/rpc/get_game_leaderboard',{method:'POST',body:JSON.stringify({p_game:game,p_difficulty:difficulty})},/^Bearer\s+\S+$/i.test(bearer));
-    return json({entries:(Array.isArray(data)?data:[]).map((item:any)=>({rank:Number(item.rank),displayName:String(item.display_name),score:Number(item.score),achievedAt:String(item.achieved_at),isCurrentUser:item.is_current_user===true}))});
+    const game=url.searchParams.get('game'),difficulty=url.searchParams.get('difficulty'),scope=String(url.searchParams.get('scope')||'北京市').trim();if(!validLeaderboard(game,difficulty)||scope.length<1||scope.length>64)throw fail(400,'不存在这个游戏榜单。');
+    const data=await supabase('/rest/v1/rpc/get_game_leaderboard',{method:'POST',body:JSON.stringify({p_game:game,p_difficulty:difficulty,p_city:scope})},/^Bearer\s+\S+$/i.test(bearer));
+    return json({entries:(Array.isArray(data)?data:[]).map((item:any)=>({rank:Number(item.rank),displayName:String(item.display_name),avatarUrl:item.avatar_url||item.avatar_path?String(item.avatar_url||base+'/storage/v1/object/public/game-avatars/'+item.avatar_path):undefined,score:Number(item.score),achievedAt:String(item.achieved_at),isCurrentUser:item.is_current_user===true}))});
   }
   if(path==='/game-runs'&&request.method==='POST'){
-    const input=await jsonBody(request,512);if(!validLeaderboard(input.game,input.difficulty))throw fail(400,'不存在这个游戏榜单。');
-    const data=await supabase('/rest/v1/rpc/start_game_run',{method:'POST',body:JSON.stringify({p_game:input.game,p_difficulty:input.difficulty})},true);
+    const input=await jsonBody(request,512),scope=String(input.scope||'北京市').trim();if(!validLeaderboard(input.game,input.difficulty)||scope.length<1||scope.length>64)throw fail(400,'不存在这个游戏榜单。');
+    const data=await supabase('/rest/v1/rpc/start_game_run',{method:'POST',body:JSON.stringify({p_game:input.game,p_difficulty:input.difficulty,p_city:scope})},true);
     const run=Array.isArray(data)?data[0]:data;
-    return json({run:{id:run.id,game:run.game,difficulty:run.difficulty,startedAt:run.started_at}},201);
+    return json({run:{id:run.id,game:run.game,difficulty:run.difficulty,scope:run.game_city,startedAt:run.started_at}},201);
   }
   const finish=/^\/game-runs\/([a-f0-9-]{36})\/finish$/.exec(path);
   if(finish&&request.method==='POST'){

@@ -1,7 +1,7 @@
-export type GameLeaderboardKey = { game: 'line' | 'station' | 'city' | 'county'; difficulty: 'easy' | 'hell' | 'hard' };
+export type GameLeaderboardKey = { game: 'line' | 'station' | 'city' | 'county'; difficulty: 'easy' | 'hell' | 'hard'; scope?: string };
 export type GameAccount = { id: string; phone?: string; displayName: string; avatarUrl?: string };
-export type GameRun = { id: string; game: GameLeaderboardKey['game']; difficulty: GameLeaderboardKey['difficulty']; startedAt: string };
-export type LeaderboardEntry = { rank: number; displayName: string; score: number; achievedAt: string; isCurrentUser?: boolean };
+export type GameRun = { id: string; game: GameLeaderboardKey['game']; difficulty: GameLeaderboardKey['difficulty']; scope?: string; startedAt: string };
+export type LeaderboardEntry = { rank: number; displayName: string; avatarUrl?: string; score: number; achievedAt: string; isCurrentUser?: boolean };
 
 const configuredUrl = (import.meta.env.VITE_GAME_GATEWAY_URL || import.meta.env.VITE_CITY_UPDATE_GATEWAY_URL || '').replace(/\/$/, '');
 export const gameAccountEnabled = Boolean(configuredUrl);
@@ -48,7 +48,7 @@ export async function finishGameRun(id: string, score: number, accessToken: stri
   return request<{ accepted: boolean; bestScore: number; rank?: number }>('/game-runs/' + encodeURIComponent(id) + '/finish', { method: 'POST', body: JSON.stringify({ score }) }, accessToken);
 }
 export async function getGameLeaderboard(key: GameLeaderboardKey, accessToken?: string) {
-  const query = new URLSearchParams(key).toString();
+  const query = new URLSearchParams({ game: key.game, difficulty: key.difficulty, scope: key.scope || '北京市' }).toString();
   return request<{ entries: LeaderboardEntry[] }>(`/leaderboards?${query}`, {}, accessToken);
 }
 

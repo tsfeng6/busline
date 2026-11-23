@@ -57,6 +57,8 @@ import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { getGameTimeLimit, formatGameTime } from './utils/gameTimer';
 import { establishGameSession, gameAccountEnabled, finishGameRun, getGameAccount, getGameLeaderboard, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
 import { WechatAccountLink } from './components/WechatAccountLink';
+import { GameModeVisual } from './components/GameModeVisual';
+import { GameLadderPanel } from './components/GameLadderPanel';
 
 const isFirebaseEnabled = () => true;
 
@@ -346,7 +348,7 @@ export default function App() {
   const [gameAccessToken, setGameAccessToken] = useState('');
   const [gameAuthMessage, setGameAuthMessage] = useState('');
   const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
-  const [leaderboardsByMode, setLeaderboardsByMode] = useState<Record<string, LeaderboardEntry[]>>({});
+  const [ladderBoards, setLadderBoards] = useState<{ standard: LeaderboardEntry[]; hell: LeaderboardEntry[] }>({ standard: [], hell: [] });
   const [gameLaunchAnimation, setGameLaunchAnimation] = useState(false);
 
   // Supabase's server-generated magic link returns the short-lived session in
@@ -453,8 +455,9 @@ export default function App() {
   const gameSessionIdRef = useRef(0);
   const gameRunRef = useRef<GameRun | null>(null);
   const isMinigameActiveRef = useRef(false);
-  const leaderboardKey = (mode: 'line' | 'station' | 'city' | 'county', difficulty: 'easy' | 'medium' | 'hard' | 'hell'): GameLeaderboardKey =>
-    ({ game: mode, difficulty: (mode === 'line' || mode === 'station' ? difficulty : 'hard') as GameLeaderboardKey['difficulty'] });
+  const leaderboardScope = (mode: 'line' | 'station' | 'city' | 'county', city = gameCity, province = gameCountyProvince) => mode === 'city' ? '全国' : mode === 'county' ? province : city || '北京市';
+  const leaderboardKey = (mode: 'line' | 'station' | 'city' | 'county', difficulty: 'easy' | 'medium' | 'hard' | 'hell', scope = leaderboardScope(mode)): GameLeaderboardKey =>
+    ({ game: mode, difficulty: (mode === 'line' || mode === 'station' ? difficulty : 'hard') as GameLeaderboardKey['difficulty'], scope });
   const refreshLeaderboard = useCallback(async (key: GameLeaderboardKey) => {
     if (!gameAccountEnabled) return;
     setLeaderboardLoading(true);
@@ -467,22 +470,21 @@ export default function App() {
   }, [showMinigameModal, gameMode, gameDifficulty, refreshLeaderboard]);
   useEffect(() => {
     if (!showMinigameModal || !gameAccountEnabled) return;
-    const keys: Array<[string, GameLeaderboardKey]> = [
-      ['line', { game: 'line', difficulty: 'easy' }], ['station', { game: 'station', difficulty: 'easy' }],
-      ['city', { game: 'city', difficulty: 'hard' }], ['county', { game: 'county', difficulty: 'hard' }]
-    ];
+    const mode = gameMode || 'line', scope = leaderboardScope(mode);
     let cancelled = false;
-    void Promise.all(keys.map(async ([name, key]) => [name, (await getGameLeaderboard(key, gameAccessToken || undefined)).entries] as const))
-      .then(items => { if (!cancelled) setLeaderboardsByMode(Object.fromEntries(items)); })
-      .catch(() => { if (!cancelled) setLeaderboardsByMode({}); });
+    const standard = leaderboardKey(mode, mode === 'line' || mode === 'station' ? 'easy' : 'hard', scope);
+    const hell = mode === 'line' || mode === 'station' ? leaderboardKey(mode, 'hell', scope) : null;
+    void Promise.all([getGameLeaderboard(standard, gameAccessToken || undefined), hell ? getGameLeaderboard(hell, gameAccessToken || undefined) : Promise.resolve({ entries: [] as LeaderboardEntry[] })])
+      .then(([normal, hard]) => { if (!cancelled) setLadderBoards({ standard: normal.entries, hell: hard.entries }); })
+      .catch(() => { if (!cancelled) setLadderBoards({ standard: [], hell: [] }); });
     return () => { cancelled = true; };
-  }, [showMinigameModal, gameAccessToken]);
+  }, [showMinigameModal, gameAccessToken, gameMode, gameCity, gameCountyProvince]);
   const settleGameLeaderboard = useCallback((score: number) => {
     const run = gameRunRef.current;
     gameRunRef.current = null;
     if (!run || !gameAccessToken) return;
     void finishGameRun(run.id, score, gameAccessToken)
-      .then(() => refreshLeaderboard({ game: run.game, difficulty: run.difficulty }))
+      .then(() => refreshLeaderboard({ game: run.game, difficulty: run.difficulty, scope: run.scope }))
       .catch(() => setGameAuthMessage('本局未能写入排行榜，不影响本地成绩。'));
   }, [gameAccessToken, refreshLeaderboard]);
   const finishGameOnTimeout = useCallback(() => {
@@ -722,7 +724,7 @@ export default function App() {
     setReviewAutoPlay(false);
     setReviewHoveredStop(null);
     gameRunRef.current = null;
-    void startGameRun(leaderboardKey(mode, diff), gameAccessToken)
+    void startGameRun(leaderboardKey(mode, diff, leaderboardScope(mode, city, activeProv)), gameAccessToken)
       .then(result => { gameRunRef.current = result.run; })
       .catch(() => setGameAuthMessage('排行榜会话创建失败，请重新登录后再试。'));
 
@@ -2329,6 +2331,15 @@ export default function App() {
       const location=await new Promise<GeolocationPosition>((resolve,reject)=>navigator.geolocation.getCurrentPosition(resolve,reject,{enableHighAccuracy:true,timeout:12000,maximumAge:60000}));
       if(request!==locationRequestRef.current)return;
       const position=gpsToMap([location.coords.longitude,location.coords.latitude]);
+      // The game lobby follows the city/province containing the user's
+      // accepted location; if it cannot resolve one, its defaults stay Beijing.
+      void loadPublishedCities().then(catalog => {
+        const matched = catalog.find(city => cityTouchesRadius(city, position, 0));
+        if (!matched) return;
+        setGameCity(matched.city);
+        setGameProvince(matched.province);
+        setGameCountyProvince(matched.province);
+      }).catch(() => {});
       const map=mapRef.current,AMap=(window as any).AMap;
       if(!map||!AMap)return;
       if(!isMinigameActiveRef.current){
@@ -8123,10 +8134,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     </div>
 
                     {gameAccountEnabled && <div className="rounded-2xl border border-m3-outline-variant/30 bg-m3-surface p-3 md:col-start-2 md:row-start-2">
-                      <div className="mb-2 flex items-center justify-between"><span className="text-xs font-black text-slate-700">我的天梯排名</span><button type="button" onClick={() => gameMode && void refreshLeaderboard(leaderboardKey(gameMode,gameDifficulty))} className="text-[11px] font-bold text-m3-primary">刷新</button></div>
-                      <div className="grid grid-cols-2 gap-2">
-                        {[['line','线路'],['station','站名'],['city','城市'],['county','县城']].map(([id,label]) => { const current = leaderboardsByMode[id]?.find(item => item.isCurrentUser); return <div key={id} className="rounded-xl bg-m3-surface-container-low p-2"><p className="text-[10px] font-bold text-slate-500">{label}</p><p className="mt-1 text-xs font-black text-slate-800">排名 {current ? `#${current.rank}` : '--'}</p><p className="text-[10px] font-bold text-m3-primary">{current ? `${current.score} 分` : '-- 分'}</p></div>; })}
-                      </div>
+                      {(() => { const mode = gameMode || 'line', scope = leaderboardScope(mode); const single = mode === 'city' || mode === 'county'; const label = mode === 'city' ? '全国榜' : mode === 'county' ? `${scope}榜` : `${scope}榜`; return <><div className="mb-2 flex items-center justify-between"><span className="text-xs font-black text-slate-700">{label} · {mode === 'line' ? '看图猜线路' : mode === 'station' ? '看通达度猜站名' : mode === 'city' ? '看线网猜城市' : '看线网猜县城'}</span><button type="button" onClick={() => { const normal = leaderboardKey(mode, single ? 'hard' : 'easy'); const hard = single ? null : leaderboardKey(mode, 'hell'); void Promise.all([getGameLeaderboard(normal, gameAccessToken || undefined), hard ? getGameLeaderboard(hard, gameAccessToken || undefined) : Promise.resolve({ entries: [] as LeaderboardEntry[] })]).then(([a,b]) => setLadderBoards({ standard: a.entries, hell: b.entries })); }} className="text-[11px] font-bold text-m3-primary">刷新</button></div><div className={`grid gap-2 ${single ? 'grid-cols-1' : 'grid-cols-2'}`}><GameLadderPanel title={single ? '天梯榜' : '标准天梯'} entries={ladderBoards.standard} loading={leaderboardLoading} />{!single && <GameLadderPanel title="地狱天梯" entries={ladderBoards.hell} loading={leaderboardLoading} />}</div></>; })()}
                     </div>}
 
                     {/* Mode selection */}
@@ -8144,9 +8152,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             onClick={() => setGameMode(m.id as any)}
                             className={`p-4 rounded-2xl border cursor-pointer transition-all flex items-start gap-3.5 ${gameMode === m.id ? 'bg-m3-primary-container/40 border-m3-primary shadow-sm ring-1 ring-m3-primary/30' : 'bg-m3-surface border-m3-outline-variant/30 hover:bg-m3-surface-container-low'}`}
                           >
-                            <div aria-hidden="true" className={`mt-0.5 flex h-14 w-16 shrink-0 flex-col justify-center gap-1 rounded-xl border p-2 shadow-inner ${gameMode === m.id ? 'border-m3-primary/40 bg-m3-primary text-m3-on-primary' : 'border-m3-outline-variant/20 bg-m3-surface-container text-slate-500'}`}>
-                              {[['1','w-full'],['2','w-4/5'],['3','w-3/5']].map(([rank,width]) => <div key={rank} className="flex items-center gap-1"><span className="w-2 text-[8px] font-black leading-none">{rank}</span><span className={`h-1.5 rounded-full ${width} ${gameMode === m.id ? 'bg-white/90' : 'bg-m3-primary/65'}`} /></div>)}
-                            </div>
+                            <GameModeVisual mode={m.id as 'line' | 'station' | 'city' | 'county'} active={gameMode === m.id} />
                             <div className="flex-1 min-w-0">
                               <h3 className="text-sm font-black text-slate-900">{m.title}</h3>
                               <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{m.desc}</p>

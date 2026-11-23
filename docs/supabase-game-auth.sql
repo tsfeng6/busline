@@ -23,10 +23,13 @@ create table if not exists public.game_runs (
   started_at timestamptz not null default now(),
   finished_at timestamptz,
   score integer,
+  game_city text not null default '北京市' check (char_length(game_city) between 1 and 64),
   check ((game in ('line','station') and difficulty in ('easy','hell')) or (game in ('city','county') and difficulty = 'hard')),
   check (score is null or score between 0 and 2000)
 );
+alter table public.game_runs add column if not exists game_city text not null default '北京市';
 create index if not exists game_runs_board_idx on public.game_runs (game, difficulty, score desc, finished_at asc) where finished_at is not null;
+create index if not exists game_runs_city_board_idx on public.game_runs (game_city, game, difficulty, score desc, finished_at asc) where finished_at is not null;
 
 alter table public.game_profiles enable row level security;
 alter table public.game_runs enable row level security;
@@ -71,7 +74,8 @@ drop trigger if exists on_auth_user_game_profile on auth.users;
 create trigger on_auth_user_game_profile after insert on auth.users
 for each row execute procedure public.set_game_profile_name();
 
-create or replace function public.start_game_run(p_game text, p_difficulty text)
+drop function if exists public.start_game_run(text, text);
+create function public.start_game_run(p_game text, p_difficulty text, p_city text)
 returns public.game_runs language plpgsql security definer set search_path = public as $$
 declare result public.game_runs;
 begin
@@ -83,7 +87,8 @@ begin
   if exists (select 1 from public.game_runs where user_id = auth.uid() and started_at > now() - interval '3 seconds') then
     raise exception '请勿重复开始挑战';
   end if;
-  insert into public.game_runs (user_id, game, difficulty) values (auth.uid(), p_game, p_difficulty) returning * into result;
+  if char_length(trim(coalesce(p_city,''))) not between 1 and 64 then raise exception '排行榜城市无效'; end if;
+  insert into public.game_runs (user_id, game, difficulty, game_city) values (auth.uid(), p_game, p_difficulty, trim(p_city)) returning * into result;
   return result;
 end;
 $$;
@@ -108,30 +113,32 @@ begin
   update public.game_runs set score = p_score, finished_at = now() where id = p_run_id;
   return query
   select true, coalesce(max(r.score), 0)::integer,
-    (select count(*) + 1 from (select distinct on (user_id) user_id, score, finished_at from public.game_runs where game = run_row.game and difficulty = run_row.difficulty and finished_at is not null order by user_id, score desc, finished_at asc) board where board.score > p_score or (board.score = p_score and board.finished_at < now()))
-  from public.game_runs r where r.user_id = auth.uid() and r.game = run_row.game and r.difficulty = run_row.difficulty and r.finished_at is not null;
+    (select count(*) + 1 from (select distinct on (user_id) user_id, score, finished_at from public.game_runs where game_city = run_row.game_city and game = run_row.game and difficulty = run_row.difficulty and finished_at is not null order by user_id, score desc, finished_at asc) board where board.score > p_score or (board.score = p_score and board.finished_at < now()))
+  from public.game_runs r where r.user_id = auth.uid() and r.game_city = run_row.game_city and r.game = run_row.game and r.difficulty = run_row.difficulty and r.finished_at is not null;
 end;
 $$;
 
 -- PostgreSQL cannot replace a function when its OUT-column shape changes.
 -- This function has no dependent database objects and reads existing runs.
 drop function if exists public.get_game_leaderboard(text, text);
-create function public.get_game_leaderboard(p_game text, p_difficulty text)
+drop function if exists public.get_game_leaderboard(text, text, text);
+create function public.get_game_leaderboard(p_game text, p_difficulty text, p_city text)
 returns table (rank bigint, display_name text, avatar_path text, avatar_url text, score integer, achieved_at timestamptz, is_current_user boolean) language sql security definer set search_path = public as $$
   with best as (
     select distinct on (r.user_id) r.user_id, r.score, r.finished_at
-    from public.game_runs r where r.game = p_game and r.difficulty = p_difficulty and r.finished_at is not null
+    from public.game_runs r where r.game_city = p_city and r.game = p_game and r.difficulty = p_difficulty and r.finished_at is not null
     order by r.user_id, r.score desc, r.finished_at asc
   ), ranked as (
     select dense_rank() over (order by score desc) as rank, user_id, score, finished_at from best
   )
   select ranked.rank, coalesce(p.display_name, '巴士玩家'), p.avatar_path, p.avatar_url, ranked.score, ranked.finished_at, ranked.user_id = auth.uid()
   from ranked left join public.game_profiles p on p.id = ranked.user_id
-  order by ranked.rank, ranked.finished_at asc limit 50;
+  where ranked.rank <= 5 or ranked.user_id = auth.uid()
+  order by ranked.rank, ranked.finished_at asc;
 $$;
-grant execute on function public.start_game_run(text, text) to authenticated;
+grant execute on function public.start_game_run(text, text, text) to authenticated;
 grant execute on function public.finish_game_run(uuid, integer) to authenticated;
-grant execute on function public.get_game_leaderboard(text, text) to anon, authenticated;
+grant execute on function public.get_game_leaderboard(text, text, text) to anon, authenticated;
 grant execute on function public.current_game_profile() to authenticated;
 grant execute on function public.update_game_profile(text, text) to authenticated;
 
