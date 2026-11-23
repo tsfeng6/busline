@@ -8,6 +8,11 @@ create table if not exists public.game_profiles (
   avatar_path text check (avatar_path is null or avatar_path ~ '^[0-9a-f-]{36}/avatar\.(webp|jpeg)$'),
   created_at timestamptz not null default now()
 );
+-- Existing installations created before avatar support need this additive
+-- migration because CREATE TABLE IF NOT EXISTS does not alter old columns.
+alter table public.game_profiles add column if not exists avatar_path text;
+alter table public.game_profiles drop constraint if exists game_profiles_avatar_path_check;
+alter table public.game_profiles add constraint game_profiles_avatar_path_check check (avatar_path is null or avatar_path ~ '^[0-9a-f-]{36}/avatar\.(webp|jpeg)$');
 create table if not exists public.game_runs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
