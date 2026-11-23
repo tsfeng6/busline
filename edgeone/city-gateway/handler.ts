@@ -19,7 +19,14 @@ export const gatewaySignature=(secret:string,text:string)=>createHmac('sha256',s
 type GameName='line'|'station'|'city'|'county';type GameDifficulty='easy'|'hell'|'hard';
 const validLeaderboard=(game:any,difficulty:any):game is GameName=>
   (['line','station'].includes(game)&&['easy','hell'].includes(difficulty))||(['city','county'].includes(game)&&difficulty==='hard');
-const gameAccount=(user:any,profile?:any):{id:string;displayName:string;avatarUrl?:string}=>({id:String(user?.id||''),displayName:String(profile?.display_name||'巴士玩家').slice(0,24),avatarUrl:profile?.avatar_url||profile?.avatar_path?String(profile?.avatar_url||profile?.avatar_path):undefined});
+type LeaderboardCacheEntry={expiresAt:number;entries:unknown[]};
+// EdgeOne isolates are short-lived, so this is deliberately only a tiny
+// best-effort cache. It removes duplicate modal/refresh requests without ever
+// making the database the sole source of truth; score settlement evicts it.
+const leaderboardCache=new Map<string,LeaderboardCacheEntry>();
+const leaderboardCachePrefix=(game:string,difficulty:string,scope:string)=>`${game}\u0001${difficulty}\u0001${scope}\u0001`;
+const leaderboardCacheKey=(game:string,difficulty:string,scope:string,bearer:string)=>leaderboardCachePrefix(game,difficulty,scope)+(bearer?hash(bearer):'public');
+const gameAccount=(user:any,profile?:any):{id:string;displayName:string;avatarUrl?:string}=>({id:String(user?.id||profile?.id||''),displayName:String(profile?.display_name||'巴士玩家').slice(0,24),avatarUrl:profile?.avatar_url||profile?.avatar_path?String(profile?.avatar_url||profile?.avatar_path):undefined});
 const xmlEscape=(value:string)=>value.replace(/[<>&'\"]/g,char=>({"<":'&lt;',">":'&gt;','&':'&amp;',"'":'&apos;','\"':'&quot;'}[char]!));
 const xmlValue=(xml:string,name:string)=>{const found=new RegExp(`<${name}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${name}>|<${name}>([\\s\\S]*?)<\\/${name}>`).exec(xml);return (found?.[1]||found?.[2]||'').trim();};
 const wechatSignature=(token:string,timestamp:string,nonce:string)=>createHash('sha1').update([token,timestamp,nonce].sort().join('')).digest('hex');
@@ -226,7 +233,10 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     const profile=await profileFor(auth),account=withAvatarUrl(gameAccount(data.user,Array.isArray(profile)?profile[0]:profile));
     return json({account,accessToken:data.access_token});
   }
-  if(path==='/game-auth/me'&&request.method==='GET'){const user=await supabase('/auth/v1/user',{},true),profile=await profileFor(bearer);return json({account:withAvatarUrl(gameAccount(user,Array.isArray(profile)?profile[0]:profile))});}
+  // current_game_profile derives auth.uid() from the same verified bearer and
+  // also returns the profile id. This avoids a second, serial /auth/v1/user
+  // round trip on every page-load session restore.
+  if(path==='/game-auth/me'&&request.method==='GET'){const profile=await profileFor(bearer),row=Array.isArray(profile)?profile[0]:profile;return json({account:withAvatarUrl(gameAccount(null,row))});}
   if(path==='/game-profile'&&request.method==='POST'){
     const input=await jsonBody(request,300000),displayName=String(input.displayName||'').trim(),avatarData=input.avatarData===undefined?undefined:String(input.avatarData);
     if(displayName.length<2||displayName.length>24)throw fail(400,'昵称须为 2–24 个字。');
@@ -249,8 +259,16 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
   }
   if(path==='/leaderboards'&&request.method==='GET'){
     const game=url.searchParams.get('game'),difficulty=url.searchParams.get('difficulty'),scope=String(url.searchParams.get('scope')||'北京市').trim();if(!validLeaderboard(game,difficulty)||scope.length<1||scope.length>64)throw fail(400,'不存在这个游戏榜单。');
-    const data=await supabase('/rest/v1/rpc/get_game_leaderboard',{method:'POST',body:JSON.stringify({p_game:game,p_difficulty:difficulty,p_city:scope})},/^Bearer\s+\S+$/i.test(bearer));
-    return json({entries:(Array.isArray(data)?data:[]).map((item:any)=>({rank:Number(item.rank),displayName:String(item.display_name),avatarUrl:item.avatar_url||item.avatar_path?String(item.avatar_url||base+'/storage/v1/object/public/game-avatars/'+item.avatar_path):undefined,score:Number(item.score),achievedAt:String(item.achieved_at),isCurrentUser:item.is_current_user===true}))});
+    const difficultyValue=String(difficulty),cacheKey=leaderboardCacheKey(game,difficultyValue,scope,bearer),cached=leaderboardCache.get(cacheKey);
+    let entries:unknown[];
+    if(cached&&cached.expiresAt>Date.now())entries=cached.entries;
+    else {
+      const data=await supabase('/rest/v1/rpc/get_game_leaderboard',{method:'POST',body:JSON.stringify({p_game:game,p_difficulty:difficultyValue,p_city:scope})},/^Bearer\s+\S+$/i.test(bearer));
+      entries=(Array.isArray(data)?data:[]).map((item:any)=>({rank:Number(item.rank),displayName:String(item.display_name),avatarUrl:item.avatar_url||item.avatar_path?String(item.avatar_url||base+'/storage/v1/object/public/game-avatars/'+item.avatar_path):undefined,score:Number(item.score),achievedAt:String(item.achieved_at),isCurrentUser:item.is_current_user===true}));
+      leaderboardCache.set(cacheKey,{expiresAt:Date.now()+15_000,entries});
+      if(leaderboardCache.size>120)for(const [key,value] of leaderboardCache)if(value.expiresAt<=Date.now())leaderboardCache.delete(key);
+    }
+    const response=json({entries});response.headers.set('Cache-Control','private, max-age=15');response.headers.set('Vary','Cookie, Authorization');return response;
   }
   if(path==='/game-runs'&&request.method==='POST'){
     const input=await jsonBody(request,512),scope=String(input.scope||'北京市').trim();if(!validLeaderboard(input.game,input.difficulty)||scope.length<1||scope.length>64)throw fail(400,'不存在这个游戏榜单。');
@@ -262,6 +280,9 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
   if(finish&&request.method==='POST'){
     const input=await jsonBody(request,512),score=Number(input.score);if(!Number.isInteger(score)||score<0||score>2000)throw fail(400,'分数无效。');
     const data=await supabase('/rest/v1/rpc/finish_game_run',{method:'POST',body:JSON.stringify({p_run_id:finish[1],p_score:score})},true);
+    // The finish RPC does not echo the run scope. A full tiny-cache eviction
+    // is safer than risking a stale rank after a successful settlement.
+    leaderboardCache.clear();
     const row=Array.isArray(data)?data[0]:data;return json({accepted:row?.accepted===true,bestScore:Number(row?.best_score||0),rank:row?.rank===null?undefined:Number(row?.rank)});
   }
   throw fail(404,'没有这个账号接口。');

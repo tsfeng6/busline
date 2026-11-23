@@ -351,7 +351,6 @@ export default function App() {
   // the unauthenticated state before their profile arrives.
   const [gameAuthLoading, setGameAuthLoading] = useState(gameAccountEnabled);
   const [gameAuthMessage, setGameAuthMessage] = useState('');
-  const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
   const [ladderBoards, setLadderBoards] = useState<{ standard: LeaderboardEntry[]; hell: LeaderboardEntry[] }>({ standard: [], hell: [] });
   const [gameLaunchAnimation, setGameLaunchAnimation] = useState(false);
 
@@ -469,39 +468,40 @@ export default function App() {
   const leaderboardScope = (mode: 'line' | 'station' | 'city' | 'county', city = gameCity, province = gameCountyProvince) => mode === 'city' ? '全国' : mode === 'county' ? province : city || '北京市';
   const leaderboardKey = (mode: 'line' | 'station' | 'city' | 'county', difficulty: 'easy' | 'medium' | 'hard' | 'hell', scope = leaderboardScope(mode)): GameLeaderboardKey =>
     ({ game: mode, difficulty: (mode === 'line' || mode === 'station' ? difficulty : 'hard') as GameLeaderboardKey['difficulty'], scope });
-  const refreshLeaderboard = useCallback(async (key: GameLeaderboardKey) => {
+  const refreshLadderBoards = useCallback(async (mode: 'line' | 'station' | 'city' | 'county', scope: string) => {
     if (!gameAccountEnabled) return;
+    const standard = leaderboardKey(mode, mode === 'line' || mode === 'station' ? 'easy' : 'hard', scope);
+    const hell = mode === 'line' || mode === 'station' ? leaderboardKey(mode, 'hell', scope) : null;
     setLeaderboardLoading(true);
-    try { setLeaderboardEntries((await getGameLeaderboard(key, gameAccessToken || undefined)).entries); }
-    catch { setLeaderboardEntries([]); }
-    finally { setLeaderboardLoading(false); }
+    try {
+      const [normal, hard] = await Promise.all([
+        getGameLeaderboard(standard, gameAccessToken || undefined),
+        hell ? getGameLeaderboard(hell, gameAccessToken || undefined) : Promise.resolve({ entries: [] as LeaderboardEntry[] })
+      ]);
+      setLadderBoards({ standard: normal.entries, hell: hard.entries });
+    } catch {
+      setLadderBoards({ standard: [], hell: [] });
+    } finally {
+      setLeaderboardLoading(false);
+    }
   }, [gameAccessToken]);
-  useEffect(() => {
-    if (showMinigameModal && gameMode) void refreshLeaderboard(leaderboardKey(gameMode, gameDifficulty));
-  }, [showMinigameModal, gameMode, gameDifficulty, refreshLeaderboard]);
   useEffect(() => {
     if (!showMinigameModal || !gameAccountEnabled) return;
     const mode = gameMode || 'line', scope = leaderboardScope(mode);
-    let cancelled = false;
-    const standard = leaderboardKey(mode, mode === 'line' || mode === 'station' ? 'easy' : 'hard', scope);
-    const hell = mode === 'line' || mode === 'station' ? leaderboardKey(mode, 'hell', scope) : null;
-    void Promise.all([getGameLeaderboard(standard, gameAccessToken || undefined), hell ? getGameLeaderboard(hell, gameAccessToken || undefined) : Promise.resolve({ entries: [] as LeaderboardEntry[] })])
-      .then(([normal, hard]) => { if (!cancelled) setLadderBoards({ standard: normal.entries, hell: hard.entries }); })
-      .catch(() => { if (!cancelled) setLadderBoards({ standard: [], hell: [] }); });
-    return () => { cancelled = true; };
-  }, [showMinigameModal, gameAccessToken, gameMode, gameCity, gameCountyProvince]);
+    void refreshLadderBoards(mode, scope);
+  }, [showMinigameModal, gameAccessToken, gameMode, gameCity, gameCountyProvince, refreshLadderBoards]);
   const settleGameLeaderboard = useCallback((score: number) => {
     const run = gameRunRef.current;
     gameRunRef.current = null;
     if (!run || !gameAccessToken) return;
     void finishGameRun(run.id, score, gameAccessToken)
-      .then(() => refreshLeaderboard({ game: run.game, difficulty: run.difficulty, scope: run.scope }))
+      .then(() => refreshLadderBoards(run.game, run.scope || '北京市'))
       .catch((error: any) => {
         const reason = error?.message || '服务暂时不可用';
         setGameAuthMessage(`本局未能写入排行榜：${reason}`);
         setGameDataError(`本局成绩未能写入排行榜：${reason}`);
       });
-  }, [gameAccessToken, refreshLeaderboard]);
+  }, [gameAccessToken, refreshLadderBoards]);
   const finishGameOnTimeout = useCallback(() => {
     if (gameTimedOutRef.current) return;
     gameTimedOutRef.current = true;
@@ -8145,7 +8145,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     </div>
 
                     {gameAccountEnabled && <div className="rounded-2xl border border-m3-outline-variant/30 bg-m3-surface p-3 md:col-start-2 md:row-start-2">
-                      {(() => { const mode = gameMode || 'line', scope = leaderboardScope(mode); const single = mode === 'city' || mode === 'county'; const label = mode === 'city' ? '全国榜' : mode === 'county' ? `${scope}榜` : `${scope}榜`; return <><div className="mb-2 flex items-center justify-between"><span className="text-xs font-black text-slate-700">{label} · {mode === 'line' ? '看图猜线路' : mode === 'station' ? '看通达度猜站名' : mode === 'city' ? '看线网猜城市' : '看线网猜县城'}</span><button type="button" onClick={() => { const normal = leaderboardKey(mode, single ? 'hard' : 'easy'); const hard = single ? null : leaderboardKey(mode, 'hell'); void Promise.all([getGameLeaderboard(normal, gameAccessToken || undefined), hard ? getGameLeaderboard(hard, gameAccessToken || undefined) : Promise.resolve({ entries: [] as LeaderboardEntry[] })]).then(([a,b]) => setLadderBoards({ standard: a.entries, hell: b.entries })); }} className="text-[11px] font-bold text-m3-primary">刷新</button></div><div className={`grid gap-2 ${single ? 'grid-cols-1' : 'grid-cols-2'}`}><GameLadderPanel title={single ? '天梯榜' : '标准天梯'} entries={ladderBoards.standard} loading={leaderboardLoading} />{!single && <GameLadderPanel title="地狱天梯" entries={ladderBoards.hell} loading={leaderboardLoading} />}</div></>; })()}
+                      {(() => { const mode = gameMode || 'line', scope = leaderboardScope(mode); const single = mode === 'city' || mode === 'county'; const label = mode === 'city' ? '全国榜' : mode === 'county' ? `${scope}榜` : `${scope}榜`; return <><div className="mb-2 flex items-center justify-between"><span className="text-xs font-black text-slate-700">{label} · {mode === 'line' ? '看图猜线路' : mode === 'station' ? '看通达度猜站名' : mode === 'city' ? '看线网猜城市' : '看线网猜县城'}</span><button type="button" onClick={() => void refreshLadderBoards(mode, scope)} className="text-[11px] font-bold text-m3-primary">刷新</button></div><div className={`grid gap-2 ${single ? 'grid-cols-1' : 'grid-cols-2'}`}><GameLadderPanel title={single ? '天梯榜' : '标准天梯'} entries={ladderBoards.standard} loading={leaderboardLoading} />{!single && <GameLadderPanel title="地狱天梯" entries={ladderBoards.hell} loading={leaderboardLoading} />}</div></>; })()}
                     </div>}
 
                     {/* Mode selection */}

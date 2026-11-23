@@ -95,8 +95,8 @@ $$;
 
 drop function if exists public.current_game_profile();
 create function public.current_game_profile()
-returns table (display_name text, avatar_path text, avatar_url text) language sql security definer set search_path = public as $$
-  select p.display_name, p.avatar_path, p.avatar_url from public.game_profiles p where p.id = auth.uid();
+returns table (id uuid, display_name text, avatar_path text, avatar_url text) language sql security definer set search_path = public as $$
+  select p.id, p.display_name, p.avatar_path, p.avatar_url from public.game_profiles p where p.id = auth.uid();
 $$;
 
 drop function if exists public.update_game_profile(text, text);
