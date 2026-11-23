@@ -496,7 +496,11 @@ export default function App() {
     if (!run || !gameAccessToken) return;
     void finishGameRun(run.id, score, gameAccessToken)
       .then(() => refreshLeaderboard({ game: run.game, difficulty: run.difficulty, scope: run.scope }))
-      .catch(() => setGameAuthMessage('本局未能写入排行榜，不影响本地成绩。'));
+      .catch((error: any) => {
+        const reason = error?.message || '服务暂时不可用';
+        setGameAuthMessage(`本局未能写入排行榜：${reason}`);
+        setGameDataError(`本局成绩未能写入排行榜：${reason}`);
+      });
   }, [gameAccessToken, refreshLeaderboard]);
   const finishGameOnTimeout = useCallback(() => {
     if (gameTimedOutRef.current) return;
@@ -706,46 +710,51 @@ export default function App() {
       return;
     }
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
-
-    setGameLaunchAnimation(true);
-    window.setTimeout(() => setGameLaunchAnimation(false), 1150);
-
-    isMinigameActiveRef.current = true;
-    if (!prevMapModeBeforeGameRef.current) {
-      prevMapModeBeforeGameRef.current = mapMode;
-    }
-    clearMapStateForMinigame();
-
-    setGameDataError('');
-    setGameMode(mode);
-    setGameDifficulty(diff);
-    setGameCity(city);
-    const timeLimit = getGameTimeLimit(mode, diff);
-    gameTimeRemainingMsRef.current = timeLimit === null ? null : timeLimit * 1000;
-    gameDeadlineRef.current = null;
-    gameTimedOutRef.current = false;
-    setGameTimedOut(false);
-    setGameTimeLeft(timeLimit);
-    setGameState('playing');
-    setGameScore(0);
-    setGameHints({ remaining: 7, usedOnQuestion: 0 });
-    setGameQuestionNum(1);
-    setGameFeedback(null);
-    setGameUserInput('');
-    setGameQuestionData(null);
-    setGameHistory([]);
-    currentGameQuestionRef.current = null;
-    setReviewIndex(0);
-    setReviewAutoPlay(false);
-    setReviewHoveredStop(null);
     gameRunRef.current = null;
+    setGameLoading(true);
+    setGameLoadingText('正在建立排行榜会话…');
+    setGameDataError('');
     void startGameRun(leaderboardKey(mode, diff, leaderboardScope(mode, city, activeProv)), gameAccessToken)
-      .then(result => { gameRunRef.current = result.run; })
-      .catch(() => setGameAuthMessage('排行榜会话创建失败，请重新登录后再试。'));
-
-    setMapMode('normal');
-
-    generateQuestion(mode, diff, city, 1, undefined, activeProv);
+      .then(result => {
+        // A local challenge is not allowed to start until it has one fresh,
+        // single-use server run.  This makes every completed score settleable.
+        gameRunRef.current = result.run;
+        setGameLaunchAnimation(true);
+        window.setTimeout(() => setGameLaunchAnimation(false), 1150);
+        isMinigameActiveRef.current = true;
+        if (!prevMapModeBeforeGameRef.current) prevMapModeBeforeGameRef.current = mapMode;
+        clearMapStateForMinigame();
+        setGameMode(mode);
+        setGameDifficulty(diff);
+        setGameCity(city);
+        const timeLimit = getGameTimeLimit(mode, diff);
+        gameTimeRemainingMsRef.current = timeLimit === null ? null : timeLimit * 1000;
+        gameDeadlineRef.current = null;
+        gameTimedOutRef.current = false;
+        setGameTimedOut(false);
+        setGameTimeLeft(timeLimit);
+        setGameState('playing');
+        setGameScore(0);
+        setGameHints({ remaining: 7, usedOnQuestion: 0 });
+        setGameQuestionNum(1);
+        setGameFeedback(null);
+        setGameUserInput('');
+        setGameQuestionData(null);
+        setGameHistory([]);
+        currentGameQuestionRef.current = null;
+        setReviewIndex(0);
+        setReviewAutoPlay(false);
+        setReviewHoveredStop(null);
+        setMapMode('normal');
+        void generateQuestion(mode, diff, city, 1, undefined, activeProv);
+      })
+      .catch((error: any) => {
+        const reason = error?.message || '排行榜服务暂时不可用';
+        setGameLoading(false);
+        setGameState('menu');
+        setGameDataError(`无法开始本局：${reason}`);
+        setGameAuthMessage(`排行榜会话创建失败：${reason}`);
+      });
   };
 
   const generateQuestion = async (
