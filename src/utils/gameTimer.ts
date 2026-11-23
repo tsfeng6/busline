@@ -1,6 +1,9 @@
 export function getGameTimeLimit(mode: 'line' | 'station' | 'city' | 'county', difficulty: 'easy' | 'medium' | 'hard' | 'hell'): number | null {
   if (mode === 'city' || mode === 'county') return 180;
-  return { easy: 120, medium: 180, hard: 300, hell: null }[difficulty];
+  // The two redesigned ladder modes are per-question challenges.  A new
+  // question resets this amount after loading, rather than spending one timer
+  // across the whole run.
+  return difficulty === 'hell' ? 90 : 120;
 }
 
 export function formatGameTime(seconds: number): string {

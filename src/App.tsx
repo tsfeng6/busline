@@ -386,6 +386,7 @@ export default function App() {
     options?: string[];
     isFillIn: boolean;
     promptText: string;
+    terminalLabels?: string[];
   } | null>(null);
   const [gameUserInput, setGameUserInput] = useState('');
   const [gameFeedback, setGameFeedback] = useState<{ correct: boolean; msg: string } | null>(null);
@@ -405,6 +406,7 @@ export default function App() {
     targetPoint?: { name: string; lngLat: [number, number] };
     fallbackCenter?: [number, number];
     countyWindow?: {center: Point; radius:number};
+    terminalLabels?: string[];
   };
   const [gameHistory, setGameHistory] = useState<GameHistoryItem[]>([]);
   const currentGameQuestionRef = useRef<Omit<GameHistoryItem, 'userAnswer' | 'isCorrect'> | null>(null);
@@ -644,11 +646,7 @@ export default function App() {
     setReviewAutoPlay(false);
     setReviewHoveredStop(null);
 
-    if (mode === 'city' || mode === 'county' || diff === 'hell' || diff === 'hard' || diff === 'medium') {
-      setMapMode('blank');
-    } else {
-      setMapMode('normal');
-    }
+    setMapMode('normal');
 
     generateQuestion(mode, diff, city, 1, undefined, activeProv);
   };
@@ -692,6 +690,7 @@ export default function App() {
         question=createOfflineQuestion(mode,diff,data,catalog.map(item=>item.city),qNum,prevAnswer);
       }
       if (gameSessionIdRef.current !== sessionId) return;
+      setMapMode(question.showBasemap === false ? 'blank' : 'normal');
       const paths=question.networkPaths||question.lineInfos?.map(line=>line.path)||[];
       if (paths.length) {
         const network = new AMap.Polyline({path:paths,strokeColor:'#52796F',strokeWeight:lineThickness==='thin'?2:3.2,strokeOpacity:.85,lineJoin:'round',lineCap:'round',zIndex:45});
@@ -703,7 +702,7 @@ export default function App() {
         } else if(mode==='station'&&question.targetPoint)mapInstance.setZoomAndCenter(14,question.targetPoint.lngLat);
         else mapInstance.setFitView([network],false,[48,150,36,36]);
       }
-      if ((diff==='easy'||diff==='medium') && (mode==='line'||mode==='station')) {
+      if (question.showStops && (mode==='line'||mode==='station')) {
         const markers=(question.networkStops||[]).map(stop=>new AMap.CircleMarker({center:stop.lngLat,radius:3.5,fillColor:'#52796F',strokeColor:'#fff',strokeWeight:1,zIndex:60,bubble:true}));
         markerGroupRef.current?.addOverlays(markers);
       }
@@ -713,7 +712,13 @@ export default function App() {
       }
       if(question.targetPoint)markerGroupRef.current?.addOverlay(new AMap.CircleMarker({center:question.targetPoint.lngLat,radius:9,fillColor:'#ef4444',strokeColor:'#fff',strokeWeight:2,zIndex:95}));
       currentGameQuestionRef.current={...question,questionNum:qNum,mode,difficulty:diff,province};
-      setGameQuestionData({correctAnswer:question.correctAnswer,options:question.options,isFillIn:question.isFillIn,promptText:question.promptText});
+      if (mode === 'line' || mode === 'station') {
+        const timeLimit = getGameTimeLimit(mode, diff)!;
+        gameTimeRemainingMsRef.current = timeLimit * 1000;
+        gameDeadlineRef.current = null;
+        setGameTimeLeft(timeLimit);
+      }
+      setGameQuestionData({correctAnswer:question.correctAnswer,options:question.options,isFillIn:question.isFillIn,promptText:question.promptText,terminalLabels:question.terminalLabels});
     } catch(error:any) {
       if(gameSessionIdRef.current===sessionId){setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
     } finally {if(gameSessionIdRef.current===sessionId)setGameLoading(false);}
@@ -8056,7 +8061,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                                 <span className="px-2 py-0.5 rounded-full bg-m3-surface-container text-m3-primary font-black">
                                   {(m.id === 'city' || m.id === 'county')
                                     ? `${bestRecords[m.id]?.hard || 0}分`
-                                    : `易:${bestRecords[m.id].easy} | 中:${bestRecords[m.id].medium} | 难:${bestRecords[m.id].hard} | 地狱:${bestRecords[m.id].hell || 0}`}
+                                    : `标准:${bestRecords[m.id].easy} | 地狱:${bestRecords[m.id].hell || 0}`}
                                 </span>
                               </div>
                             </div>
@@ -8072,10 +8077,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                           <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择难度</label>
                           <div className="grid grid-cols-2 gap-2">
                             {[
-                              { id: 'easy', label: '易 (指定城市+底图+站点)' },
-                              { id: 'medium', label: '中 (指定城市+无底图+站点)' },
-                              { id: 'hard', label: '难 (指定城市+无底图+无站点)' },
-                              { id: 'hell', label: '地狱 (指定城市+全部线路)' }
+                              { id: 'easy', label: '标准天梯（选择题，120秒/题）' },
+                              { id: 'hell', label: '地狱天梯（填空题，90秒/题）' }
                             ].map(d => (
                               <button
                                 key={d.id}
@@ -8148,7 +8151,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
                 {gameState === 'menu' && gameMode && (
                   <p className="px-4 pb-3 text-center text-xs font-bold text-m3-primary">
-                    {getGameTimeLimit(gameMode, gameDifficulty) === null ? '本局不限时' : `本局限时 ${getGameTimeLimit(gameMode, gameDifficulty)! / 60} 分钟`}
+                    {(gameMode === 'line' || gameMode === 'station') ? `每题限时 ${getGameTimeLimit(gameMode, gameDifficulty)} 秒` : getGameTimeLimit(gameMode, gameDifficulty) === null ? '本局不限时' : `本局限时 ${getGameTimeLimit(gameMode, gameDifficulty)! / 60} 分钟`}
                     <span className="text-slate-500 font-medium"> · 出题加载期间暂停计时</span>
                   </p>
                 )}
@@ -8231,6 +8234,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         <span className="tabular-nums">{gameHints.remaining}/7</span>
                       </motion.button>
                     </div>
+                    {gameQuestionData.terminalLabels && gameQuestionData.terminalLabels.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5" aria-label="线路始末站">
+                        {gameQuestionData.terminalLabels.map((label, index) => (
+                          <span key={`${label}-${index}`} className="max-w-full truncate rounded-lg bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-800 border border-emerald-200">
+                            始末站：{label}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <AnimatePresence>
                       {gameHints.usedOnQuestion > 0 && !gameLoading && (
                         <motion.div

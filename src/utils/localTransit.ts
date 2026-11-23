@@ -9,12 +9,15 @@ export const routeName=(name:string)=>name.replace(/[（(].*$/,'').replace(/#\d+
 export function provinceForCity(city:string){return Object.entries(PROVINCE_CITIES).find(([,cities])=>cities.some(name=>canonical(name)===canonical(city)))?.[0]||'';}
 export function regularGameRoute(name:string){
  const label=routeName(name);
- if(/专线|节假日|假日|节日|机场|巴士|地铁|铁路|市郊|旅游|定制|通勤|商务|摆渡|校车|高铁|快直/.test(label))return false;
+ // Games intentionally use familiar, ordinary bus services only.  Keep this
+ // conservative: a label that is not a simple public route number is not a
+ // useful ladder question, even when it happens to have a numeric suffix.
+ if(/专线|节假日|假日|节日|机场|巴士|地铁|铁路|市郊|旅游|定制|通勤|商务|摆渡|校车|高铁|快直|夜班|夜[0-9]|社区|微循环|园区|区间快/.test(label))return false;
  return /^(?:[A-Za-z]{1,3}|[\u4e00-\u9fff]{1,3})?\d{1,4}(?:路)?(?:快车?|慢|支|区间|内环|外环)?(?:路)?$/.test(label);
 }
 export function eligibleGameLines(lines:BusLine[],difficulty:string){
  const found=new Map<string,BusLine>();
- for(const line of lines)if(line.path?.length>1&&(difficulty==='hell'||regularGameRoute(line.name))&&!found.has(routeName(line.name)))found.set(routeName(line.name),line);
+ for(const line of lines)if(line.path?.length>1&&regularGameRoute(line.name)&&!found.has(routeName(line.name)))found.set(routeName(line.name),line);
  return [...found.values()];
 }
 export function savedCountySeats(data:CityDataset):CountySeat[]{

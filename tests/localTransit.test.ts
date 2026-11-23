@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import {regularGameRoute,eligibleGameLines,clipRouteToRadius,distanceMeters,nearbyLines,gpsToMap,claimDailyLocation,savedCountySeats,provinceForCity,radiusRing} from '../src/utils/localTransit';
 import {createOfflineQuestion,shuffle} from '../src/utils/offlineGame';
+import {getGameTimeLimit} from '../src/utils/gameTimer';
 import {CityDataCache} from '../src/utils/cityDataCache';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
 const center:[number,number]=[116,39];
@@ -12,12 +13,12 @@ const data=()=>normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'cit
  lines:[{id:'1',name:'1路(甲--乙)',city:'北京市',path:[[115.95,39],[116.05,39]],via_stops:[{name:'海淀区政府',location:{lng:116,lat:39}},{name:'东站',location:{lng:116.01,lat:39}}]},
  {id:'2',name:'X107路(甲--乙)',city:'北京市',path:[[116,38.95],[116,39.05]],via_stops:[{name:'海淀区政府',location:{lng:116,lat:39}}]},
  {id:'3',name:'快速直达专线187路',city:'北京市',path:[[115.95,38.95],[116.05,39.05]],via_stops:[{name:'海淀区政府',location:{lng:116,lat:39}}]}]});
-test('regular difficulties accept numeric routes and simple prefixes/suffixes, while hell retains every saved route',()=>{
+test('game routes keep ordinary numeric services in both ladders',()=>{
  for(const name of ['1路','368路','X107路','兴33路','黎城5路','368快路','围场8路','300路内环','M191路(甲--乙)'])assert.equal(regularGameRoute(name),true,name);
  for(const name of ['快速直达专线187路','节假日5路','北京密码','机场巴士','机场5路','地铁1号线','市郊铁路S2线','商务班车1路','旅游专线2路'])assert.equal(regularGameRoute(name),false,name);
- assert.equal(eligibleGameLines(data().lines,'easy').length,2);assert.equal(eligibleGameLines(data().lines,'hell').length,3);
+ assert.equal(eligibleGameLines(data().lines,'easy').length,2);assert.equal(eligibleGameLines(data().lines,'hell').length,2);
  const special={...data(),lines:[data().lines[2]]};assert.throws(()=>createOfflineQuestion('line','easy',special,[],1),/常规线路/);
- assert.equal(createOfflineQuestion('line','hell',special,[],1).correctAnswer,'快速直达专线187路');
+ assert.throws(()=>createOfflineQuestion('line','hell',special,[],1),/常规线路/);
 });
 test('nearby 500m queries include crossing geometry without nearby stops and deduplicate route directions',()=>{
  const snapshot=data();
@@ -54,7 +55,17 @@ test('all offline modes use real saved answers and the chosen city; county windo
   if(mode==='line'||mode==='station')assert.ok(question.lineInfos?.every(line=>regularGameRoute(line.name)));
   if(mode==='county'){assert.equal(question.countyWindow?.radius,3000);assert.ok(question.networkPaths?.every(path=>path.every(point=>distanceMeters(point,county.center)<=3000.0001)));}
  }
- const station=createOfflineQuestion('station','hell',snapshot,[],1);assert.ok(station.lineInfos?.some(line=>line.name.includes('专线')));
+ const station=createOfflineQuestion('station','hell',snapshot,[],1);assert.ok(station.lineInfos?.every(line=>regularGameRoute(line.name)));
+});
+test('redesigned ladders apply staged map clues and preserve distinguishing line text',()=>{
+ const snapshot=data();
+ snapshot.lines.push(
+  {id:'4',name:'12路(甲--乙)',city:'北京市',path:[[115.96,39.01],[116.06,39.01]],via_stops:[{name:'甲',location:{lng:115.96,lat:39.01}},{name:'中间',location:{lng:116,lat:39.01}},{name:'乙',location:{lng:116.06,lat:39.01}}]},
+  {id:'5',name:'31路(甲--乙)',city:'北京市',path:[[115.96,39.02],[116.06,39.02]],via_stops:[{name:'甲',location:{lng:115.96,lat:39.02}},{name:'中间',location:{lng:116,lat:39.02}},{name:'乙',location:{lng:116.06,lat:39.02}}]}
+ );
+ const early=createOfflineQuestion('line','easy',snapshot,[],5),late=createOfflineQuestion('line','easy',snapshot,[],21),hell=createOfflineQuestion('line','hell',snapshot,[],11);
+ assert.equal(early.showBasemap,true);assert.equal(early.showStops,true);assert.equal(late.showBasemap,false);assert.equal(late.showStops,false);
+ assert.equal(hell.isFillIn,true);assert.equal(hell.showBasemap,false);assert.equal(hell.showStops,false);assert.ok(early.terminalLabels?.[0].includes('→'));
 });
 test('actual game generation never invokes provider search services and accepts only catalog cities',async()=>{
  const source=fs.readFileSync('src/App.tsx','utf8'),ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let declaration:ts.VariableDeclaration|undefined;
@@ -67,7 +78,7 @@ test('actual game generation never invokes provider search services and accepts 
   loadPublishedCities:async()=>[{city:snapshot.city,province:'北京市',countySeats:[seat]}],loadGameCity:async(city:string)=>{assert.equal(city,snapshot.city);return snapshot;},
   roadViewportCleanupRef:ref(null),activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),allMapStopsRef:ref(new Map()),roadStopsDataRef:ref(new Map()),
   lineGroupRef:ref({clearOverlays(){},addOverlay(){}}),markerGroupRef:ref({clearOverlays(){},getOverlays(){return [];},addOverlay(){},addOverlays(){}}),clearStopMarkerGroup(){},
-  shuffle,createOfflineQuestion,radiusRing,lineThickness:'thin',currentGameQuestionRef:ref(null),setGameQuestionData:(value:any)=>question=value,
+  shuffle,createOfflineQuestion,getGameTimeLimit,radiusRing,lineThickness:'thin',gameTimeRemainingMsRef:ref(null),gameDeadlineRef:ref(null),currentGameQuestionRef:ref(null),setGameQuestionData:(value:any)=>question=value,
   isMinigameActiveRef:ref(true),restoreMapAfterMinigame(){},setGameDataError:(message:string)=>{throw Error(message);}};
  const proxy=new Proxy(scope,{has:(target,key)=>key in target||(typeof key==='string'&&key.startsWith('set')),get:(target,key)=>key in target?target[key]:typeof key==='string'&&key.startsWith('set')?()=>{}:undefined});
  const run=Function('scope',`with(scope){${code};return generateQuestion;}`)(proxy);
