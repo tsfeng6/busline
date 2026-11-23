@@ -27,7 +27,7 @@ const wechatReply=(to:string,from:string,content:string)=>`<xml><ToUserName><![C
 const publicUrl=(value:string|undefined)=>{try{const url=new URL(value||'');return url.protocol==='https:'?url.toString().replace(/\/$/,''):null;}catch{return null;}};
 async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
   const url=new URL(request.url),path=url.pathname;
-  if(path!=='/wechat/callback'&&path!=='/wechat/login'&&path!=='/wechat/web-login')return null;
+  if(path!=='/wechat/callback'&&path!=='/wechat/login'&&path!=='/wechat/web-login'&&path!=='/wechat/qr-login'&&path!=='/wechat/registration')return null;
   // Supabase's sb_secret keys supersede the legacy service_role JWT. Accept
   // both during migration, but only send a legacy JWT as Authorization.
   const base=env.SUPABASE_URL?.replace(/\/$/,'')||'',serviceKey=env.SUPABASE_SECRET_KEY||env.SUPABASE_SERVICE_ROLE_KEY;
@@ -39,6 +39,14 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
     const body=await response.json().catch(()=>({}));if(!response.ok)throw fail(503,String(body.message||body.msg||'账号服务暂时不可用。').slice(0,120));return body;
   };
   const xml=(content:string,status=200)=>new Response(content,{status,headers:{'Content-Type':'application/xml; charset=utf-8','Cache-Control':'no-store'}});
+  const wechatAccessToken=async()=>{
+    const appId=env.WECHAT_APP_ID||'',secret=env.WECHAT_APP_SECRET||'';
+    if(!appId||!secret)throw fail(503,'公众号扫码登录尚未配置。');
+    const data=await (await transport(`https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(secret)}`)).json();
+    if(!data.access_token)throw fail(503,'公众号授权暂时不可用。');
+    return String(data.access_token);
+  };
+  const wechatProfile=async(openid:string)=>{try{const token=await wechatAccessToken(),info=await (await transport(`https://api.weixin.qq.com/cgi-bin/user/info?access_token=${encodeURIComponent(token)}&openid=${encodeURIComponent(openid)}&lang=zh_CN`)).json();return {nickname:String(info.nickname||'').replace(/\s/g,'').slice(0,24)||'巴士玩家',avatarUrl:/^https:\/\//.test(String(info.headimgurl||''))?String(info.headimgurl):''};}catch{return {nickname:'巴士玩家',avatarUrl:''};}};
   const magicLink=async(userId:string)=>{
     const user=await admin('/auth/v1/admin/users/'+encodeURIComponent(userId),{method:'GET'});let email=String(user?.email||'');
     if(!email){email=`wx-${hash(userId).slice(0,32)}@login.busline.invalid`;await admin('/auth/v1/admin/users/'+encodeURIComponent(userId),{method:'PUT',body:JSON.stringify({email,email_confirm:true})});}
@@ -57,6 +65,43 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
     }
     throw fail(404,'没有这个账号接口。');
   }
+  if(path==='/wechat/qr-login'){
+    if(request.method==='POST'){
+      const scene=randomBytes(12).toString('hex'),expires=new Date(Date.now()+5*60_000).toISOString(),accessToken=await wechatAccessToken();
+      await admin('/rest/v1/rpc/create_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(scene),p_expires_at:expires})});
+      const created=await (await transport(`https://api.weixin.qq.com/cgi-bin/qrcode/create?access_token=${encodeURIComponent(accessToken)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expire_seconds:300,action_name:'QR_STR_SCENE',action_info:{scene:{scene_str:scene}}})})).json();
+      if(!created.ticket)throw fail(503,'暂时无法生成登录二维码。');
+      return json({scene,expiresAt:expires,qrUrl:'https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket='+encodeURIComponent(String(created.ticket))});
+    }
+    if(request.method==='GET'){
+      const scene=url.searchParams.get('scene')||'';if(!/^[a-f0-9]{24}$/.test(scene))throw fail(400,'登录二维码无效。');
+      const result=await admin('/rest/v1/rpc/consume_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(scene)})}),row=Array.isArray(result)?result[0]:result;
+      return json({actionUrl:row?.user_id?await magicLink(String(row.user_id)):undefined,pending:!row?.user_id});
+    }
+    throw fail(404,'没有这个账号接口。');
+  }
+  if(path==='/wechat/registration'){
+    const token=url.searchParams.get('token')||'';
+    if(!/^[A-Za-z0-9_-]{40,128}$/.test(token))throw fail(400,'注册链接无效或已过期。');
+    const tokenHash=hash(token);
+    if(request.method==='GET'){
+      const rows=await admin('/rest/v1/wechat_link_tokens?token_hash=eq.'+tokenHash+'&purpose=eq.register&used_at=is.null&expires_at=gt.'+encodeURIComponent(new Date().toISOString())+'&select=nickname,avatar_url');
+      const row=Array.isArray(rows)?rows[0]:null;if(!row)throw fail(400,'注册链接无效或已过期。');return json({nickname:String(row.nickname||'巴士玩家'),avatarUrl:String(row.avatar_url||'')});
+    }
+    if(request.method==='POST'){
+      const input=await jsonBody(request,4096),accountName=String(input.accountName||'').trim().toLowerCase(),displayName=String(input.displayName||'').trim().slice(0,24),password=String(input.password||'');
+      if(!/^[a-z0-9_]{3,24}$/.test(accountName))throw fail(400,'登录账号须为 3–24 位小写字母、数字或下划线。');
+      if(displayName.length<2||password.length<8||password.length>128)throw fail(400,'请填写昵称和至少 8 位密码。');
+      const rows=await admin('/rest/v1/wechat_link_tokens?token_hash=eq.'+tokenHash+'&purpose=eq.register&used_at=is.null&expires_at=gt.'+encodeURIComponent(new Date().toISOString())+'&select=id,openid,scene_hash,nickname,avatar_url');
+      const row=Array.isArray(rows)?rows[0]:null;if(!row)throw fail(400,'注册链接无效或已过期。');
+      const email=`acct-${hash(accountName).slice(0,32)}@login.busline.invalid`;
+      let created:any;try{created=await admin('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email,password,email_confirm:true,user_metadata:{display_name:displayName,account_name:accountName}})});}catch{throw fail(409,'该登录账号已被使用，请换一个。');}
+      const userId=String(created?.id||'');if(!userId)throw fail(503,'账号创建失败。');
+      try{await admin('/rest/v1/wechat_bindings',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({openid:row.openid,user_id:userId})});await admin('/rest/v1/game_profiles?id=eq.'+encodeURIComponent(userId),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({display_name:displayName,avatar_url:String(row.avatar_url||'')||null})});await admin('/rest/v1/wechat_link_tokens?id=eq.'+encodeURIComponent(String(row.id)),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({used_at:new Date().toISOString()})});if(row.scene_hash)await admin('/rest/v1/rpc/approve_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:row.scene_hash,p_user_id:userId})});}catch(error){throw error;}
+      return json({actionUrl:await magicLink(userId)});
+    }
+    throw fail(404,'没有这个账号接口。');
+  }
   if(path==='/wechat/login'){
     if(request.method!=='GET')throw fail(404,'没有这个账号接口。');
     const token=url.searchParams.get('token')||'';if(!/^[A-Za-z0-9_-]{40,128}$/.test(token))throw fail(400,'登录链接无效或已过期。');
@@ -70,20 +115,27 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
   if(request.method==='GET')return new Response(url.searchParams.get('echostr')||'',{headers:{'Content-Type':'text/plain;charset=utf-8'}});
   if(request.method!=='POST')throw fail(404,'没有这个账号接口。');
   if(Math.abs(Date.now()-Number(timestamp)*(timestamp.length===10?1000:1))>300000)throw fail(401,'微信请求已过期。');
-  const raw=new TextDecoder().decode(await bodyBytes(request,16384)),from=xmlValue(raw,'FromUserName'),to=xmlValue(raw,'ToUserName'),content=xmlValue(raw,'Content').replace(/\s/g,''),msgId=xmlValue(raw,'MsgId');
-  if(!from||!to||!content)throw fail(400,'微信消息格式无效。');
-  const eventKey=msgId?`msg:${msgId}`:`body:${hash(`${from}\n${to}\n${xmlValue(raw,'CreateTime')}\n${content}`)}`;
+  const raw=new TextDecoder().decode(await bodyBytes(request,16384)),from=xmlValue(raw,'FromUserName'),to=xmlValue(raw,'ToUserName'),content=xmlValue(raw,'Content').replace(/\s/g,''),msgId=xmlValue(raw,'MsgId'),msgType=xmlValue(raw,'MsgType').toLowerCase(),event=xmlValue(raw,'Event').toLowerCase(),rawScene=xmlValue(raw,'EventKey');
+  if(!from||!to||(!content&&msgType!=='event'))throw fail(400,'微信消息格式无效。');
+  const eventKey=msgId?`msg:${msgId}`:`body:${hash(`${from}\n${to}\n${xmlValue(raw,'CreateTime')}\n${content||event+rawScene}`)}`;
   const claimed=await admin('/rest/v1/rpc/claim_wechat_inbound',{method:'POST',body:JSON.stringify({p_event_key:eventKey})});
   if(claimed!==true)return xml('success');
   const binding=await admin('/rest/v1/wechat_bindings?openid=eq.'+encodeURIComponent(from)+'&select=user_id');
   const userId=Array.isArray(binding)&&binding[0]?.user_id?String(binding[0].user_id):'';
+  const scene=(event==='subscribe'?rawScene.replace(/^qrscene_/i,''):rawScene).toLowerCase();
+  if(msgType==='event'&&(event==='scan'||event==='subscribe')&&/^[a-f0-9]{24}$/.test(scene)){
+    if(userId){await admin('/rest/v1/rpc/approve_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(scene),p_user_id:userId})});return xml(wechatReply(from,to,'登录已确认，请回网页继续。'));}
+    const profile=await wechatProfile(from),token=randomBytes(32).toString('base64url'),expires=new Date(Date.now()+15*60_000).toISOString();
+    await admin('/rest/v1/rpc/create_wechat_link_token',{method:'POST',body:JSON.stringify({p_openid:from,p_purpose:'register',p_token_hash:hash(token),p_expires_at:expires})});
+    await admin('/rest/v1/wechat_link_tokens?token_hash=eq.'+hash(token),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({scene_hash:hash(scene),nickname:profile.nickname,avatar_url:profile.avatarUrl||null})});
+    return xml(wechatReply(from,to,`欢迎使用巴士线路图。请在 15 分钟内打开链接完成注册：${appUrl}/?wechat=register&token=${encodeURIComponent(token)}\n请勿转发给他人。`));
+  }
   let purpose:'register'|'bind'|'login'|null=null,message='可发送“注册账号”、“登录 8位登录码”或“账号状态”。';
   const desktop=/^(?:登录|login)([A-Z0-9]{8})$/i.exec(content);
   if(desktop){if(!userId)message='尚未注册。请先发送“注册账号”，再重新输入登录码。';else {const approved=await admin('/rest/v1/rpc/approve_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(desktop[1].toUpperCase()),p_user_id:userId})});message=approved===true?'登录已确认，请回网页继续。':'登录码无效或已过期，请在网页重新获取。';}}
   else if(content==='注册账号'){
     if(userId)message='该微信已注册 Busline 账号，无需重复注册。';
-    else {let nickname='巴士玩家',avatarUrl='';try{const appId=env.WECHAT_APP_ID||'',secret=env.WECHAT_APP_SECRET||'';if(appId&&secret){const token=await (await transport(`https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(secret)}`)).json(),info=token.access_token?await (await transport(`https://api.weixin.qq.com/cgi-bin/user/info?access_token=${encodeURIComponent(token.access_token)}&openid=${encodeURIComponent(from)}&lang=zh_CN`)).json():{};const candidate=String(info.nickname||'').replace(/\s/g,'').slice(0,24);if(candidate.length>=2)nickname=candidate;if(/^https:\/\//.test(String(info.headimgurl||'')))avatarUrl=String(info.headimgurl);}}catch{/* Registration must remain usable if WeChat profile API is unavailable. */}
-      const email=`wx-${hash(from).slice(0,32)}@login.busline.invalid`,created=await admin('/auth/v1/admin/users',{method:'POST',body:JSON.stringify({email,email_confirm:true,user_metadata:{display_name:nickname}})}),newId=String(created?.id||'');if(!newId)throw fail(503,'账号创建失败。');await admin('/rest/v1/wechat_bindings',{method:'POST',headers:{Prefer:'return=minimal'},body:JSON.stringify({openid:from,user_id:newId})});await admin('/rest/v1/game_profiles?id=eq.'+encodeURIComponent(newId),{method:'PATCH',headers:{Prefer:'return=minimal'},body:JSON.stringify({display_name:nickname,avatar_url:avatarUrl||null})});message='注册成功。回网页点击右上角头像，扫描二维码后发送“登录 + 8位登录码”即可登录。';}
+    else message='请在网站右上角打开登录二维码并扫码，公众号会发送安全注册链接。';
   }
   else if(content==='绑定账号'){purpose=userId?null:'bind';message=userId?'该微信已绑定 Busline 账号，无需重复绑定。':'';}
   else if(content==='免密登录'){purpose=userId?'login':null;message=userId?'':'该微信尚未绑定账号，请先发送“注册账号”或“绑定账号”。';}
@@ -128,6 +180,14 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
   }
   if(path==='/game-auth/logout'&&request.method==='POST'){
     const response=json({signedOut:true});response.headers.set('Set-Cookie',sessionCookie('',0));return response;
+  }
+  if(path==='/game-auth/password-login'&&request.method==='POST'){
+    const input=await jsonBody(request,2048),accountName=String(input.accountName||'').trim().toLowerCase(),password=String(input.password||'');
+    if(!/^[a-z0-9_]{3,24}$/.test(accountName)||password.length<8||password.length>128)throw fail(400,'账号或密码格式无效。');
+    const email=`acct-${hash(accountName).slice(0,32)}@login.busline.invalid`;
+    const response=await transport(base+'/auth/v1/token?grant_type=password',{method:'POST',headers:{apikey:env.SUPABASE_ANON_KEY!,'Content-Type':'application/json'},body:JSON.stringify({email,password}),signal:AbortSignal.timeout(15000)}),data=await response.json().catch(()=>({}));
+    if(!response.ok||!data.access_token)throw fail(401,'账号或密码错误。');
+    const result=json({signedIn:true});result.headers.set('Set-Cookie',sessionCookie(String(data.access_token),3600));return result;
   }
   if(path==='/game-auth/otp'&&request.method==='POST'){
     const input=await jsonBody(request,1024),phone=String(input.phone||'').trim();

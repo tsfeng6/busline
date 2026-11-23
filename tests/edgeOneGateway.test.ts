@@ -89,7 +89,7 @@ test('Node function request adapters without a Web stream body can submit valid 
  assert.equal(response.status,200);assert.ok((await response.json()).token);
 });
 
-test('WeChat callback verifies its signature and issues only a one-time registration link',async()=>{
+test('WeChat callback verifies its signature and directs first-time users to the QR registration flow',async()=>{
  const data=new Map<string,string|ArrayBuffer>(),store:UploadStore={async get(){return null;},async set(){},async delete(){},async list(){return {blobs:[]};}};
  const wechatEnv={...env,SUPABASE_URL:'https://project.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'server-only-test-key',WECHAT_CALLBACK_TOKEN:'wechat-callback-test-token',PUBLIC_APP_URL:'https://busline.cc',PUBLIC_GATEWAY_URL:'https://gateway.busline.cc'};
  const transport:typeof fetch=async(input,init)=>{
@@ -103,6 +103,6 @@ test('WeChat callback verifies its signature and issues only a one-time registra
  const timestamp=String(Math.floor(Date.now()/1000)),nonce='nonce-1',signature=createHash('sha1').update([wechatEnv.WECHAT_CALLBACK_TOKEN!,timestamp,nonce].sort().join('')).digest('hex');
  const raw='<xml><ToUserName><![CDATA[busline]]></ToUserName><FromUserName><![CDATA[openid-123]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[注册账号]]></Content><MsgId>42</MsgId></xml>';
  const response=await handleEdgeOneGateway(new Request(`https://gateway.example/wechat/callback?timestamp=${timestamp}&nonce=${nonce}&signature=${signature}`,{method:'POST',body:raw}),wechatEnv,store,transport);
- assert.equal(response.status,200);const body=await response.text();assert.match(body,/注册成功/);assert.match(body,/登录 \+ 8位登录码/);
+ assert.equal(response.status,200);const body=await response.text();assert.match(body,/登录二维码/);assert.match(body,/注册链接/);
  assert.equal((await handleEdgeOneGateway(new Request('https://gateway.example/wechat/callback?timestamp='+timestamp+'&nonce='+nonce+'&signature=bad',{method:'POST',body:raw}),wechatEnv,store,transport)).status,401);
 });

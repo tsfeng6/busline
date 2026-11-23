@@ -32,6 +32,9 @@ export async function establishGameSession(accessToken: string) {
   return request<{ signedIn: true }>('/game-auth/session', { method: 'POST' }, accessToken);
 }
 export async function endGameSession() { return request<{ signedOut: true }>('/game-auth/logout', { method: 'POST' }); }
+export async function passwordLogin(accountName: string, password: string) {
+  return request<{ signedIn: true }>('/game-auth/password-login', { method: 'POST', body: JSON.stringify({ accountName, password }) });
+}
 export async function getGameAccount(accessToken?: string) { return request<{ account: GameAccount }>('/game-auth/me', {}, accessToken); }
 export async function updateGameProfile(displayName: string, avatar?: File, accessToken?: string) {
   let avatarData: string | undefined;

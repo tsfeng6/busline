@@ -165,6 +165,12 @@ create table if not exists public.wechat_web_logins (
   used_at timestamptz,
   created_at timestamptz not null default now()
 );
+-- A registration link carries only server-verified, short-lived metadata.
+-- It lets a first-time scanner set an account name and password in WeChat,
+-- then authorizes the browser QR session that created it.
+alter table public.wechat_link_tokens add column if not exists scene_hash text check (scene_hash is null or scene_hash ~ '^[0-9a-f]{64}$');
+alter table public.wechat_link_tokens add column if not exists nickname text;
+alter table public.wechat_link_tokens add column if not exists avatar_url text;
 alter table public.wechat_bindings enable row level security;
 alter table public.wechat_link_tokens enable row level security;
 alter table public.wechat_inbound_events enable row level security;
