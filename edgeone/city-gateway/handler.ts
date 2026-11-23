@@ -129,7 +129,7 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
   if(desktop){if(!userId)message='尚未注册。请先发送“注册账号”，再重新输入登录码。';else {const approved=await admin('/rest/v1/rpc/approve_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(desktop[1].toUpperCase()),p_user_id:userId})});message=approved===true?'登录已确认，请回网页继续。':'登录码无效或已过期，请在网页重新获取。';}}
   else if(content==='账户登录'||content==='登录'){
     if(!userId)message=`这是首次使用，请在 15 分钟内打开链接完成注册：${await registrationLink()}\n请勿转发给他人。`;
-    else {const code=randomBytes(6).toString('hex').slice(0,8).toUpperCase(),expires=new Date(Date.now()+5*60_000).toISOString();await admin('/rest/v1/rpc/create_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(code),p_expires_at:expires})});message=`网页登录验证码：${code}\n请在 5 分钟内填回巴士线路图网页。请勿转发给他人。`;}
+    else {const code=randomBytes(6).toString('hex').slice(0,8).toUpperCase(),expires=new Date(Date.now()+5*60_000).toISOString(),codeHash=hash(code);await admin('/rest/v1/rpc/create_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:codeHash,p_expires_at:expires})});await admin('/rest/v1/rpc/approve_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:codeHash,p_user_id:userId})});message=`网页登录验证码：${code}\n请在 5 分钟内填回巴士线路图网页。请勿转发给他人。`;}
   }
   else if(content==='账户注册'||content==='注册账号'){
     if(userId)message='该微信已注册 Busline 账号，无需重复注册。';
