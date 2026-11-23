@@ -50,7 +50,7 @@ import {
   saveCitySearchToCache,
   saveLinesToCache,
 } from './utils/lineCache';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
@@ -6622,7 +6622,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
   return (
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
-      <WechatAccountLink account={gameAccount} accessToken={gameAccessToken} onSignedIn={(account, accessToken) => { setGameAccount(account); setGameAccessToken(accessToken); }} onLogout={()=>{setGameAccessToken('');setGameAccount(null);}} />
+      <WechatAccountLink account={gameAccount} accessToken={gameAccessToken} onSignedIn={(account, accessToken) => { setGameAccount(account); setGameAccessToken(accessToken); }} onLogout={()=>{setGameAccessToken('');setGameAccount(null);}} onOpenAppSettings={(tab) => { setSettingsTab(tab); setShowSettings(true); }} />
       {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
       {/* Global API Quota / Error Banner */}
       <AnimatePresence>
@@ -6855,7 +6855,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 </button>
               </div>
 
-              {/* Settings FAB */}
               {(timelineAvailable || viewportStats.lines > 0 || showTimeline) && !isSearching && !loading && !isDrawingMode && !showMinigameModal && (
                 <button type="button" aria-pressed={showTimeline} aria-label="时间轴" title="时间轴" onClick={() => void openTimeline()} className={`pointer-events-auto shrink-0 w-[42px] h-[42px] rounded-2xl border border-m3-outline-variant/40 shadow-sm flex items-center justify-center transition-all active:scale-95 ${showTimeline ? 'bg-m3-primary text-white' : 'bg-m3-surface/95 text-m3-primary'}`}>
                   <Clock className="w-4.5 h-4.5" />
@@ -6866,18 +6865,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 <button onClick={() => { setShowBuslineAI(prev => !prev); setShowBusPlanner(false); }} title="Busline AI" aria-label="打开 Busline AI"
                   className="backdrop-blur-md bg-m3-primary-container/95 text-m3-on-primary-container border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center hover:scale-105 transition-all duration-200 active:scale-95">
                   <Sparkles className="w-4.5 h-4.5" />
-                </button>
-              </div>
-              <div className="pointer-events-auto shrink-0">
-                <button 
-                  onClick={() => {
-                    setSettingsTab('general');
-                    setShowSettings(true);
-                  }}
-                  className="backdrop-blur-md bg-m3-surface/90 border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center text-slate-700 hover:bg-m3-surface-container-high hover:text-m3-primary hover:scale-105 transition-all duration-200 active:scale-90 group"
-                  title="全局应用设置"
-                >
-                  <Settings className="w-4.5 h-4.5 transition-transform group-hover:rotate-90 duration-500" />
                 </button>
               </div>
             </div>

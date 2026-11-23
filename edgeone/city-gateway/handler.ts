@@ -180,6 +180,30 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
   if(path==='/game-auth/logout'&&request.method==='POST'){
     const response=json({signedOut:true});response.headers.set('Set-Cookie',sessionCookie('',0));return response;
   }
+  if(path==='/game-auth/delete'&&request.method==='POST'){
+    const input=await jsonBody(request,256);
+    if(input.confirm!=='DELETE')throw fail(400,'请确认注销账号。');
+    const user=await supabase('/auth/v1/user',{},true),userId=String(user?.id||'');
+    if(!uuid.test(userId))throw fail(400,'账号资料读取失败。');
+    const serviceKey=env.SUPABASE_SECRET_KEY||env.SUPABASE_SERVICE_ROLE_KEY;
+    if(!serviceKey)throw fail(503,'注销服务尚未配置。');
+    const legacyJwt=/^eyJ/.test(serviceKey);
+    const admin=async(pathname:string,init:RequestInit={})=>{
+      const response=await transport(base+pathname,{...init,headers:{apikey:serviceKey,...(legacyJwt?{Authorization:`Bearer ${serviceKey}`} : {}),'Content-Type':'application/json',...(init.headers||{})},signal:AbortSignal.timeout(15000)});
+      if(!response.ok){const body=await response.json().catch(()=>({}));throw fail(503,String(body.message||body.msg||'注销服务暂时不可用。').slice(0,120));}
+      return response;
+    };
+    // Profile rows and game records are linked to auth.users with cascade
+    // deletion. Remove the independently stored avatar and outstanding WeChat
+    // links first so that a deleted account cannot retain reusable bindings.
+    await admin('/storage/v1/object/game-avatars/'+encodeURIComponent(userId)+'/avatar.webp',{method:'DELETE'}).catch(()=>{});
+    await admin('/storage/v1/object/game-avatars/'+encodeURIComponent(userId)+'/avatar.jpeg',{method:'DELETE'}).catch(()=>{});
+    const bindingsResponse=await admin('/rest/v1/wechat_bindings?user_id=eq.'+encodeURIComponent(userId)+'&select=openid',{method:'GET'});
+    const bindings=await bindingsResponse.json().catch(()=>[]);
+    await Promise.all((Array.isArray(bindings)?bindings:[]).map((binding:any)=>admin('/rest/v1/wechat_link_tokens?openid=eq.'+encodeURIComponent(String(binding.openid)),{method:'DELETE'})));
+    await admin('/auth/v1/admin/users/'+encodeURIComponent(userId),{method:'DELETE'});
+    const response=json({deleted:true});response.headers.set('Set-Cookie',sessionCookie('',0));return response;
+  }
   if(path==='/game-auth/password-login'&&request.method==='POST'){
     const input=await jsonBody(request,2048),accountName=String(input.accountName||'').trim().toLowerCase(),password=String(input.password||'');
     if(!/^[a-z0-9_]{3,24}$/.test(accountName)||password.length<8||password.length>128)throw fail(400,'账号或密码格式无效。');

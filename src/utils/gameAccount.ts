@@ -32,6 +32,9 @@ export async function establishGameSession(accessToken: string) {
   return request<{ signedIn: true }>('/game-auth/session', { method: 'POST' }, accessToken);
 }
 export async function endGameSession() { return request<{ signedOut: true }>('/game-auth/logout', { method: 'POST' }); }
+export async function deleteGameAccount(accessToken?: string) {
+  return request<{ deleted: true }>('/game-auth/delete', { method: 'POST', body: JSON.stringify({ confirm: 'DELETE' }) }, accessToken);
+}
 export async function passwordLogin(accountName: string, password: string) {
   return request<{ signedIn: true }>('/game-auth/password-login', { method: 'POST', body: JSON.stringify({ accountName, password }) });
 }
