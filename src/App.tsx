@@ -3197,7 +3197,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   };
 
 
-  const fetchStopDetails = async (name: string, location: [number, number], AMap: any, city: string): Promise<any> => {
+  const fetchStopDetails = async (name: string, location: [number, number], AMap: any, city: string, publishedOnly = false): Promise<any> => {
     const getDistSq = (p1: [number, number], p2: [number, number]) => {
       return Math.pow(p1[0] - p2[0], 2) + Math.pow(p1[1] - p2[1], 2);
     };
@@ -3217,10 +3217,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     for (const line of savedCity?.lines || []) {
       if (!isLineNameBlockedRef(line.name) && line.via_stops?.some(matchesStop)) localLines.add(line.name);
     }
+    if (showUserSubmittedData) {
+      for (const line of approvedUserLines) {
+        if (!isLineNameBlockedRef(line.name) && line.via_stops?.some(matchesStop)) localLines.add(line.name);
+      }
+    }
     // A retrieval-complete city snapshot is the authoritative local source;
     // it already includes every collected direction and returns immediately.
-    if (savedCity?.retrievalComplete && localLines.size) {
-      return { name, address: '', lines: [...localLines], isBusStop: true };
+    if (publishedOnly || (savedCity?.retrievalComplete && localLines.size)) {
+      return localLines.size ? { name, address: '', lines: [...localLines], isBusStop: true } : null;
     }
     const stationSupplement = discoverStationLines(AMap, city || currentCity,
       [{ name, location: { lng: location[0], lat: location[1] } }], () => false);
@@ -3414,20 +3419,16 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       setSelectionPos(getLatLng(selected.location));
       setTopCard('stop');
       setSelectedStop(selected);
-      // Tile payloads are intentionally compact and may not include every
-      // route serving this stop. Keep the card responsive with those lines,
-      // then hydrate it from the full city dataset and station lookup.
+      // Keep tile routes visible while merging the full published snapshot.
+      // A map click on published data must not fan out into live SDK searches.
       const selectedKey = selected.key;
-      void fetchStopDetails(selected.name, getLatLng(selected.location), (window as any).AMap, selected.city || currentCity)
+      void fetchStopDetails(selected.name, getLatLng(selected.location), (window as any).AMap, selected.city || currentCity, true)
         .then(details => {
           if (!details) return;
           setSelectedStop((previous: any) => {
             if (!previous || previous.key !== selectedKey) return previous;
             return {
               ...previous,
-              ...details,
-              key: selectedKey,
-              city: selected.city || currentCity,
               lines: Array.from(new Set([...(previous.lines || []), ...(details.lines || [])]))
             };
           });
