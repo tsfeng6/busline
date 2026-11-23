@@ -346,6 +346,10 @@ export default function App() {
   // The literal marker means that the authenticated session is held only in
   // the HttpOnly gateway cookie, never in JavaScript-accessible storage.
   const [gameAccessToken, setGameAccessToken] = useState('');
+  // Do not show a login prompt until the HttpOnly session restore has answered.
+  // On slower gateways this prevents a signed-in player from briefly seeing
+  // the unauthenticated state before their profile arrives.
+  const [gameAuthLoading, setGameAuthLoading] = useState(gameAccountEnabled);
   const [gameAuthMessage, setGameAuthMessage] = useState('');
   const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
   const [ladderBoards, setLadderBoards] = useState<{ standard: LeaderboardEntry[]; hell: LeaderboardEntry[] }>({ standard: [], hell: [] });
@@ -361,20 +365,27 @@ export default function App() {
     // its access token here is safe and makes either redirect form work.
     const accessToken = fragment.get('access_token');
     if (!accessToken) return;
+    setGameAuthLoading(true);
     window.history.replaceState({}, '', window.location.pathname);
-    void establishGameSession(accessToken).then(() => setGameAccessToken('cookie')).catch(() => setGameAuthMessage('登录状态建立失败，请重新获取登录码。'));
+    void establishGameSession(accessToken).then(() => setGameAccessToken('cookie')).catch(() => { setGameAuthMessage('登录状态建立失败，请重新获取登录码。'); setGameAuthLoading(false); });
   }, []);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   useEffect(() => {
-    if (!gameAccessToken || !gameAccountEnabled) return;
+    if (!gameAccountEnabled) { setGameAuthLoading(false); return; }
+    if (!gameAccessToken) return;
+    setGameAuthLoading(true);
     getGameAccount(gameAccessToken).then(result => setGameAccount(result.account)).catch(() => {
       setGameAccessToken('');
-    });
+    }).finally(() => setGameAuthLoading(false));
   }, [gameAccessToken]);
   // Restore an existing HttpOnly session after a normal reload.
   useEffect(() => {
     if (!gameAccountEnabled || gameAccessToken) return;
-    getGameAccount().then(result => { setGameAccount(result.account); setGameAccessToken('cookie'); }).catch(() => {});
+    // A fresh magic-link callback is establishing the cookie in the effect
+    // above; querying before that completes would incorrectly show login.
+    if (new URLSearchParams(window.location.hash.replace(/^#/, '')).get('access_token')) return;
+    setGameAuthLoading(true);
+    getGameAccount().then(result => { setGameAccount(result.account); setGameAccessToken('cookie'); }).catch(() => {}).finally(() => setGameAuthLoading(false));
   }, [gameAccessToken]);
   const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [gameCatalog,setGameCatalog]=useState<PublishedCity[]>([]);
@@ -681,6 +692,10 @@ export default function App() {
     province?: string
   ) => {
     if (gameState === 'playing' && isMinigameActiveRef.current) return;
+    if (gameAuthLoading) {
+      window.dispatchEvent(new Event('busline-account'));
+      return;
+    }
     if (!gameAccount || !gameAccessToken || !gameAccountEnabled) {
       window.dispatchEvent(new Event('busline-account'));
       setGameAuthMessage('开始挑战前请先通过微信公众号登录。');
@@ -6622,7 +6637,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
   return (
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
-      <WechatAccountLink account={gameAccount} accessToken={gameAccessToken} onSignedIn={(account, accessToken) => { setGameAccount(account); setGameAccessToken(accessToken); }} onLogout={()=>{setGameAccessToken('');setGameAccount(null);}} onOpenAppSettings={(tab) => { setSettingsTab(tab); setShowSettings(true); }} />
+      <WechatAccountLink account={gameAccount} accessToken={gameAccessToken} authLoading={gameAuthLoading} onSignedIn={(account, accessToken) => { setGameAccount(account); setGameAccessToken(accessToken); setGameAuthLoading(false); }} onLogout={()=>{setGameAccessToken('');setGameAccount(null);setGameAuthLoading(false);}} onOpenAppSettings={(tab) => { setSettingsTab(tab); setShowSettings(true); }} />
       {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
       {/* Global API Quota / Error Banner */}
       <AnimatePresence>
