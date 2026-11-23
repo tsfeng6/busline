@@ -84,21 +84,21 @@ const checkSubmissionStatusFromFirebase = async (ids: string[]) => {
   return response.json();
 };
 
-const getPendingSubmissionsFromFirebase = async (adminPassword?: string) => {
+const getPendingSubmissionsFromFirebase = async (adminSession?: string) => {
   const response = await fetch(`${API_BASE_URL}/api/admin/pending`, {
-    headers: { 'x-admin-password': adminPassword || '' }
+    headers: { 'x-admin-session': adminSession || '' }
   });
   if (!response.ok) throw new Error('Failed to fetch pending lines (Unauthorized)');
   return response.json();
 };
 
-const updateSubmissionStatusInFirebase = async (id: string, status: string, rejectReason?: string, adminPassword?: string) => {
+const updateSubmissionStatusInFirebase = async (id: string, status: string, rejectReason?: string, adminSession?: string) => {
   const endpoint = status === 'approved' ? '/api/admin/approve' : '/api/admin/reject';
   const response = await fetch(`${API_BASE_URL}${endpoint}`, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',
-      'x-admin-password': adminPassword || ''
+      'x-admin-session': adminSession || ''
     },
     body: JSON.stringify({ id, rejectReason }),
   });
@@ -106,12 +106,12 @@ const updateSubmissionStatusInFirebase = async (id: string, status: string, reje
   return response.json();
 };
 
-const editApprovedLineInFirebase = async (id: string, name: string, adminPassword?: string) => {
+const editApprovedLineInFirebase = async (id: string, name: string, adminSession?: string) => {
   const response = await fetch(`${API_BASE_URL}/api/admin/edit-approved`, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',
-      'x-admin-password': adminPassword || ''
+      'x-admin-session': adminSession || ''
     },
     body: JSON.stringify({ id, name }),
   });
@@ -119,12 +119,12 @@ const editApprovedLineInFirebase = async (id: string, name: string, adminPasswor
   return response.json();
 };
 
-const deleteApprovedLineInFirebase = async (id: string, adminPassword?: string) => {
+const deleteApprovedLineInFirebase = async (id: string, adminSession?: string) => {
   const response = await fetch(`${API_BASE_URL}/api/admin/delete-approved`, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',
-      'x-admin-password': adminPassword || ''
+      'x-admin-session': adminSession || ''
     },
     body: JSON.stringify({ id }),
   });
@@ -1148,7 +1148,7 @@ export default function App() {
 
   // WeChat Group QR Code management
   const [showWeChatQR, setShowWeChatQR] = useState(false);
-  const [adminPasswordUsed, setAdminPasswordUsed] = useState('');
+  const [adminSessionToken, setAdminSessionToken] = useState('');
   const [wechatQRImg, setWechatQRImg] = useState(() => {
     return localStorage.getItem('app_wechat_qr_img') || '';
   });
@@ -1198,10 +1198,9 @@ export default function App() {
         try {
           const response = await fetch(`${API_BASE_URL}/api/settings/wechat_qr`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'x-admin-session': adminSessionToken },
             body: JSON.stringify({
               value: base64,
-              password: adminPasswordUsed || 'buslineadmin'
             }),
           });
 
@@ -4020,7 +4019,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       if (nextCount >= 3) {
         if (isAdminVerified) {
           setIsAdminVerified(false);
-          setAdminPasswordUsed('');
+          setAdminSessionToken('');
           setShowAuditModal(false);
           setShowManageModal(false);
           alert('管理员模式已退出！');
@@ -4050,11 +4049,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       setLoading(false);
 
       if (res.ok) {
+        const payload = await res.json();
+        if (!payload?.sessionToken) {
+          throw new Error('管理员会话创建失败');
+        }
         setIsAdminVerified(true);
-        setAdminPasswordUsed(trimmed);
+        setAdminSessionToken(payload.sessionToken);
         setShowAdminLogin(false);
         setAdminPassword('');
-        fetchPendingSubmissions(trimmed);
+        fetchPendingSubmissions(payload.sessionToken);
         alert('安全密码验证成功！管理员模式已激活。');
       } else {
         alert('安全凭据校验失败！请确定输入正确的管理员私钥。');
@@ -4066,17 +4069,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     }
   };
 
-  const fetchPendingSubmissions = async (customPass?: string) => {
+  const fetchPendingSubmissions = async (customSession?: string) => {
     try {
-      const pass = customPass || adminPasswordUsed;
-      if (!pass) return;
+      const session = customSession || adminSessionToken;
+      if (!session) return;
 
       if (isFirebaseEnabled()) {
-        const data = await getPendingSubmissionsFromFirebase(pass);
+        const data = await getPendingSubmissionsFromFirebase(session);
         setPendingSubmissions(data || []);
       } else {
         const res = await fetch(`${API_BASE_URL}/api/admin/pending`, {
-          headers: { 'x-admin-password': pass }
+          headers: { 'x-admin-session': session }
         });
         const data = await res.json();
         setPendingSubmissions(data || []);
@@ -4090,7 +4093,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     try {
       setLoading(true);
       if (isFirebaseEnabled()) {
-        const success = await updateSubmissionStatusInFirebase(id, action === 'approve' ? 'approved' : 'rejected', rejectReason, adminPasswordUsed);
+        const success = await updateSubmissionStatusInFirebase(id, action === 'approve' ? 'approved' : 'rejected', rejectReason, adminSessionToken);
         setLoading(false);
         if (success) {
           alert(action === 'approve' ? '审核通过，已将该线路设置为正式发布状态！所有人现在都可以实时看到了！' : '线路已被拒绝，其退回原因已记录。');
@@ -4106,7 +4109,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
-            'x-admin-password': adminPasswordUsed
+            'x-admin-session': adminSessionToken
           },
           body: JSON.stringify({ id, rejectReason })
         });
@@ -4136,7 +4139,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     try {
       setLoading(true);
       if (isFirebaseEnabled()) {
-        const success = await editApprovedLineInFirebase(id, newName.trim(), adminPasswordUsed);
+        const success = await editApprovedLineInFirebase(id, newName.trim(), adminSessionToken);
         setLoading(false);
         if (success) {
           alert('线路名称在云数据库中更新成功！');
@@ -4150,7 +4153,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
-            'x-admin-password': adminPasswordUsed
+            'x-admin-session': adminSessionToken
           },
           body: JSON.stringify({ id, name: newName.trim() })
         });
@@ -4199,7 +4202,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     try {
       setLoading(true);
       if (isFirebaseEnabled()) {
-        const success = await deleteApprovedLineInFirebase(id, adminPasswordUsed);
+        const success = await deleteApprovedLineInFirebase(id, adminSessionToken);
         setLoading(false);
         if (success) {
           alert('线路从云数据库中删除成功！');
@@ -4214,7 +4217,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           method: 'POST',
           headers: { 
             'Content-Type': 'application/json',
-            'x-admin-password': adminPasswordUsed
+            'x-admin-session': adminSessionToken
           },
           body: JSON.stringify({ id })
         });
@@ -8407,6 +8410,14 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                       <span className="truncate">{gameQuestionData.promptText}</span>
                     </div>
+
+                    {isAdminVerified && (
+                      <div role="status" className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs">
+                        <Shield className="w-4 h-4 text-emerald-700 shrink-0" />
+                        <span className="font-black">管理员测试答案</span>
+                        <strong className="font-black break-all">{gameQuestionData.correctAnswer}</strong>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between gap-3 flex-wrap">
                       <span className="text-[11px] font-medium text-slate-500">每局共 7 次提示，从答案两端逐字揭示</span>

@@ -7,6 +7,7 @@ import axios from 'axios';
 import { db, runMigration } from './src/db/index';
 import { submissions, appSettings } from './src/db/schema';
 import { eq, inArray, desc } from 'drizzle-orm';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 async function startServer() {
   const app = express();
@@ -34,17 +35,53 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' })); // Increase limit for Base64 image payload
 
-  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'buslineadmin';
+  // The password is deliberately server-only. Configure ADMIN_PASSWORD in the
+  // deployment environment; never provide a fallback or put it in frontend code.
+  const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+  // A deployment should set this too. A process-local fallback keeps development
+  // usable while invalidating admin sessions on a restart.
+  const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || randomBytes(32).toString('base64url');
+  const ADMIN_SESSION_TTL_MS = 6 * 60 * 60 * 1000;
+  const adminLoginAttempts = new Map<string, { count: number; resetAt: number }>();
+
+  const createAdminSession = () => {
+    const payload = Buffer.from(JSON.stringify({ issuedAt: Date.now() })).toString('base64url');
+    const signature = createHmac('sha256', ADMIN_SESSION_SECRET).update(payload).digest('base64url');
+    return `${payload}.${signature}`;
+  };
+
+  const hasValidAdminSession = (value: unknown) => {
+    if (typeof value !== 'string') return false;
+    const [payload, signature, ...rest] = value.split('.');
+    if (!payload || !signature || rest.length > 0) return false;
+    const expected = createHmac('sha256', ADMIN_SESSION_SECRET).update(payload).digest('base64url');
+    const actualBuffer = Buffer.from(signature);
+    const expectedBuffer = Buffer.from(expected);
+    if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) return false;
+    try {
+      const { issuedAt } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+      return Number.isFinite(issuedAt) && issuedAt <= Date.now() && Date.now() - issuedAt < ADMIN_SESSION_TTL_MS;
+    } catch {
+      return false;
+    }
+  };
+
+  const getLoginAttempt = (req: express.Request) => {
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const existing = adminLoginAttempts.get(ip);
+    if (!existing || existing.resetAt <= now) {
+      const next = { count: 0, resetAt: now + 15 * 60 * 1000 };
+      adminLoginAttempts.set(ip, next);
+      return next;
+    }
+    return existing;
+  };
 
   // Server-side authentication middleware
   const verifyAdmin = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const headerPass = req.headers['x-admin-password'] || req.headers['authorization'];
-    let passed = '';
-    if (typeof headerPass === 'string') {
-      passed = headerPass.replace('Bearer ', '').trim();
-    }
-    
-    if (passed !== ADMIN_PASSWORD) {
+    const session = req.headers['x-admin-session'];
+    if (!hasValidAdminSession(session)) {
       return res.status(401).json({ error: 'Unauthorized: Admin authorization required.' });
     }
     next();
@@ -52,12 +89,21 @@ async function startServer() {
 
   // API: Validate admin password securely on the server
   app.post('/api/admin/verify', (req, res) => {
-    const { password } = req.body;
-    if (password === ADMIN_PASSWORD) {
-      res.json({ success: true });
-    } else {
-      res.status(401).json({ error: 'Incorrect admin password.' });
+    const attempt = getLoginAttempt(req);
+    if (attempt.count >= 5) {
+      return res.status(429).json({ error: 'Too many attempts. Please try again later.' });
     }
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!ADMIN_PASSWORD) {
+      console.error('ADMIN_PASSWORD is not configured; admin login is disabled.');
+      return res.status(503).json({ error: 'Admin login is not configured.' });
+    }
+    if (password !== ADMIN_PASSWORD) {
+      attempt.count += 1;
+      return res.status(401).json({ error: 'Incorrect admin password.' });
+    }
+    adminLoginAttempts.delete(req.ip || req.socket.remoteAddress || 'unknown');
+    res.json({ success: true, sessionToken: createAdminSession(), expiresIn: ADMIN_SESSION_TTL_MS });
   });
 
   // API: Health check
@@ -92,16 +138,11 @@ async function startServer() {
   });
 
   // UPDATE a setting (requires admin password verification)
-  app.post('/api/settings/wechat_qr', async (req, res) => {
+  app.post('/api/settings/wechat_qr', verifyAdmin, async (req, res) => {
     try {
-      const { value, password } = req.body;
+      const { value } = req.body;
       if (!value) {
         return res.status(400).json({ error: 'Value is required' });
-      }
-
-      // Verify admin password
-      if (password !== ADMIN_PASSWORD) {
-        return res.status(403).json({ error: 'Unauthorized: Admin password is incorrect.' });
       }
 
       await db.insert(appSettings).values({
