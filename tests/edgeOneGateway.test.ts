@@ -104,6 +104,6 @@ test('WeChat callback verifies its signature and sends first-time users a regist
  const timestamp=String(Math.floor(Date.now()/1000)),nonce='nonce-1',signature=createHash('sha1').update([wechatEnv.WECHAT_CALLBACK_TOKEN!,timestamp,nonce].sort().join('')).digest('hex');
  const raw='<xml><ToUserName><![CDATA[busline]]></ToUserName><FromUserName><![CDATA[openid-123]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[注册账号]]></Content><MsgId>42</MsgId></xml>';
  const response=await handleEdgeOneGateway(new Request(`https://gateway.example/wechat/callback?timestamp=${timestamp}&nonce=${nonce}&signature=${signature}`,{method:'POST',body:raw}),wechatEnv,store,transport);
- assert.equal(response.status,200);const body=await response.text();assert.match(body,/完成注册/);assert.match(body,/wechat=register/);
+ assert.equal(response.status,200);const body=await response.text();assert.match(body,/完成注册/);assert.match(body,/wechat=register&token=/);assert.doesNotMatch(body,/&amp;token=/);
  assert.equal((await handleEdgeOneGateway(new Request('https://gateway.example/wechat/callback?timestamp='+timestamp+'&nonce='+nonce+'&signature=bad',{method:'POST',body:raw}),wechatEnv,store,transport)).status,401);
 });

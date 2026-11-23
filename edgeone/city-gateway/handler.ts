@@ -23,7 +23,8 @@ const gameAccount=(user:any,profile?:any):{id:string;displayName:string;avatarUr
 const xmlEscape=(value:string)=>value.replace(/[<>&'\"]/g,char=>({"<":'&lt;',">":'&gt;','&':'&amp;',"'":'&apos;','\"':'&quot;'}[char]!));
 const xmlValue=(xml:string,name:string)=>{const found=new RegExp(`<${name}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${name}>|<${name}>([\\s\\S]*?)<\\/${name}>`).exec(xml);return (found?.[1]||found?.[2]||'').trim();};
 const wechatSignature=(token:string,timestamp:string,nonce:string)=>createHash('sha1').update([token,timestamp,nonce].sort().join('')).digest('hex');
-const wechatReply=(to:string,from:string,content:string)=>`<xml><ToUserName><![CDATA[${xmlEscape(to)}]]></ToUserName><FromUserName><![CDATA[${xmlEscape(from)}]]></FromUserName><CreateTime>${Math.floor(Date.now()/1000)}</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[${xmlEscape(content)}]]></Content></xml>`;
+const xmlCdata=(value:string)=>value.replace(/]]>/g,']]]]><![CDATA[>');
+const wechatReply=(to:string,from:string,content:string)=>`<xml><ToUserName><![CDATA[${xmlCdata(to)}]]></ToUserName><FromUserName><![CDATA[${xmlCdata(from)}]]></FromUserName><CreateTime>${Math.floor(Date.now()/1000)}</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[${xmlCdata(content)}]]></Content></xml>`;
 const publicUrl=(value:string|undefined)=>{try{const url=new URL(value||'');return url.protocol==='https:'?url.toString().replace(/\/$/,''):null;}catch{return null;}};
 async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
   const url=new URL(request.url),path=url.pathname;

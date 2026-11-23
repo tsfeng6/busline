@@ -5,7 +5,8 @@ const gateway = (import.meta.env.VITE_GAME_GATEWAY_URL || import.meta.env.VITE_C
 
 export function WechatAccountLink({ account, accessToken, onSignedIn, onLogout }: { account: GameAccount | null; accessToken: string; onSignedIn: (account: GameAccount, accessToken: string) => void; onLogout: () => void }) {
   const query = new URLSearchParams(window.location.search);
-  const registrationToken = query.get('wechat') === 'register' ? query.get('token') || '' : '';
+  const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const registrationToken = (query.get('wechat') === 'register' ? query.get('token') : fragment.get('wechat') === 'register' ? fragment.get('token') : '') || '';
   const [open, setOpen] = useState(Boolean(registrationToken));
   const [mode, setMode] = useState<'qr' | 'password' | 'register'>(registrationToken ? 'register' : 'qr');
   const [message, setMessage] = useState('');
