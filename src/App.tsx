@@ -8144,8 +8144,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             onClick={() => setGameMode(m.id as any)}
                             className={`p-4 rounded-2xl border cursor-pointer transition-all flex items-start gap-3.5 ${gameMode === m.id ? 'bg-m3-primary-container/40 border-m3-primary shadow-sm ring-1 ring-m3-primary/30' : 'bg-m3-surface border-m3-outline-variant/30 hover:bg-m3-surface-container-low'}`}
                           >
-                            <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${gameMode === m.id ? 'bg-m3-primary text-m3-on-primary' : 'bg-m3-surface-container text-slate-600'}`}>
-                              <Trophy className="w-4 h-4" />
+                            <div aria-hidden="true" className={`mt-0.5 flex h-14 w-16 shrink-0 flex-col justify-center gap-1 rounded-xl border p-2 shadow-inner ${gameMode === m.id ? 'border-m3-primary/40 bg-m3-primary text-m3-on-primary' : 'border-m3-outline-variant/20 bg-m3-surface-container text-slate-500'}`}>
+                              {[['1','w-full'],['2','w-4/5'],['3','w-3/5']].map(([rank,width]) => <div key={rank} className="flex items-center gap-1"><span className="w-2 text-[8px] font-black leading-none">{rank}</span><span className={`h-1.5 rounded-full ${width} ${gameMode === m.id ? 'bg-white/90' : 'bg-m3-primary/65'}`} /></div>)}
                             </div>
                             <div className="flex-1 min-w-0">
                               <h3 className="text-sm font-black text-slate-900">{m.title}</h3>
