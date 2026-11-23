@@ -19,7 +19,8 @@ export interface TimelineOverlayEntry {
 /** Keep existing geometry; only update directions whose operating state changed. */
 export function updateTimelineVisibility(entries: TimelineOverlayEntry[], minute: number): void {
   for (const entry of entries) {
-    const visible = isLineOperating(entry.line, minute) === true;
+    // Missing timetable metadata must not make an otherwise valid route vanish.
+    const visible = isLineOperating(entry.line, minute) !== false;
     if (visible === entry.visible) continue;
     if (visible) entry.overlay.show(); else entry.overlay.hide();
     entry.visible = visible;

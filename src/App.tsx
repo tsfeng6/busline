@@ -3,8 +3,6 @@ import { loadNearbyTransitTiles } from './utils/nearbyTransitTiles';
 import {loadPublishedCities,loadGameCity} from './utils/publishedTransit';
 import {createOfflineQuestion,shuffle} from './utils/offlineGame';
 import {DAILY_LOCATION_KEY,claimDailyLocation,gpsToMap,nearbyLines,cityTouchesRadius,radiusRing,type PublishedCity,type Point} from './utils/localTransit';
-import { TermsDocument } from './components/TermsDocument';
-import { acceptTerms, hasAcceptedTerms, BEIJING_TOUR_CENTER } from './utils/onboardingConsent';
 import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
 import { resolveAmapCredentials } from './utils/amapCredentials';
@@ -53,7 +51,6 @@ import {
   saveLinesToCache,
 } from './utils/lineCache';
 import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Settings, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
-import { OnboardingGuide } from './components/OnboardingGuide';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
@@ -967,10 +964,7 @@ export default function App() {
       syncStopMarkersToMap(mapRef.current, (window as any).AMap);
     }
   }, [stationMode]);
-  const [showMoreInfo, setShowMoreInfo] = useState(() => {
-    const saved = localStorage.getItem('app_show_more_info');
-    return saved === null ? false : saved === 'true';
-  });
+  const showMoreInfo = false;
   const [stationLineStats, setStationLineStats] = useState(() => {
     const saved = localStorage.getItem('app_station_line_stats');
     return saved === null ? true : saved === 'true';
@@ -988,6 +982,7 @@ export default function App() {
   const [showTimeline, setShowTimeline] = useState(false);
   const [timelineAvailable, setTimelineAvailable] = useState(false);
   const [timelineMinute, setTimelineMinute] = useState(() => new Date().getHours() * 60 + new Date().getMinutes());
+  const [timelinePlaying, setTimelinePlaying] = useState(false);
   const [timelineLines, setTimelineLines] = useState<BusLine[]>([]);
   const timelineOverlaysRef = useRef<TimelineOverlayEntry[]>([]);
   const timelineMinuteRef = useRef(timelineMinute);
@@ -998,7 +993,7 @@ export default function App() {
 
   const [aiSearchProgress, setAISearchProgress] = useState('');
   const [aiRegionContext, setAIRegionContext] = useState<AIRegionContext | null>(null);
-  const [settingsTab, setSettingsTab] = useState<'general' | 'about' | 'dataFilter'>('general');
+  const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
 
   // WeChat Group QR Code management
   const [showWeChatQR, setShowWeChatQR] = useState(false);
@@ -1143,10 +1138,7 @@ export default function App() {
       checkAndPurgeIfMonthChanged().then(() => refreshLineCacheStats());
     }
   }, [showSettings, refreshLineCacheStats]);
-  const [lineThickness, setLineThickness] = useState<'thick' | 'thin'>(() => {
-    const saved = localStorage.getItem('app_line_thickness');
-    return (saved === 'thin' || saved === 'thick') ? saved : 'thick';
-  });
+  const [lineThickness] = useState<'thick' | 'thin'>('thick');
 
 
 
@@ -1553,46 +1545,27 @@ export default function App() {
     localStorage.setItem('app_custom_api_security_code', customApiSecurityCode);
   }, [customApiSecurityCode, useCustomApiKey]);
 
-  // First-time / version-upgrade onboarding state
-  const [onboardingStep, setOnboardingStep] = useState<number>(() => {
-    if (typeof window === 'undefined') return 0;
-    const savedVer = localStorage.getItem(APP_LAST_VERSION_KEY);
-    if (!savedVer) return 1;
-    return 0;
-  });
+  // Onboarding cards are no longer shown; keep this stable flag for the map
+  // loading guards that previously waited for the guide to finish.
+  const onboardingStep = 0;
   const [showVersionUpdate, setShowVersionUpdate] = useState(() => {
     const savedVersion = localStorage.getItem(APP_LAST_VERSION_KEY);
     return !!savedVersion && compareVersions(APP_VERSION, savedVersion) > 0;
   });
 
-  const termsAcceptedRef = useRef(hasAcceptedTerms(localStorage));
-  const handleAcceptTerms = () => { termsAcceptedRef.current = true; acceptTerms(localStorage); };
-
-  const handleOnboardingSelectCustomApi = (enabled: boolean) => {
-    setUseCustomApiKey(enabled);
-    localStorage.setItem('app_use_custom_api_key', String(enabled));
-  };
-
-  const handleFinishOnboarding = () => {
-    if (!termsAcceptedRef.current) { setOnboardingStep(2); return; }
-    localStorage.setItem(APP_LAST_VERSION_KEY, APP_VERSION);
-    setOnboardingStep(0);
-
-  };
-
-  useEffect(() => {
-    if (onboardingStep !== 4 || !mapInstance) return;
-    mapInstance.setZoomAndCenter(9, BEIJING_TOUR_CENTER);
-    setCurrentCity('北京市');
-  }, [onboardingStep, mapInstance]);
-
   const handleResetApp = async () => {
     try {
-      const dailyLocation = localStorage.getItem(DAILY_LOCATION_KEY);
-      localStorage.clear();
-      if (dailyLocation) localStorage.setItem(DAILY_LOCATION_KEY, dailyLocation);
+      // Limit reset to this origin's disposable browsing/cache data. In
+      // particular, do not clear user-created route records or API settings.
+      localStorage.removeItem(APP_LINE_CACHE_ENABLED_KEY);
+      localStorage.removeItem('app_line_cache_month');
+      localStorage.removeItem(DAILY_LOCATION_KEY);
       sessionStorage.clear();
       await clearAllLineCache();
+      if ('caches' in window) {
+        const names = await window.caches.keys();
+        await Promise.all(names.map(name => window.caches.delete(name)));
+      }
     } catch {}
     window.location.reload();
   };
@@ -2177,7 +2150,6 @@ export default function App() {
   const translations: Record<string, string> = {
     settings: '设置',
     general: '通用',
-    dataFilter: '数据筛选',
     filterAirportBus: '过滤机场巴士',
     filterIntervalBus: '过滤区间车',
     filterUserSubmissions: '过滤用户添加',
@@ -2189,12 +2161,8 @@ export default function App() {
     showStations: '显示站点',
     showBaseMap: '显示底图',
     satelliteMap: '卫星底图',
-    showMoreInfo: '详细信息',
     showUserSubmittedData: '显示用户添加数据',
     customDrawingDisabledHint: '自定义绘图功能已停用',
-    lineThickness: '线条粗细',
-    thick: '粗线条',
-    thin: '细线条',
     cityWideSearch: '全市搜索',
     cancel: '取消',
     confirmEnable: '确认开启',
@@ -2215,22 +2183,6 @@ export default function App() {
   };
 
   const t = (key: string) => translations[key] || key;
-
-  useEffect(() => {
-    localStorage.setItem('app_line_thickness', lineThickness);
-
-    // Auto-redraw lines after changing thickness
-    if (mapInstance) {
-      if (activeBusLine) {
-        renderBusLine(activeBusLine, (window as any).AMap, mapInstance, true, true, false);
-      } else if (selectedSegmentLines?.length && roadOverlaysRef.current.length) {
-        const AMap = (window as any).AMap;
-        aggregateAndVisualize(selectedSegmentLines, mapInstance, AMap);
-      }
-    }
-  }, [lineThickness]);
-
-
 
   const [baseMapVisible, setBaseMapVisible] = useState(true);
   const [selectionPos, setSelectionPos] = useState<[number, number] | null>(null);
@@ -3449,12 +3401,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
            }
         });
     }
-  };
-
-  const toggleMoreInfo = () => {
-    const next = !showMoreInfo;
-    setShowMoreInfo(next);
-    localStorage.setItem('app_show_more_info', next.toString());
   };
 
   // --- USER DRAWING OPERATIONS AND ROUTING HANDLERS ---
@@ -6225,11 +6171,52 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     };
   }, [showTimeline]);
 
+  useEffect(() => {
+    if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
+    const map = mapRef.current;
+    const AMap = (window as any).AMap;
+    const entries: TimelineOverlayEntry[] = timelineLines.flatMap((line) => {
+      const path = (line.path || []).map(getLatLng);
+      if (path.length < 2) return [];
+      const overlay = lazyTimelineRoute(map, AMap, {
+        strokeColor: line.isUserSubmitted ? '#BA55D3' : '#52796F',
+        strokeWeight: lineThickness === 'thin' ? 3 : 6,
+        strokeOpacity: 0.9,
+        lineJoin: 'round',
+        lineCap: 'round',
+        isOutline: true,
+        outlineColor: '#ffffff',
+        borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
+        zIndex: 55,
+        bubble: true,
+      }, () => { setActiveBusLine(line); });
+      overlay.setPaths([path]);
+      return [{ line, overlay, visible: true }];
+    });
+    timelineOverlaysRef.current = entries;
+    updateTimelineVisibility(entries, timelineMinuteRef.current);
+    return () => {
+      entries.forEach(entry => (entry.overlay as any).destroy());
+      if (timelineOverlaysRef.current === entries) timelineOverlaysRef.current = [];
+    };
+  }, [showTimeline, timelineLines, mapInstance, lineThickness]);
 
 
   useEffect(() => {
     if (showTimeline) updateTimelineVisibility(timelineOverlaysRef.current, timelineMinute);
   }, [showTimeline, timelineMinute, timelineLines]);
+
+  useEffect(() => {
+    if (!showTimeline || !timelinePlaying) return;
+    const timer = window.setInterval(() => {
+      setTimelineMinute(minute => minute >= 1439 ? 0 : minute + 1);
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, [showTimeline, timelinePlaying]);
+
+  useEffect(() => {
+    if (!showTimeline) setTimelinePlaying(false);
+  }, [showTimeline]);
 
   useEffect(() => {
     if (!showTimeline) return;
@@ -7088,7 +7075,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
 
 
-        {showTimeline && <TimelineBar minute={timelineMinute} onChange={minute => { setTimelineMinute(minute); setSelectedSegmentLines(null); setSelectedStop(null); }} onClose={() => setShowTimeline(false)}
+        {showTimeline && <TimelineBar minute={timelineMinute} onChange={minute => { setTimelinePlaying(false); setTimelineMinute(minute); setSelectedSegmentLines(null); setSelectedStop(null); }} onClose={() => setShowTimeline(false)} onTogglePlayback={() => setTimelinePlaying(value => !value)} playing={timelinePlaying}
           active={timelineActiveCount} total={timelineLines.length} unknown={timelineUnknownCount} />}
 
         {/* Custom Drawing Mode HUD Floating Toolbar Panel */}
@@ -8106,11 +8093,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       </div>
                     )}
 
-                    <div className="rounded-2xl border border-m3-outline-variant/40 bg-m3-primary-container/40 p-3 space-y-2">
-                      <p className="text-xs font-bold text-m3-on-primary-container">只使用网站已有线路，不调用高德查询 API，不限游戏次数</p>
-                      <p className="text-[11px] leading-relaxed text-slate-500">易、中、难只使用数字线路及简单前后缀线路；地狱模式包含该城市所有已保存线路。县城题以县政府站点为近似中心，仅显示周边3公里。</p>
-                    </div>
-
                     {gameCatalogLoading&&<p role="status" className="text-xs text-slate-500">正在读取已有线路图城市…</p>}
                     {gameDataError&&<p role="alert" className="text-xs text-m3-error">{gameDataError}</p>}
                     {!gameCatalogLoading&&gameMode==='county'&&!countyProvinces.length&&<p role="status" className="text-xs text-slate-500">暂未收录可定位的县政府站点，请先选择其他模式。</p>}
@@ -8367,10 +8349,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     })()}
 
                     {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式已启用</p>}
-                    {<div className="w-full rounded-2xl bg-m3-primary-container/40 p-3 text-xs text-m3-on-primary-container leading-relaxed">
-                      <p>使用已有线路数据，无每日次数限制。</p>
-                    </div>}
-
                     <div className="flex gap-2.5 w-full pt-2">
                       {gameHistory.length > 0 && (
                         <button
@@ -8612,13 +8590,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       {t('general')}
                     </button>
                     <button 
-                      onClick={() => setSettingsTab('dataFilter')}
-                      className={`px-4 py-2.5 rounded-full text-left text-xs font-bold transition-all ${settingsTab === 'dataFilter' ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-600 hover:bg-m3-primary/5 hover:text-slate-800'}`}
-                    >
-                      {t('dataFilter')}
-                    </button>
-
-                    <button 
                       onClick={() => setSettingsTab('about')}
                       className={`px-4 py-2.5 rounded-full text-left text-xs font-bold transition-all ${settingsTab === 'about' ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-600 hover:bg-m3-primary/5 hover:text-slate-800'}`}
                     >
@@ -8739,26 +8710,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                             </span>
                           </div>
 
-                          <div className="flex items-center justify-between p-1">
-                            <div className="flex flex-col">
-                                <span className="text-xs font-bold text-slate-700">{t('showMoreInfo')}</span>
-                                <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">显示放大系数、图例等信息</span>
-                            </div>
-                            <button 
-                              type="button"
-                              onClick={toggleMoreInfo}
-                              className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 border-2 ${showMoreInfo ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
-                            >
-                              <motion.div 
-                                animate={{ x: showMoreInfo ? 22 : 0 }}
-                                transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-                                className={`rounded-full shadow-sm transition-colors duration-200 ${showMoreInfo ? 'w-4.5 h-4.5 bg-m3-on-primary' : 'w-3.5 h-3.5 bg-m3-outline'}`}
-                              />
-                            </button>
-                          </div>
-
-
-
                         </div>
 
                           <div className="flex flex-col p-1 gap-1">
@@ -8779,71 +8730,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                               {t('customDrawingDisabledHint')}
                             </span>
                         </div>
-
-                      <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
-
-                        {/* M3 Segmented Control for thickness */}
-                        <div>
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1.5">{t('lineThickness')}</label>
-                          <div className="flex bg-m3-surface-container-high border border-m3-outline-variant/35 p-1 rounded-2xl select-none">
-                            <button
-                              type="button"
-                              onClick={() => setLineThickness('thick')}
-                              className={`flex-1 py-1.5 text-xs font-bold transition-all rounded-xl ${lineThickness === 'thick' ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                            >
-                              {t('thick')}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setLineThickness('thin')}
-                              className={`flex-1 py-1.5 text-xs font-bold transition-all rounded-xl ${lineThickness === 'thin' ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                            >
-                              {t('thin')}
-                            </button>
-                          </div>
-                        </div>
-
-                      <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
-
-                      {/* Line Cache Setting & Clear Cache Button */}
-                      <div className="flex flex-col gap-2.5 p-1">
-                        <div className="flex items-center justify-between">
-                          <div className="flex flex-col">
-                            <span className="text-xs font-bold text-slate-700">线路缓存</span>
-                            <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">
-                              缓存每次检索的线路数据以加速同范围检索（跨月自动清除）
-                            </span>
-                          </div>
-                          <button 
-                            type="button"
-                            onClick={toggleLineCache}
-                            className={`w-12 h-6.5 rounded-full transition-colors duration-200 relative flex items-center px-1 border-2 ${enableLineCache ? 'bg-m3-primary border-m3-primary' : 'bg-m3-surface-container-highest border-m3-outline'}`}
-                          >
-                            <motion.div 
-                              animate={{ x: enableLineCache ? 22 : 0 }}
-                              transition={{ type: 'spring', damping: 20, stiffness: 300 }}
-                              className={`rounded-full shadow-sm transition-colors duration-200 ${enableLineCache ? 'w-4.5 h-4.5 bg-m3-on-primary' : 'w-3.5 h-3.5 bg-m3-outline'}`}
-                            />
-                          </button>
-                        </div>
-                        <div className="flex items-center justify-between gap-2 bg-m3-surface-container-low border border-m3-outline-variant/25 rounded-xl px-3 py-2">
-                          <span className="text-[10px] font-bold text-slate-500 truncate">
-                            {cacheClearedFeedback
-                              ? '本地缓存已清除'
-                              : lineCacheStats.linesCount > 0 || lineCacheStats.stopsCount > 0
-                              ? `已缓存 ${lineCacheStats.linesCount} 条线路 · ${lineCacheStats.stopsCount} 个站点`
-                              : '当前暂无本地缓存'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={handleClearLineCache}
-                            className="px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 border border-red-200/70 text-[10px] font-black flex items-center gap-1 transition-all cursor-pointer shrink-0 active:scale-95"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            清除缓存
-                          </button>
-                        </div>
-                      </div>
 
                       <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
 
@@ -8929,7 +8815,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         <div className="flex flex-col">
                           <span className="text-xs font-bold text-slate-700">重置</span>
                           <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">
-                            重置巴士线路图，从头开始
+                            清除本网站缓存与本次访问数据后重新加载；不删除已保存的个人线路与 API 配置
                           </span>
                         </div>
                         <button
@@ -8942,66 +8828,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         </button>
                       </div>
                     </div>
-                    ) : settingsTab === 'dataFilter' ? (
-                      <div className="space-y-5">
-                        <div>
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1.5">
-                            字样
-                          </label>
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              value={newKeyword}
-                              onChange={(e) => setNewKeyword(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  addBlockedKeyword(newKeyword);
-                                  setNewKeyword('');
-                                }
-                              }}
-                              placeholder="输入要屏蔽的字样，如：机场、区间"
-                              className="flex-1 px-3 py-2 bg-m3-surface-container border border-m3-outline-variant text-slate-800 rounded-xl outline-none text-xs font-bold focus:border-m3-primary transition-all"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                addBlockedKeyword(newKeyword);
-                                setNewKeyword('');
-                              }}
-                              className="px-4 py-2 bg-m3-primary text-m3-on-primary text-xs font-bold rounded-xl shadow-sm hover:opacity-90 active:scale-95 transition-all shrink-0"
-                            >
-                              添加
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="h-[1px] bg-m3-outline-variant/20 w-full" />
-
-                        <div>
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">
-                            屏蔽字样 ({blockedKeywords.length})
-                          </label>
-                          {blockedKeywords.length > 0 && (
-                            <div className="flex flex-wrap gap-2 max-h-[140px] overflow-y-auto p-1">
-                              {blockedKeywords.map((keyword) => (
-                                <span
-                                  key={keyword}
-                                  className="flex items-center gap-1.5 px-3 py-1 bg-m3-primary-container text-m3-on-primary-container text-xs font-bold rounded-full border border-m3-primary/10 shadow-sm"
-                                >
-                                  {keyword}
-                                  <button
-                                    type="button"
-                                    onClick={() => removeBlockedKeyword(keyword)}
-                                    className="p-0.5 rounded-full hover:bg-m3-on-primary-container/15 text-m3-on-primary-container/70 hover:text-m3-on-primary-container transition-colors"
-                                  >
-                                    <X className="w-3.5 h-3.5" />
-                                  </button>
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
                     ) : (
                       <div className="flex flex-col items-center justify-center min-h-full py-2 gap-4 bg-m3-surface select-none">
                         <div className="w-18 h-18 bg-m3-surface-container border border-m3-outline-variant/35 rounded-3xl flex items-center justify-center shadow-lg mb-1 transition-all hover:scale-105 hover:rotate-2 duration-300">
@@ -9015,18 +8841,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         <div className="px-3 py-1 bg-m3-primary-container rounded-full border border-m3-outline/5 select-none font-sans">
                            <span className="text-[9px] font-black text-m3-on-primary-container tracking-widest uppercase">busline 5.5</span>
                         </div>
-                        <details className="w-full rounded-2xl border border-m3-outline-variant/30 bg-m3-surface-container p-4">
-                          <summary className="cursor-pointer text-xs font-bold text-m3-primary">巴士线路图使用条款</summary>
-                          <div className="mt-3"><TermsDocument /></div>
-                        </details>
-                        <button type="button" onClick={() => { setShowSettings(false); setOnboardingStep(1); }} className="text-xs text-m3-primary underline underline-offset-2">重新查看使用引导</button>
-                        <section aria-label="数据来源与侵权投诉" className="w-full rounded-2xl bg-m3-surface-container border border-m3-outline-variant/30 p-4 text-xs leading-relaxed text-slate-600 space-y-2 select-text">
-                          <h4 className="font-bold text-slate-800">数据来源与说明</h4>
-                          <p>本站公交线路、站点及轨迹数据主要来源于高德地图开放平台，用于公交线路可视化展示与爱好者交流。相关数据及标识的权利归相应权利人所有。</p>
-                          <p>数据可能存在更新延迟、缺漏或误差，仅供参考；实际线路、站点及运营时间请以公交运营方最新公告为准。</p>
-                          <p>如您认为本站内容侵犯您的合法权益，请提供具体页面或线路、权属证明及联系方式，我们将在核实后及时处理。</p>
-                          <p>侵权投诉邮箱：<a href="mailto:hextyrz@gmail.com" className="text-m3-primary underline underline-offset-2 break-all">hextyrz@gmail.com</a></p>
-                        </section>
                         <div className="flex flex-col items-center mt-2 gap-3">
                            <span 
                              onClick={handleFooterClick}
@@ -9669,23 +9483,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             </div>
           )}
         </AnimatePresence>
-
-        <OnboardingGuide
-          step={onboardingStep}
-          setStep={setOnboardingStep}
-          useCustomApiKey={useCustomApiKey}
-          onSelectCustomApiKey={handleOnboardingSelectCustomApi}
-          customApiKey={customApiKey}
-          setCustomApiKey={setCustomApiKey}
-          customApiSecurityCode={customApiSecurityCode}
-          setCustomApiSecurityCode={setCustomApiSecurityCode}
-          onAcceptTerms={handleAcceptTerms}
-          mapReady={!!mapInstance}
-          zoom={zoomLevel}
-          beijingReady={(currentCity.replace(/市$/, '') === '北京' && viewportStats.lines > 0) || !!lastCityDataset && lastCityDataset.city.replace(/市$/, '') === '北京' && sharedMapDataRef.current}
-          onZoomToBeijing={() => { if (mapInstance) { mapInstance.setZoomAndCenter(CITY_DETAIL_ZOOM, BEIJING_TOUR_CENTER); setCurrentCity('北京市'); } }}
-          onFinishOnboarding={handleFinishOnboarding}
-        />
 
       </main>
 
