@@ -346,6 +346,8 @@ export default function App() {
   const [gameAccessToken, setGameAccessToken] = useState('');
   const [gameAuthMessage, setGameAuthMessage] = useState('');
   const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardsByMode, setLeaderboardsByMode] = useState<Record<string, LeaderboardEntry[]>>({});
+  const [gameLaunchAnimation, setGameLaunchAnimation] = useState(false);
 
   // Supabase's server-generated magic link returns the short-lived session in
   // the fragment. Fragments never reach EdgeOne; consume it immediately and
@@ -463,6 +465,18 @@ export default function App() {
   useEffect(() => {
     if (showMinigameModal && gameMode) void refreshLeaderboard(leaderboardKey(gameMode, gameDifficulty));
   }, [showMinigameModal, gameMode, gameDifficulty, refreshLeaderboard]);
+  useEffect(() => {
+    if (!showMinigameModal || !gameAccountEnabled) return;
+    const keys: Array<[string, GameLeaderboardKey]> = [
+      ['line', { game: 'line', difficulty: 'easy' }], ['station', { game: 'station', difficulty: 'easy' }],
+      ['city', { game: 'city', difficulty: 'hard' }], ['county', { game: 'county', difficulty: 'hard' }]
+    ];
+    let cancelled = false;
+    void Promise.all(keys.map(async ([name, key]) => [name, (await getGameLeaderboard(key, gameAccessToken || undefined)).entries] as const))
+      .then(items => { if (!cancelled) setLeaderboardsByMode(Object.fromEntries(items)); })
+      .catch(() => { if (!cancelled) setLeaderboardsByMode({}); });
+    return () => { cancelled = true; };
+  }, [showMinigameModal, gameAccessToken]);
   const settleGameLeaderboard = useCallback((score: number) => {
     const run = gameRunRef.current;
     gameRunRef.current = null;
@@ -675,6 +689,9 @@ export default function App() {
       return;
     }
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
+
+    setGameLaunchAnimation(true);
+    window.setTimeout(() => setGameLaunchAnimation(false), 1150);
 
     isMinigameActiveRef.current = true;
     if (!prevMapModeBeforeGameRef.current) {
@@ -6753,7 +6770,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             </div>
 
             {/* Quick Actions Container - Material Design 3 (Stations and Basemap moved to bottom hub) */}
-            <div className={`flex items-center gap-2 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
+            <div className={`mr-16 flex items-center gap-2 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
 
               {/* Custom Draw Mode Paintbrush FAB - hidden when showUserSubmittedData is disabled */}
               {showUserSubmittedData && (
@@ -8064,8 +8081,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 >
                   {gameLoading && (
                     <>
-                      <Loader2 className="w-10 h-10 animate-spin text-m3-primary" />
-                      <p className="text-sm font-black tracking-wide">{gameLoadingText}</p>
+                      {gameLaunchAnimation ? <motion.div initial={{ scale: 0.4, opacity: 0, rotate: -40 }} animate={{ scale: 1, opacity: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 320, damping: 18 }} className="relative flex h-24 w-24 items-center justify-center rounded-[30px] bg-m3-primary text-white shadow-[0_0_70px_rgba(82,121,111,0.8)]"><motion.div animate={{ scale: [1, 1.28, 1], opacity: [0.8, 0.15, 0.8] }} transition={{ duration: 1.05, repeat: Infinity }} className="absolute inset-[-18px] rounded-[40px] border-2 border-m3-primary" /><Route className="h-10 w-10" /></motion.div> : <Loader2 className="w-10 h-10 animate-spin text-m3-primary" />}
+                      <motion.p key={gameLaunchAnimation ? 'launch' : 'loading'} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-sm font-black tracking-wide">{gameLaunchAnimation ? '路线已就绪，挑战出发！' : gameLoadingText}</motion.p>
                       <button type="button" onClick={returnToMinigameMenu} className="mt-2 rounded-xl border border-white/35 px-4 py-2 text-xs font-black text-white transition-colors hover:bg-white/10">取消并返回菜单</button>
                     </>
                   )}
@@ -8082,11 +8099,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     ? "fixed bottom-3 left-1/2 -translate-x-1/2 z-[121] w-[860px] max-w-[96vw] bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 rounded-[22px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
                     : gameState === 'playing' && gameLoading
                     ? "hidden"
-                    : "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[121] w-[520px] max-w-[94vw] max-h-[85vh] bg-m3-surface-container-high border border-m3-outline-variant/30 rounded-[32px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
+                    : "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[121] w-[980px] max-w-[94vw] max-h-[85vh] bg-m3-surface-container-high border border-m3-outline-variant/30 rounded-[32px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
                 }
               >
                 {gameState === 'menu' && (
-                  <div className="p-7 overflow-y-auto flex flex-col gap-6 relative">
+                  <div className="p-7 overflow-y-auto flex flex-col gap-6 relative md:grid md:grid-cols-[minmax(230px,0.8fr)_minmax(360px,1.2fr)] md:items-start">
                     <button
                       type="button"
                       onClick={exitMinigameToMap}
@@ -8095,7 +8112,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       <X className="w-5 h-5" />
                     </button>
 
-                    <div>
+                    <div className="md:col-span-2">
                       <div className="flex items-center gap-2.5 mb-1">
                         <div className="w-9 h-9 rounded-2xl bg-m3-primary text-m3-on-primary flex items-center justify-center shadow-md">
                           <Gamepad2 className="w-5 h-5" />
@@ -8105,18 +8122,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       <p className="text-xs text-slate-500 font-medium">挑战你的路网知识，解锁“巴士之神”至高荣誉！</p>
                     </div>
 
-                    {gameAccountEnabled && (
-                      <div className="rounded-2xl border border-m3-outline-variant/30 bg-m3-surface p-3 space-y-2">
-                        {gameMode && <div className="border-t border-m3-outline-variant/20 pt-2 text-[11px]">
-                          <div className="flex justify-between text-slate-600"><span className="font-bold">本榜前五</span><button type="button" onClick={() => void refreshLeaderboard(leaderboardKey(gameMode,gameDifficulty))} className="text-m3-primary">刷新</button></div>
-                          {leaderboardLoading ? <p className="mt-1 text-slate-500">读取中…</p> : leaderboardEntries.slice(0,5).map(item => <p key={item.rank + '-' + item.displayName} className={'mt-1 flex justify-between ' + (item.isCurrentUser ? 'font-black text-m3-primary' : 'text-slate-600')}><span>{item.rank}. {item.displayName}</span><span>{item.score} 分</span></p>)}
-                          {!leaderboardLoading && !leaderboardEntries.length && <p className="mt-1 text-slate-500">暂无成绩</p>}
-                        </div>}
+                    {gameAccountEnabled && <div className="rounded-2xl border border-m3-outline-variant/30 bg-m3-surface p-3 md:col-start-2 md:row-start-2">
+                      <div className="mb-2 flex items-center justify-between"><span className="text-xs font-black text-slate-700">我的天梯排名</span><button type="button" onClick={() => gameMode && void refreshLeaderboard(leaderboardKey(gameMode,gameDifficulty))} className="text-[11px] font-bold text-m3-primary">刷新</button></div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {[['line','线路'],['station','站名'],['city','城市'],['county','县城']].map(([id,label]) => { const current = leaderboardsByMode[id]?.find(item => item.isCurrentUser); return <div key={id} className="rounded-xl bg-m3-surface-container-low p-2"><p className="text-[10px] font-bold text-slate-500">{label}</p><p className="mt-1 text-xs font-black text-slate-800">排名 {current ? `#${current.rank}` : '--'}</p><p className="text-[10px] font-bold text-m3-primary">{current ? `${current.score} 分` : '-- 分'}</p></div>; })}
                       </div>
-                    )}
+                    </div>}
 
                     {/* Mode selection */}
-                    <div className="space-y-3">
+                    <div className="space-y-3 md:col-start-1 md:row-start-2 md:row-span-5">
                       <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择游戏模式</label>
                       <div className="grid grid-cols-1 gap-2.5">
                         {[
@@ -8154,7 +8168,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
                     {/* Difficulty & Scope Settings */}
                     {gameMode && gameMode !== 'city' && gameMode !== 'county' && (
-                      <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20">
+                      <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20 md:col-start-2 md:row-start-3">
                         <div className="space-y-2">
                           <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择难度</label>
                           <div className="grid grid-cols-2 gap-2">
@@ -8182,7 +8196,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     )}
 
                     {gameMode === 'county' && (
-                      <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20">
+                      <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20 md:col-start-2 md:row-start-3">
                         <div className="space-y-2">
                           <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择省份（仅含已有县政府站点线网）</label>
                           <select
@@ -8202,7 +8216,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     {gameDataError&&<p role="alert" className="text-xs text-m3-error">{gameDataError}</p>}
                     {!gameCatalogLoading&&gameMode==='county'&&!countyProvinces.length&&<p role="status" className="text-xs text-slate-500">暂未收录可定位的县政府站点，请先选择其他模式。</p>}
                     {/* Start & Review Buttons */}
-                    <div className="flex gap-2.5">
+                    <div className="flex gap-2.5 md:col-start-2">
                       <button
                         type="button"
                         disabled={!gameMode||gameCatalogLoading||!gameCatalog.length||((gameMode==='line'||gameMode==='station')&&!gameCities.some(city=>city.city===gameCity))||(gameMode==='county'&&!countyProvinces.includes(gameCountyProvince))}
