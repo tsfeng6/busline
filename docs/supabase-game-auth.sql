@@ -30,6 +30,35 @@ create table if not exists public.game_runs (
 alter table public.game_runs add column if not exists game_city text not null default '北京市';
 create index if not exists game_runs_board_idx on public.game_runs (game, difficulty, score desc, finished_at asc) where finished_at is not null;
 create index if not exists game_runs_city_board_idx on public.game_runs (game_city, game, difficulty, score desc, finished_at asc) where finished_at is not null;
+-- `game_runs` remains the audit trail for individual attempts.  Leaderboards
+-- themselves are materialized below: each city/scope + game + difficulty has
+-- one header and one row per player.  This makes a leaderboard read a direct
+-- indexed read, rather than a scan and re-ranking of the full attempt history.
+create table if not exists public.game_leaderboards (
+  game_city text not null check (char_length(game_city) between 1 and 64),
+  game text not null check (game in ('line','station','city','county')),
+  difficulty text not null check (difficulty in ('easy','hell','hard')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (game_city, game, difficulty),
+  check ((game in ('line','station') and difficulty in ('easy','hell')) or (game in ('city','county') and difficulty = 'hard'))
+);
+create table if not exists public.game_leaderboard_entries (
+  game_city text not null,
+  game text not null,
+  difficulty text not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  display_name text not null check (char_length(display_name) between 2 and 24),
+  avatar_path text,
+  avatar_url text,
+  score integer not null check (score between 0 and 2000),
+  achieved_at timestamptz not null,
+  primary key (game_city, game, difficulty, user_id),
+  foreign key (game_city, game, difficulty)
+    references public.game_leaderboards (game_city, game, difficulty) on delete cascade
+);
+create index if not exists game_leaderboard_entries_read_idx
+  on public.game_leaderboard_entries (game_city, game, difficulty, score desc, achieved_at asc);
 -- A completed score must always have a settlement timestamp.  An unfinished
 -- row has never passed the server-side settlement checks, so any score placed
 -- on one (for example through the table editor) is not a valid leaderboard
@@ -43,6 +72,8 @@ alter table public.game_runs add constraint game_runs_score_requires_finished_ch
 
 alter table public.game_profiles enable row level security;
 alter table public.game_runs enable row level security;
+alter table public.game_leaderboards enable row level security;
+alter table public.game_leaderboard_entries enable row level security;
 insert into storage.buckets (id, name, public) values ('game-avatars', 'game-avatars', true)
 on conflict (id) do update set public = true;
 drop policy if exists "game avatar read" on storage.objects;
@@ -80,6 +111,59 @@ begin
   return query select p.display_name, p.avatar_path, p.avatar_url from public.game_profiles p where p.id = auth.uid();
 end;
 $$;
+
+-- Entries carry profile display fields so the leaderboard endpoint needs only
+-- its own data. Keep those copies current when a player edits their profile.
+create or replace function public.sync_game_leaderboard_profile()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update public.game_leaderboard_entries
+  set display_name = new.display_name,
+      avatar_path = new.avatar_path,
+      avatar_url = new.avatar_url
+  where user_id = new.id;
+  return new;
+end;
+$$;
+drop trigger if exists sync_game_leaderboard_profile on public.game_profiles;
+create trigger sync_game_leaderboard_profile
+after insert or update of display_name, avatar_path, avatar_url on public.game_profiles
+for each row execute procedure public.sync_game_leaderboard_profile();
+
+-- One-time, idempotent migration of settled historical runs.  NULL and
+-- unfinished rows are intentionally ignored: neither is a valid score.
+insert into public.game_leaderboards (game_city, game, difficulty)
+select distinct r.game_city, r.game, r.difficulty
+from public.game_runs r
+where r.finished_at is not null and r.score is not null
+on conflict (game_city, game, difficulty) do nothing;
+
+insert into public.game_leaderboard_entries
+  (game_city, game, difficulty, user_id, display_name, avatar_path, avatar_url, score, achieved_at)
+select distinct on (r.game_city, r.game, r.difficulty, r.user_id)
+  r.game_city,
+  r.game,
+  r.difficulty,
+  r.user_id,
+  coalesce(p.display_name, '巴士玩家'),
+  p.avatar_path,
+  p.avatar_url,
+  r.score,
+  r.finished_at
+from public.game_runs r
+left join public.game_profiles p on p.id = r.user_id
+where r.finished_at is not null and r.score is not null
+order by r.game_city, r.game, r.difficulty, r.user_id, r.score desc, r.finished_at asc
+on conflict (game_city, game, difficulty, user_id) do update
+set display_name = excluded.display_name,
+    avatar_path = excluded.avatar_path,
+    avatar_url = excluded.avatar_url,
+    score = excluded.score,
+    achieved_at = excluded.achieved_at
+where excluded.score > public.game_leaderboard_entries.score
+   or (excluded.score = public.game_leaderboard_entries.score
+       and excluded.achieved_at < public.game_leaderboard_entries.achieved_at);
+
 drop trigger if exists on_auth_user_game_profile on auth.users;
 create trigger on_auth_user_game_profile after insert on auth.users
 for each row execute procedure public.set_game_profile_name();
@@ -111,7 +195,13 @@ $$;
 
 create or replace function public.finish_game_run(p_run_id uuid, p_score integer)
 returns table (accepted boolean, best_score integer, rank bigint) language plpgsql security definer set search_path = public as $$
-declare run_row public.game_runs; elapsed_seconds integer; pace_cap integer;
+declare
+  run_row public.game_runs;
+  elapsed_seconds integer;
+  pace_cap integer;
+  leaderboard_score integer;
+  leaderboard_achieved_at timestamptz;
+  profile_row public.game_profiles;
 begin
   if auth.uid() is null then raise exception '请先登录'; end if;
   select * into run_row from public.game_runs where id = p_run_id and user_id = auth.uid() for update;
@@ -127,10 +217,59 @@ begin
   if run_row.game = 'county' then pace_cap := least(pace_cap, 90); end if;
   if p_score > pace_cap then raise exception '得分与本局服务器计时不符'; end if;
   update public.game_runs set score = p_score, finished_at = now() where id = p_run_id;
+
+  -- The first settled player for a scope creates its independent leaderboard.
+  -- This upsert locks the scope row during concurrent first finishes.
+  insert into public.game_leaderboards (game_city, game, difficulty)
+  values (run_row.game_city, run_row.game, run_row.difficulty)
+  on conflict (game_city, game, difficulty) do update
+  set updated_at = now();
+
+  select * into profile_row
+  from public.game_profiles
+  where id = auth.uid();
+
+  -- A player owns exactly one row in one leaderboard.  A lower or equal score
+  -- keeps the existing value and achieved time unchanged, as required.
+  insert into public.game_leaderboard_entries
+    (game_city, game, difficulty, user_id, display_name, avatar_path, avatar_url, score, achieved_at)
+  values (
+    run_row.game_city,
+    run_row.game,
+    run_row.difficulty,
+    auth.uid(),
+    coalesce(profile_row.display_name, '巴士玩家'),
+    profile_row.avatar_path,
+    profile_row.avatar_url,
+    p_score,
+    now()
+  )
+  on conflict (game_city, game, difficulty, user_id) do update
+  set display_name = excluded.display_name,
+      avatar_path = excluded.avatar_path,
+      avatar_url = excluded.avatar_url,
+      score = excluded.score,
+      achieved_at = excluded.achieved_at
+  where excluded.score > public.game_leaderboard_entries.score;
+
+  select e.score, e.achieved_at
+  into leaderboard_score, leaderboard_achieved_at
+  from public.game_leaderboard_entries e
+  where e.game_city = run_row.game_city
+    and e.game = run_row.game
+    and e.difficulty = run_row.difficulty
+    and e.user_id = auth.uid();
+
   return query
-  select true, coalesce(max(r.score), 0)::integer,
-    (select count(*) + 1 from (select distinct on (user_id) user_id, score, finished_at from public.game_runs where game_city = run_row.game_city and game = run_row.game and difficulty = run_row.difficulty and finished_at is not null order by user_id, score desc, finished_at asc) board where board.score > p_score or (board.score = p_score and board.finished_at < now()))
-  from public.game_runs r where r.user_id = auth.uid() and r.game_city = run_row.game_city and r.game = run_row.game and r.difficulty = run_row.difficulty and r.finished_at is not null;
+  select true,
+    leaderboard_score,
+    count(*) + 1
+  from public.game_leaderboard_entries e
+  where e.game_city = run_row.game_city
+    and e.game = run_row.game
+    and e.difficulty = run_row.difficulty
+    and (e.score > leaderboard_score
+      or (e.score = leaderboard_score and e.achieved_at < leaderboard_achieved_at));
 end;
 $$;
 
@@ -140,17 +279,16 @@ drop function if exists public.get_game_leaderboard(text, text);
 drop function if exists public.get_game_leaderboard(text, text, text);
 create function public.get_game_leaderboard(p_game text, p_difficulty text, p_city text)
 returns table (rank bigint, display_name text, avatar_path text, avatar_url text, score integer, achieved_at timestamptz, is_current_user boolean) language sql security definer set search_path = public as $$
-  with best as (
-    select distinct on (r.user_id) r.user_id, r.score, r.finished_at
-    from public.game_runs r where r.game_city = p_city and r.game = p_game and r.difficulty = p_difficulty and r.finished_at is not null
-    order by r.user_id, r.score desc, r.finished_at asc
-  ), ranked as (
-    select dense_rank() over (order by score desc) as rank, user_id, score, finished_at from best
+  with ranked as (
+    select dense_rank() over (order by e.score desc) as rank,
+      e.user_id, e.display_name, e.avatar_path, e.avatar_url, e.score, e.achieved_at
+    from public.game_leaderboard_entries e
+    where e.game_city = p_city and e.game = p_game and e.difficulty = p_difficulty
   )
-  select ranked.rank, coalesce(p.display_name, '巴士玩家'), p.avatar_path, p.avatar_url, ranked.score, ranked.finished_at, ranked.user_id = auth.uid()
-  from ranked left join public.game_profiles p on p.id = ranked.user_id
+  select ranked.rank, ranked.display_name, ranked.avatar_path, ranked.avatar_url, ranked.score, ranked.achieved_at, ranked.user_id = auth.uid()
+  from ranked
   where ranked.rank <= 5 or ranked.user_id = auth.uid()
-  order by ranked.rank, ranked.finished_at asc;
+  order by ranked.rank, ranked.achieved_at asc;
 $$;
 grant execute on function public.start_game_run(text, text, text) to authenticated;
 grant execute on function public.finish_game_run(uuid, integer) to authenticated;
