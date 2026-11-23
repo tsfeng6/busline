@@ -468,23 +468,59 @@ export default function App() {
   const leaderboardScope = (mode: 'line' | 'station' | 'city' | 'county', city = gameCity, province = gameCountyProvince) => mode === 'city' ? '全国' : mode === 'county' ? province : city || '北京市';
   const leaderboardKey = (mode: 'line' | 'station' | 'city' | 'county', difficulty: 'easy' | 'medium' | 'hard' | 'hell', scope = leaderboardScope(mode)): GameLeaderboardKey =>
     ({ game: mode, difficulty: (mode === 'line' || mode === 'station' ? difficulty : 'hard') as GameLeaderboardKey['difficulty'], scope });
+  const ladderCacheRef = useRef(new Map<string, { entries: LeaderboardEntry[]; at: number }>());
+  const ladderRequestsRef = useRef(new Map<string, Promise<LeaderboardEntry[]>>());
+  const ladderEntryCacheKey = (key: GameLeaderboardKey) => `${gameAccount?.id || 'anonymous'}\u0001${key.game}\u0001${key.difficulty}\u0001${key.scope || '北京市'}`;
+  const loadLeaderboardEntries = useCallback((key: GameLeaderboardKey) => {
+    const cacheKey = ladderEntryCacheKey(key);
+    const ongoing = ladderRequestsRef.current.get(cacheKey);
+    if (ongoing) return ongoing;
+    const request = getGameLeaderboard(key, gameAccessToken || undefined)
+      .then(result => {
+        ladderCacheRef.current.set(cacheKey, { entries: result.entries, at: Date.now() });
+        return result.entries;
+      })
+      .finally(() => ladderRequestsRef.current.delete(cacheKey));
+    ladderRequestsRef.current.set(cacheKey, request);
+    return request;
+  }, [gameAccessToken, gameAccount?.id]);
+  const warmLadderBoards = useCallback((mode: 'line' | 'station' | 'city' | 'county', scope: string) => {
+    const standard = leaderboardKey(mode, mode === 'line' || mode === 'station' ? 'easy' : 'hard', scope);
+    const hell = mode === 'line' || mode === 'station' ? leaderboardKey(mode, 'hell', scope) : null;
+    return Promise.all([loadLeaderboardEntries(standard), hell ? loadLeaderboardEntries(hell) : Promise.resolve([] as LeaderboardEntry[])]);
+  }, [loadLeaderboardEntries]);
   const refreshLadderBoards = useCallback(async (mode: 'line' | 'station' | 'city' | 'county', scope: string) => {
     if (!gameAccountEnabled) return;
     const standard = leaderboardKey(mode, mode === 'line' || mode === 'station' ? 'easy' : 'hard', scope);
     const hell = mode === 'line' || mode === 'station' ? leaderboardKey(mode, 'hell', scope) : null;
-    setLeaderboardLoading(true);
+    const cachedStandard = ladderCacheRef.current.get(ladderEntryCacheKey(standard))?.entries;
+    const cachedHell = hell ? ladderCacheRef.current.get(ladderEntryCacheKey(hell))?.entries : [];
+    const hasCachedBoard = !!cachedStandard && (!hell || !!cachedHell);
+    // Render a known board synchronously, then revalidate it quietly. The
+    // first-ever visit still shows the loading state until a board exists.
+    if (hasCachedBoard) setLadderBoards({ standard: cachedStandard, hell: cachedHell || [] });
+    setLeaderboardLoading(!hasCachedBoard);
     try {
-      const [normal, hard] = await Promise.all([
-        getGameLeaderboard(standard, gameAccessToken || undefined),
-        hell ? getGameLeaderboard(hell, gameAccessToken || undefined) : Promise.resolve({ entries: [] as LeaderboardEntry[] })
-      ]);
-      setLadderBoards({ standard: normal.entries, hell: hard.entries });
+      const [normal, hard] = await warmLadderBoards(mode, scope);
+      setLadderBoards({ standard: normal, hell: hard });
     } catch {
-      setLadderBoards({ standard: [], hell: [] });
+      if (!hasCachedBoard) setLadderBoards({ standard: [], hell: [] });
     } finally {
       setLeaderboardLoading(false);
     }
-  }, [gameAccessToken]);
+  }, [gameAccount?.id, warmLadderBoards]);
+  useEffect(() => {
+    if (!gameAccountEnabled || !gameAccessToken) return;
+    // Warm each default scope after the map and account have settled. This
+    // happens outside the modal, so selecting any mode is normally instant.
+    const timer = window.setTimeout(() => {
+      void warmLadderBoards('line', leaderboardScope('line'));
+      void warmLadderBoards('station', leaderboardScope('station'));
+      void warmLadderBoards('city', leaderboardScope('city'));
+      void warmLadderBoards('county', leaderboardScope('county'));
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [gameAccessToken, gameCity, gameCountyProvince, warmLadderBoards]);
   useEffect(() => {
     if (!showMinigameModal || !gameAccountEnabled) return;
     const mode = gameMode || 'line', scope = leaderboardScope(mode);
@@ -6904,6 +6940,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   onClick={() => {
                     setGameMode(null);
                     setGameState('menu');
+                    void warmLadderBoards('line', leaderboardScope('line'));
                     setShowMinigameModal(true);
                   }}
                   className="backdrop-blur-md bg-m3-surface/90 border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center text-slate-700 hover:bg-m3-surface-container-high hover:text-m3-primary hover:scale-105 transition-all duration-200 active:scale-90 group"
@@ -8194,7 +8231,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         ].map(m => (
                           <div 
                             key={m.id}
-                            onClick={() => setGameMode(m.id as any)}
+                            onClick={() => {
+                              const mode = m.id as 'line' | 'station' | 'city' | 'county';
+                              setGameMode(mode);
+                              void warmLadderBoards(mode, leaderboardScope(mode));
+                            }}
                             className={`p-4 rounded-2xl border cursor-pointer transition-all flex items-start gap-3.5 ${gameMode === m.id ? 'bg-m3-primary-container/40 border-m3-primary shadow-sm ring-1 ring-m3-primary/30' : 'bg-m3-surface border-m3-outline-variant/30 hover:bg-m3-surface-container-low'}`}
                           >
                             <GameModeVisual mode={m.id as 'line' | 'station' | 'city' | 'county'} active={gameMode === m.id} />
