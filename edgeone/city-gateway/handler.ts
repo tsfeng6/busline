@@ -19,12 +19,63 @@ export const gatewaySignature=(secret:string,text:string)=>createHmac('sha256',s
 type GameName='line'|'station'|'city'|'county';type GameDifficulty='easy'|'hell'|'hard';
 const validLeaderboard=(game:any,difficulty:any):game is GameName=>
   (['line','station'].includes(game)&&['easy','hell'].includes(difficulty))||(['city','county'].includes(game)&&difficulty==='hard');
-const gameAccount=(user:any):{id:string;email?:string;displayName:string}=>({id:String(user?.id||''),email:user?.email?String(user.email):undefined,displayName:String(user?.user_metadata?.display_name||'巴士玩家').slice(0,24)});
+const gameAccount=(user:any,profile?:any):{id:string;phone?:string;displayName:string;avatarUrl?:string}=>({id:String(user?.id||''),phone:user?.phone?String(user.phone):undefined,displayName:String(profile?.display_name||'巴士玩家').slice(0,24),avatarUrl:profile?.avatar_path?String(profile.avatar_path):undefined});
+const xmlEscape=(value:string)=>value.replace(/[<>&'\"]/g,char=>({"<":'&lt;',">":'&gt;','&':'&amp;',"'":'&apos;','\"':'&quot;'}[char]!));
+const xmlValue=(xml:string,name:string)=>{const found=new RegExp(`<${name}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${name}>|<${name}>([\\s\\S]*?)<\\/${name}>`).exec(xml);return (found?.[1]||found?.[2]||'').trim();};
+const wechatSignature=(token:string,timestamp:string,nonce:string)=>createHash('sha1').update([token,timestamp,nonce].sort().join('')).digest('hex');
+const wechatReply=(to:string,from:string,content:string)=>`<xml><ToUserName><![CDATA[${xmlEscape(to)}]]></ToUserName><FromUserName><![CDATA[${xmlEscape(from)}]]></FromUserName><CreateTime>${Math.floor(Date.now()/1000)}</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[${xmlEscape(content)}]]></Content></xml>`;
+const publicUrl=(value:string|undefined)=>{try{const url=new URL(value||'');return url.protocol==='https:'?url.toString().replace(/\/$/,''):null;}catch{return null;}};
+async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
+  const url=new URL(request.url),path=url.pathname;
+  if(path!=='/wechat/callback'&&path!=='/wechat/login')return null;
+  const base=env.SUPABASE_URL?.replace(/\/$/,'')||'',serviceKey=env.SUPABASE_SERVICE_ROLE_KEY;
+  const callbackToken=env.WECHAT_CALLBACK_TOKEN||'',appUrl=publicUrl(env.PUBLIC_APP_URL),gatewayUrl=publicUrl(env.PUBLIC_GATEWAY_URL);
+  if(!base||!serviceKey||!callbackToken||!appUrl||!gatewayUrl)throw fail(503,'微信公众号账号服务尚未配置。');
+  if(!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(base)||callbackToken.length<16)throw fail(503,'微信公众号账号服务配置无效。');
+  const admin=async(pathname:string,init:RequestInit={})=>{
+    const response=await transport(base+pathname,{...init,headers:{apikey:serviceKey,Authorization:`Bearer ${serviceKey}`,'Content-Type':'application/json',...(init.headers||{})},signal:AbortSignal.timeout(15000)});
+    const body=await response.json().catch(()=>({}));if(!response.ok)throw fail(503,String(body.message||body.msg||'账号服务暂时不可用。').slice(0,120));return body;
+  };
+  const xml=(content:string,status=200)=>new Response(content,{status,headers:{'Content-Type':'application/xml; charset=utf-8','Cache-Control':'no-store'}});
+  if(path==='/wechat/login'){
+    if(request.method!=='GET')throw fail(404,'没有这个账号接口。');
+    const token=url.searchParams.get('token')||'';if(!/^[A-Za-z0-9_-]{40,128}$/.test(token))throw fail(400,'登录链接无效或已过期。');
+    const result=await admin('/rest/v1/rpc/consume_wechat_login_token',{method:'POST',body:JSON.stringify({p_token_hash:hash(token)})});
+    const row=Array.isArray(result)?result[0]:result;if(!row?.user_id)throw fail(400,'登录链接无效或已过期。');
+    const user=await admin('/auth/v1/admin/users/'+encodeURIComponent(String(row.user_id)),{method:'GET'});
+    let email=String(user?.email||'');
+    if(!email){email=`wx-${String(row.user_id)}@login.busline.invalid`;await admin('/auth/v1/admin/users/'+encodeURIComponent(String(row.user_id)),{method:'PUT',body:JSON.stringify({email,email_confirm:true})});}
+    const generated=await admin('/auth/v1/admin/generate_link',{method:'POST',body:JSON.stringify({type:'magiclink',email,options:{redirectTo:appUrl+'/?wechat=logged-in'}})});
+    const action=String(generated?.properties?.action_link||generated?.action_link||'');if(!/^https:\/\//.test(action))throw fail(503,'登录服务暂时不可用。');
+    return new Response(null,{status:302,headers:{Location:action,'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
+  }
+  const timestamp=url.searchParams.get('timestamp')||'',nonce=url.searchParams.get('nonce')||'',signature=url.searchParams.get('signature')||'';
+  if(!/^\d{10,13}$/.test(timestamp)||nonce.length<1||nonce.length>128||!equal(wechatSignature(callbackToken,timestamp,nonce),signature))throw fail(401,'微信签名验证失败。');
+  if(request.method==='GET')return new Response(url.searchParams.get('echostr')||'',{headers:{'Content-Type':'text/plain;charset=utf-8'}});
+  if(request.method!=='POST')throw fail(404,'没有这个账号接口。');
+  if(Math.abs(Date.now()-Number(timestamp)*(timestamp.length===10?1000:1))>300000)throw fail(401,'微信请求已过期。');
+  const raw=new TextDecoder().decode(await bodyBytes(request,16384)),from=xmlValue(raw,'FromUserName'),to=xmlValue(raw,'ToUserName'),content=xmlValue(raw,'Content').replace(/\s/g,''),msgId=xmlValue(raw,'MsgId');
+  if(!from||!to||!content)throw fail(400,'微信消息格式无效。');
+  const eventKey=msgId?`msg:${msgId}`:`body:${hash(`${from}\n${to}\n${xmlValue(raw,'CreateTime')}\n${content}`)}`;
+  const claimed=await admin('/rest/v1/rpc/claim_wechat_inbound',{method:'POST',body:JSON.stringify({p_event_key:eventKey})});
+  if(claimed!==true)return xml('success');
+  const binding=await admin('/rest/v1/wechat_bindings?openid=eq.'+encodeURIComponent(from)+'&select=user_id');
+  const userId=Array.isArray(binding)&&binding[0]?.user_id?String(binding[0].user_id):'';
+  let purpose:'register'|'bind'|'login'|null=null,message='可发送“注册账号”、“绑定账号”、“免密登录”或“账号状态”。';
+  if(content==='注册账号'){purpose=userId?null:'register';message=userId?'该微信已绑定 Busline 账号，无需重复注册。可发送“免密登录”。':'';}
+  else if(content==='绑定账号'){purpose=userId?null:'bind';message=userId?'该微信已绑定 Busline 账号，无需重复绑定。':'';}
+  else if(content==='免密登录'){purpose=userId?'login':null;message=userId?'':'该微信尚未绑定账号，请先发送“注册账号”或“绑定账号”。';}
+  else if(content==='账号状态')message=userId?'此微信已绑定 Busline 账号。为保护隐私，不在消息中展示手机号或昵称。':'此微信尚未绑定 Busline 账号。可发送“注册账号”或“绑定账号”。';
+  if(purpose){const token=randomBytes(32).toString('base64url'),expires=new Date(Date.now()+15*60_000).toISOString();await admin('/rest/v1/rpc/create_wechat_link_token',{method:'POST',body:JSON.stringify({p_openid:from,p_purpose:purpose,p_token_hash:hash(token),p_expires_at:expires})});
+    const link=purpose==='login'?`${gatewayUrl}/wechat/login?token=${encodeURIComponent(token)}`:`${appUrl}/?wechat=${purpose}&token=${encodeURIComponent(token)}`;
+    message=purpose==='login'?`请在 15 分钟内打开此免密登录链接：${link}\n请勿转发给他人。`:`请在 15 分钟内打开链接${purpose==='bind'?'验证现有账号后完成绑定':'注册或验证账号后完成绑定'}：${link}\n请勿转发给他人。`;}
+  return xml(wechatReply(from,to,message));
+}
 async function handleGameGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
   const url=new URL(request.url),path=url.pathname;
   const configured=!!env.SUPABASE_URL&&!!env.SUPABASE_ANON_KEY;
   if(path==='/leaderboards'&&request.method==='GET'&&!configured)return json({entries:[],disabled:true},200);
-  if(!path.startsWith('/game-auth/')&&!path.startsWith('/game-runs')&&path!=='/leaderboards')return null;
+  if(!path.startsWith('/game-auth/')&&!path.startsWith('/game-runs')&&path!=='/leaderboards'&&path!=='/game-profile'&&path!=='/wechat/complete')return null;
   if(!configured)throw fail(503,'账号与排行榜服务尚未配置。');
   const base=env.SUPABASE_URL!.replace(/\/$/,'');
   if(!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(base))throw fail(503,'账号服务配置无效。');
@@ -36,19 +87,46 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     if(!response.ok){const message=String(body.msg||body.message||body.error_description||'账号服务暂时不可用。');throw fail(response.status===401?401:400,message.slice(0,160));}
     return body;
   };
-  if(path==='/game-auth/sign-up'&&request.method==='POST'){
-    const input=await jsonBody(request,2048),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||''),displayName=String(input.displayName||'').trim();
-    if(!/^\S+@\S+\.\S+$/.test(email)||password.length<8||password.length>128||displayName.length<2||displayName.length>24)throw fail(400,'请填写有效邮箱、至少 8 位密码和 2–24 字昵称。');
-    const data=await supabase('/auth/v1/signup',{method:'POST',body:JSON.stringify({email,password,data:{display_name:displayName}})});
-    return json({account:data.user?gameAccount(data.user):undefined,accessToken:data.session?.access_token,confirmationRequired:!data.session});
+  const profileFor=async(auth:string)=>{
+    const response=await transport(base+'/rest/v1/rpc/current_game_profile',{method:'POST',headers:{apikey:env.SUPABASE_ANON_KEY!,Authorization:auth,'Content-Type':'application/json'},body:'{}'});
+    if(!response.ok)throw fail(400,'用户资料读取失败。');return response.json();
+  };
+  const withAvatarUrl=(account:{avatarUrl?:string})=>{if(account.avatarUrl)account.avatarUrl=base+'/storage/v1/object/public/game-avatars/'+account.avatarUrl;return account;};
+  if(path==='/game-auth/otp'&&request.method==='POST'){
+    const input=await jsonBody(request,1024),phone=String(input.phone||'').trim();
+    if(!/^\+[1-9]\d{7,14}$/.test(phone))throw fail(400,'请输入带国家区号的手机号，例如 +8613812345678。');
+    await supabase('/auth/v1/otp',{method:'POST',body:JSON.stringify({phone,create_user:true})});
+    return json({sent:true});
   }
-  if(path==='/game-auth/sign-in'&&request.method==='POST'){
-    const input=await jsonBody(request,2048),email=String(input.email||'').trim().toLowerCase(),password=String(input.password||'');
-    if(!/^\S+@\S+\.\S+$/.test(email)||!password)throw fail(400,'邮箱或密码无效。');
-    const data=await supabase('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})});
-    return json({account:gameAccount(data.user),accessToken:data.access_token});
+  if(path==='/game-auth/verify'&&request.method==='POST'){
+    const input=await jsonBody(request,2048),phone=String(input.phone||'').trim(),token=String(input.token||'').trim(),displayName=String(input.displayName||'').trim();
+    if(!/^\+[1-9]\d{7,14}$/.test(phone)||!/^\d{4,10}$/.test(token))throw fail(400,'手机号或验证码无效。');
+    const data=await supabase('/auth/v1/verify',{method:'POST',body:JSON.stringify({phone,token,type:'sms'})}),auth='Bearer '+data.access_token;
+    if(displayName){if(displayName.length<2||displayName.length>24)throw fail(400,'昵称须为 2–24 个字。');await transport(base+'/rest/v1/rpc/update_game_profile',{method:'POST',headers:{apikey:env.SUPABASE_ANON_KEY!,Authorization:auth,'Content-Type':'application/json'},body:JSON.stringify({p_display_name:displayName,p_avatar_path:null})});}
+    const profile=await profileFor(auth),account=withAvatarUrl(gameAccount(data.user,Array.isArray(profile)?profile[0]:profile));
+    return json({account,accessToken:data.access_token});
   }
-  if(path==='/game-auth/me'&&request.method==='GET')return json({account:gameAccount(await supabase('/auth/v1/user',{},true))});
+  if(path==='/game-auth/me'&&request.method==='GET'){const user=await supabase('/auth/v1/user',{},true),profile=await profileFor(bearer);return json({account:withAvatarUrl(gameAccount(user,Array.isArray(profile)?profile[0]:profile))});}
+  if(path==='/game-profile'&&request.method==='POST'){
+    const input=await jsonBody(request,300000),displayName=String(input.displayName||'').trim(),avatarData=input.avatarData===undefined?undefined:String(input.avatarData);
+    if(displayName.length<2||displayName.length>24)throw fail(400,'昵称须为 2–24 个字。');
+    const user=await supabase('/auth/v1/user',{},true);let avatarPath:string|null=null;
+    if(avatarData){
+      const matched=/^data:image\/(webp|jpeg);base64,([a-z0-9+/=]+)$/i.exec(avatarData);if(!matched)throw fail(400,'头像格式无效。');
+      const bytes=Buffer.from(matched[2],'base64');if(bytes.length<64||bytes.length>180*1024)throw fail(400,'头像大小无效。');
+      avatarPath=String(user.id)+'/avatar.'+matched[1].toLowerCase();
+      const uploaded=await transport(base+'/storage/v1/object/game-avatars/'+avatarPath,{method:'PUT',headers:{apikey:env.SUPABASE_ANON_KEY!,Authorization:bearer,'Content-Type':'image/'+matched[1].toLowerCase(),'x-upsert':'true'},body:bytes,signal:AbortSignal.timeout(15000)});
+      if(!uploaded.ok)throw fail(400,'头像上传失败。');
+    }
+    const profile=await supabase('/rest/v1/rpc/update_game_profile',{method:'POST',body:JSON.stringify({p_display_name:displayName,p_avatar_path:avatarPath})},true);
+    return json({account:withAvatarUrl(gameAccount(user,Array.isArray(profile)?profile[0]:profile))});
+  }
+  if(path==='/wechat/complete'&&request.method==='POST'){
+    const input=await jsonBody(request,1024),token=String(input.token||'');
+    if(!/^[A-Za-z0-9_-]{40,128}$/.test(token))throw fail(400,'注册链接无效或已过期。');
+    await supabase('/rest/v1/rpc/complete_wechat_link_token',{method:'POST',body:JSON.stringify({p_token_hash:hash(token)})},true);
+    return json({bound:true});
+  }
   if(path==='/leaderboards'&&request.method==='GET'){
     const game=url.searchParams.get('game'),difficulty=url.searchParams.get('difficulty');if(!validLeaderboard(game,difficulty))throw fail(400,'不存在这个游戏榜单。');
     const data=await supabase('/rest/v1/rpc/get_game_leaderboard',{method:'POST',body:JSON.stringify({p_game:game,p_difficulty:difficulty})},/^Bearer\s+\S+$/i.test(bearer));
@@ -116,6 +194,7 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
     if(path==='/health'&&request.method==='GET')return json({service:'busline-city-gateway',platform:'edgeone',version:1,
       configured:!!env.GITHUB_DISPATCH_TOKEN&&(env.CALLBACK_SECRET?.length||0)>=32&&(env.RATE_LIMIT_SALT?.length||0)>=16});
     if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization,x-city-upload-token','Access-Control-Max-Age':'600'}});
+    const wechatResponse=await handleWechatGateway(request,env,json,transport);if(wechatResponse)return wechatResponse;
     const gameResponse=await handleGameGateway(request,env,json,transport);if(gameResponse)return gameResponse;
     if(!env.GITHUB_DISPATCH_TOKEN||(env.CALLBACK_SECRET?.length||0)<32||(env.RATE_LIMIT_SALT?.length||0)<16)throw fail(503,'上传入口尚未配置完成。');
     const repo=env.GITHUB_REPO||'tsfeng6/busline',ref=env.GITHUB_WORKFLOW_REF||'main';

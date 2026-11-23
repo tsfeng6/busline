@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import test from 'node:test';
 import {handleEdgeOneGateway,gatewaySignature,type UploadStore} from '../edgeone/city-gateway/handler';
 import {uploadCitySnapshot} from '../src/utils/cityUploadClient';
@@ -86,4 +87,21 @@ test('Node function request adapters without a Web stream body can submit valid 
  const request={url:'https://upload.example/uploads',method:'POST',headers:new Headers({Origin:'https://busline.cc','Content-Length':String(Buffer.byteLength(raw))}),body:undefined,arrayBuffer:async()=>new TextEncoder().encode(raw).buffer} as unknown as Request;
  const response=await handleEdgeOneGateway(request,env,f.store);
  assert.equal(response.status,200);assert.ok((await response.json()).token);
+});
+
+test('WeChat callback verifies its signature and issues only a one-time registration link',async()=>{
+ const data=new Map<string,string|ArrayBuffer>(),store:UploadStore={async get(){return null;},async set(){},async delete(){},async list(){return {blobs:[]};}};
+ const wechatEnv={...env,SUPABASE_URL:'https://project.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'server-only-test-key',WECHAT_CALLBACK_TOKEN:'wechat-callback-test-token',PUBLIC_APP_URL:'https://busline.cc',PUBLIC_GATEWAY_URL:'https://gateway.busline.cc'};
+ const transport:typeof fetch=async(input,init)=>{
+   const path=new URL(String(input)).pathname;
+   if(path.endsWith('/claim_wechat_inbound'))return new Response('true',{headers:{'Content-Type':'application/json'}});
+   if(path==='/rest/v1/wechat_bindings')return new Response('[]',{headers:{'Content-Type':'application/json'}});
+   if(path.endsWith('/create_wechat_link_token'))return new Response('{}',{headers:{'Content-Type':'application/json'}});
+   throw Error('unexpected upstream '+path);
+ };
+ const timestamp=String(Math.floor(Date.now()/1000)),nonce='nonce-1',signature=createHash('sha1').update([wechatEnv.WECHAT_CALLBACK_TOKEN!,timestamp,nonce].sort().join('')).digest('hex');
+ const raw='<xml><ToUserName><![CDATA[busline]]></ToUserName><FromUserName><![CDATA[openid-123]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[注册账号]]></Content><MsgId>42</MsgId></xml>';
+ const response=await handleEdgeOneGateway(new Request(`https://gateway.example/wechat/callback?timestamp=${timestamp}&nonce=${nonce}&signature=${signature}`,{method:'POST',body:raw}),wechatEnv,store,transport);
+ assert.equal(response.status,200);const body=await response.text();assert.match(body,/busline\.cc\/\?wechat=register&amp;token=/);assert.match(body,/15 分钟/);
+ assert.equal((await handleEdgeOneGateway(new Request('https://gateway.example/wechat/callback?timestamp='+timestamp+'&nonce='+nonce+'&signature=bad',{method:'POST',body:raw}),wechatEnv,store,transport)).status,401);
 });
