@@ -30,6 +30,16 @@ create table if not exists public.game_runs (
 alter table public.game_runs add column if not exists game_city text not null default '北京市';
 create index if not exists game_runs_board_idx on public.game_runs (game, difficulty, score desc, finished_at asc) where finished_at is not null;
 create index if not exists game_runs_city_board_idx on public.game_runs (game_city, game, difficulty, score desc, finished_at asc) where finished_at is not null;
+-- A completed score must always have a settlement timestamp.  Early web
+-- clients could leave a score behind if their finish request was interrupted;
+-- repair those legacy rows using the minimum server-valid elapsed time and
+-- prevent the inconsistent state from being written again.
+update public.game_runs
+set finished_at = started_at + make_interval(secs => greatest(0, 2 * (score - 1)))
+where score is not null and finished_at is null;
+alter table public.game_runs drop constraint if exists game_runs_score_requires_finished_check;
+alter table public.game_runs add constraint game_runs_score_requires_finished_check
+  check (score is null or finished_at is not null);
 
 alter table public.game_profiles enable row level security;
 alter table public.game_runs enable row level security;
@@ -83,6 +93,12 @@ begin
   if not ((p_game in ('line','station') and p_difficulty in ('easy','hell')) or (p_game in ('city','county') and p_difficulty = 'hard')) then
     raise exception '不存在这个游戏榜单';
   end if;
+  -- Discard stale abandoned attempts.  They have no score and never appear on
+  -- a leaderboard, but removing them prevents the table from accumulating
+  -- endless NULL rows after users close a game midway through.
+  delete from public.game_runs
+  where user_id = auth.uid() and score is null and finished_at is null
+    and started_at < now() - interval '15 minutes';
   -- A short per-user cooldown makes scripted run creation less useful.
   if exists (select 1 from public.game_runs where user_id = auth.uid() and started_at > now() - interval '3 seconds') then
     raise exception '请勿重复开始挑战';
