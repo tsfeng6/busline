@@ -1081,6 +1081,9 @@ export default function App() {
 
   // Load WeChat QR from server database on component mount
   useEffect(() => {
+    // The legacy group-QR admin endpoint is not part of the static site.
+    // Avoid a noisy same-origin 404 when no separate API server is configured.
+    if (!API_BASE_URL) return;
     const loadWeChatQR = async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/api/settings/wechat_qr`);

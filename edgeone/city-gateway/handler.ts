@@ -41,9 +41,9 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
   const xml=(content:string,status=200)=>new Response(content,{status,headers:{'Content-Type':'application/xml; charset=utf-8','Cache-Control':'no-store'}});
   const wechatAccessToken=async()=>{
     const appId=env.WECHAT_APP_ID||'',secret=env.WECHAT_APP_SECRET||'';
-    if(!appId||!secret)throw fail(503,'公众号扫码登录尚未配置。');
-    const data=await (await transport(`https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(secret)}`)).json();
-    if(!data.access_token)throw fail(503,'公众号授权暂时不可用。');
+    if(!appId||!secret)throw fail(502,'公众号 AppID 或 AppSecret 尚未配置。');
+    let data:any;try{data=await (await transport(`https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${encodeURIComponent(appId)}&secret=${encodeURIComponent(secret)}`)).json();}catch{throw fail(502,'无法连接微信公众号授权服务，请稍后重试。');}
+    if(!data.access_token)throw fail(502,'公众号 AppID 或 AppSecret 无效，或接口权限尚未生效。');
     return String(data.access_token);
   };
   const wechatProfile=async(openid:string)=>{try{const token=await wechatAccessToken(),info=await (await transport(`https://api.weixin.qq.com/cgi-bin/user/info?access_token=${encodeURIComponent(token)}&openid=${encodeURIComponent(openid)}&lang=zh_CN`)).json();return {nickname:String(info.nickname||'').replace(/\s/g,'').slice(0,24)||'巴士玩家',avatarUrl:/^https:\/\//.test(String(info.headimgurl||''))?String(info.headimgurl):''};}catch{return {nickname:'巴士玩家',avatarUrl:''};}};
@@ -70,7 +70,7 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
       const scene=randomBytes(12).toString('hex'),expires=new Date(Date.now()+5*60_000).toISOString(),accessToken=await wechatAccessToken();
       await admin('/rest/v1/rpc/create_wechat_web_login',{method:'POST',body:JSON.stringify({p_code_hash:hash(scene),p_expires_at:expires})});
       const created=await (await transport(`https://api.weixin.qq.com/cgi-bin/qrcode/create?access_token=${encodeURIComponent(accessToken)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expire_seconds:300,action_name:'QR_STR_SCENE',action_info:{scene:{scene_str:scene}}})})).json();
-      if(!created.ticket)throw fail(503,'暂时无法生成登录二维码。');
+      if(!created.ticket)throw fail(502,'公众号临时二维码生成失败，请检查带参数二维码接口权限。');
       return json({scene,expiresAt:expires,qrUrl:'https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket='+encodeURIComponent(String(created.ticket))});
     }
     if(request.method==='GET'){
