@@ -30,12 +30,12 @@ create table if not exists public.game_runs (
 alter table public.game_runs add column if not exists game_city text not null default '北京市';
 create index if not exists game_runs_board_idx on public.game_runs (game, difficulty, score desc, finished_at asc) where finished_at is not null;
 create index if not exists game_runs_city_board_idx on public.game_runs (game_city, game, difficulty, score desc, finished_at asc) where finished_at is not null;
--- A completed score must always have a settlement timestamp.  Early web
--- clients could leave a score behind if their finish request was interrupted;
--- repair those legacy rows using the minimum server-valid elapsed time and
--- prevent the inconsistent state from being written again.
+-- A completed score must always have a settlement timestamp.  An unfinished
+-- row has never passed the server-side settlement checks, so any score placed
+-- on one (for example through the table editor) is not a valid leaderboard
+-- score and must not be promoted into the ranking.
 update public.game_runs
-set finished_at = started_at + make_interval(secs => greatest(0, 2 * (score - 1)))
+set score = null
 where score is not null and finished_at is null;
 alter table public.game_runs drop constraint if exists game_runs_score_requires_finished_check;
 alter table public.game_runs add constraint game_runs_score_requires_finished_check
