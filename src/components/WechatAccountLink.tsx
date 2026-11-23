@@ -15,7 +15,7 @@ export function WechatAccountLink({ account, accessToken, authLoading, onSignedI
   const [open, setOpen] = useState(Boolean(registrationToken)), [mode, setMode] = useState<'qr' | 'password' | 'register'>(registrationToken ? 'register' : 'qr'), [page, setPage] = useState<ProfilePage>('data');
   const [message, setMessage] = useState(''), [name, setName] = useState(''), [avatar, setAvatar] = useState<File | null>(null), [avatarPreview, setAvatarPreview] = useState('');
   const [accountName, setAccountName] = useState(''), [password, setPassword] = useState(''), [confirmPassword, setConfirmPassword] = useState(''), [loginCode, setLoginCode] = useState('');
-  const [busy, setBusy] = useState<'save' | 'register' | 'login' | 'delete' | null>(null), [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [busy, setBusy] = useState<'save' | 'register' | 'login' | 'logout' | 'delete' | null>(null), [deleteConfirm, setDeleteConfirm] = useState(false);
   const avatarInput = useRef<HTMLInputElement>(null);
   const close = () => { if (!busy) { setOpen(false); setMessage(''); setDeleteConfirm(false); } };
   const chooseAvatar = (file?: File | null) => { if (!file) return; if (!file.type.startsWith('image/')) { setMessage('请选择图片文件。'); return; } setAvatar(file); setAvatarPreview(URL.createObjectURL(file)); setMessage(''); };
@@ -27,7 +27,23 @@ export function WechatAccountLink({ account, accessToken, authLoading, onSignedI
   const loginWithPassword = async () => { try { setBusy('login'); setMessage('正在登录…'); await passwordLogin(accountName, password); const result = await getGameAccount(); onSignedIn(result.account, 'cookie'); setOpen(false); } catch (error: any) { setMessage(error.message || '登录失败。'); } finally { setBusy(null); } };
   const confirmWechatCode = async () => { try { setBusy('login'); setMessage('正在核验登录码…'); if (!gateway) throw Error('账号服务尚未配置。'); const response = await fetch(`${gateway}/wechat/web-login?code=${encodeURIComponent(loginCode.trim().toUpperCase())}`, { credentials: 'include' }), body = await response.json(); if (!response.ok) throw Error(body.error || '登录码无效。'); if (!body.actionUrl) throw Error('登录码无效或已过期。'); window.location.assign(body.actionUrl); } catch (error: any) { setMessage(error.message || '登录失败。'); setBusy(null); } };
   const register = async () => { try { if (password !== confirmPassword) throw Error('两次密码输入不一致。'); setBusy('register'); setMessage(avatar ? '正在上传头像并创建账号…' : '正在创建账号…'); const avatarData = avatar ? await compressAvatar(avatar) : undefined; const response = await fetch(`${gateway}/wechat/registration?token=${encodeURIComponent(registrationToken)}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountName, displayName: name, password, avatarData }) }), body = await response.json(); if (!response.ok) throw Error(body.error || '注册失败。'); window.location.assign(body.actionUrl); } catch (error: any) { setMessage(error.message || '注册失败。'); setBusy(null); } };
-  const logout = async () => { try { await endGameSession(); } finally { onLogout(); close(); } };
+  const logout = async () => {
+    setBusy('logout');
+    setMessage('正在退出登录…');
+    try {
+      await endGameSession();
+      onLogout();
+      setPassword('');
+      setLoginCode('');
+      setAvatar(null);
+      setAvatarPreview('');
+      close();
+    } catch (error: any) {
+      setMessage(error.message || '退出登录失败，请重试。');
+    } finally {
+      setBusy(null);
+    }
+  };
   const destroy = async () => { try { setBusy('delete'); setMessage('正在注销账号并删除资料…'); await deleteGameAccount(accessToken); onLogout(); setOpen(false); } catch (error: any) { setMessage(error.message || '注销账号失败。'); } finally { setBusy(null); } };
   const busyLabel = (label: string, current: typeof busy) => busy === current ? '处理中…' : label;
   const fileInput = <input ref={avatarInput} type="file" accept="image/*" className="hidden" onChange={event => chooseAvatar(event.target.files?.[0])} />;

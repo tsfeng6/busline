@@ -21,6 +21,35 @@ function fixture(){
 const sample=()=>({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),retrievalComplete:false,filtered:false,
  stops:[{id:'s',name:'站',address:'6路',location:{lng:116.123456789123,lat:39.987654321098}}],
  lines:[{id:'l',name:'6路',city:'北京市',path:[[116.123456789123,39.987654321098],[116.2,39.2]],via_stops:[]}]}) as any;
+
+test('session restore rejects anonymous and empty profiles, and resolves IDs for old profile RPCs', async () => {
+ const {store} = fixture();
+ const accountEnv = {...env, SUPABASE_URL:'https://project.supabase.co', SUPABASE_ANON_KEY:'test-key'};
+ const id = '00000000-0000-0000-0000-000000000001';
+ const paths: string[] = [];
+ let profile: unknown = [];
+ const upstream: typeof fetch = async input => {
+   const path = new URL(String(input)).pathname;
+   paths.push(path);
+   return Response.json(path === '/auth/v1/user' ? {id} : profile);
+ };
+ const restore = (cookie?: string) => handleEdgeOneGateway(new Request('https://gateway.example/game-auth/me', {
+   headers: cookie ? {Cookie: 'busline_game_session=' + cookie} : {},
+ }), accountEnv, store, upstream);
+ assert.equal((await restore()).status, 401);
+ assert.deepEqual(paths, []);
+ assert.equal((await restore('test-session')).status, 401);
+ profile = [{id, display_name:'测试用户'}];
+ paths.length = 0;
+ assert.deepEqual(await (await restore('test-session')).json(), {account:{id, displayName:'测试用户'}});
+ assert.deepEqual(paths, ['/rest/v1/rpc/current_game_profile']);
+ profile = [{display_name:'旧版用户'}];
+ assert.deepEqual(await (await restore('test-session')).json(), {account:{id, displayName:'旧版用户'}});
+ assert.equal(paths.at(-1), '/auth/v1/user');
+ const logout = await handleEdgeOneGateway(new Request('https://gateway.example/game-auth/logout',{method:'POST'}), accountEnv, store, upstream);
+ assert.match(logout.headers.get('Set-Cookie') || '', /busline_game_session=;.*Max-Age=0/);
+ assert.equal((await restore()).status, 401);
+});
 test('EdgeOne browser upload -> HMAC Actions download preserves exact coordinates without AMap or Cloudflare',async()=>{
  const f=fixture();const original=sample();const job=await uploadCitySnapshot('https://upload.example',original,()=>{},f.browser);
  assert.equal(f.requests.length,1);

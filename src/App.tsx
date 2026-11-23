@@ -351,42 +351,49 @@ export default function App() {
   // On slower gateways this prevents a signed-in player from briefly seeing
   // the unauthenticated state before their profile arrives.
   const [gameAuthLoading, setGameAuthLoading] = useState(gameAccountEnabled);
+  const gameSessionRestoreRef = useRef<ReturnType<typeof getGameAccount> | null>(null);
   const [gameAuthMessage, setGameAuthMessage] = useState('');
   const [ladderBoards, setLadderBoards] = useState<{ standard: LeaderboardEntry[]; hell: LeaderboardEntry[] }>({ standard: [], hell: [] });
   const [gameLaunchAnimation, setGameLaunchAnimation] = useState(false);
 
   // Supabase's server-generated magic link returns the short-lived session in
-  // the fragment. Fragments never reach EdgeOne; consume it immediately and
-  // remove it from the address bar before rendering the normal map UI.
+  // the fragment. Remove it from the address bar and establish the cookie
+  // before reading the profile.
   useEffect(() => {
     const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     // Supabase may normalize an allowed redirect URL to the Site URL and drop
     // its query string. The fragment is never sent to the server, so accepting
     // its access token here is safe and makes either redirect form work.
     const accessToken = fragment.get('access_token');
-    if (!accessToken) return;
+    if (!gameAccountEnabled) return;
+    let cancelled = false;
     setGameAuthLoading(true);
-    window.history.replaceState({}, '', window.location.pathname);
-    void establishGameSession(accessToken).then(() => setGameAccessToken('cookie')).catch(() => { setGameAuthMessage('登录状态建立失败，请重新获取登录码。'); setGameAuthLoading(false); });
+    if (!gameSessionRestoreRef.current) {
+      if (accessToken) window.history.replaceState({}, '', window.location.pathname + window.location.search);
+      gameSessionRestoreRef.current = accessToken
+        ? establishGameSession(accessToken).then(() => getGameAccount())
+        : getGameAccount();
+    }
+    const pendingProfile = gameSessionRestoreRef.current;
+    const restore = async () => {
+      try {
+        const { account } = await pendingProfile;
+        if (cancelled) return;
+        setGameAccount(account);
+        setGameAccessToken('cookie');
+      } catch (error: any) {
+        if (cancelled) return;
+        if (error?.status !== 401) setGameDataError('暂时无法确认登录状态，请稍后重试。');
+      } finally {
+        if (!cancelled) {
+          setGameAuthLoading(false);
+        }
+      }
+    };
+    void restore();
+    return () => { cancelled = true; };
   }, []);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
-  useEffect(() => {
-    if (!gameAccountEnabled) { setGameAuthLoading(false); return; }
-    if (!gameAccessToken) return;
-    setGameAuthLoading(true);
-    getGameAccount(gameAccessToken).then(result => setGameAccount(result.account)).catch(() => {
-      setGameAccessToken('');
-    }).finally(() => setGameAuthLoading(false));
-  }, [gameAccessToken]);
-  // Restore an existing HttpOnly session after a normal reload.
-  useEffect(() => {
-    if (!gameAccountEnabled || gameAccessToken) return;
-    // A fresh magic-link callback is establishing the cookie in the effect
-    // above; querying before that completes would incorrectly show login.
-    if (new URLSearchParams(window.location.hash.replace(/^#/, '')).get('access_token')) return;
-    setGameAuthLoading(true);
-    getGameAccount().then(result => { setGameAccount(result.account); setGameAccessToken('cookie'); }).catch(() => {}).finally(() => setGameAuthLoading(false));
-  }, [gameAccessToken]);
   const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [gameCatalog,setGameCatalog]=useState<PublishedCity[]>([]);
   const [gameDataError,setGameDataError]=useState('');
@@ -789,6 +796,13 @@ export default function App() {
         const reason = error?.message || '排行榜服务暂时不可用';
         setGameLoading(false);
         setGameState('menu');
+        if (error?.status === 401) {
+          setGameAccount(null);
+          setGameAccessToken('');
+          setGameDataError('登录已失效，请重新登录。');
+          window.dispatchEvent(new Event('busline-account'));
+          return;
+        }
         setGameDataError(`无法开始本局：${reason}`);
         setGameAuthMessage(`排行榜会话创建失败：${reason}`);
       });

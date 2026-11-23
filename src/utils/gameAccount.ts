@@ -12,10 +12,11 @@ async function request<T>(path: string, init: RequestInit = {}, accessToken?: st
   const response = await fetch(endpoint(path), {
     ...init,
     credentials: 'include',
+    signal: init.signal ?? AbortSignal.timeout(20000),
     headers: { 'Content-Type': 'application/json', ...(accessToken && accessToken !== 'cookie' ? { Authorization: `Bearer ${accessToken}` } : {}), ...(init.headers || {}) }
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw Error(body.error || '排行榜服务暂时不可用。');
+  if (!response.ok) throw Object.assign(Error(body.error || '排行榜服务暂时不可用。'), { status: response.status });
   return body as T;
 }
 
@@ -31,14 +32,23 @@ export async function completeWechatLink(token: string, accessToken: string) {
 export async function establishGameSession(accessToken: string) {
   return request<{ signedIn: true }>('/game-auth/session', { method: 'POST' }, accessToken);
 }
-export async function endGameSession() { return request<{ signedOut: true }>('/game-auth/logout', { method: 'POST' }); }
+export async function endGameSession() {
+  const result = await request<{ signedOut: true }>('/game-auth/logout', { method: 'POST' });
+  if (result?.signedOut !== true) throw Error('退出登录未获确认，请重试。');
+}
 export async function deleteGameAccount(accessToken?: string) {
   return request<{ deleted: true }>('/game-auth/delete', { method: 'POST', body: JSON.stringify({ confirm: 'DELETE' }) }, accessToken);
 }
 export async function passwordLogin(accountName: string, password: string) {
   return request<{ signedIn: true }>('/game-auth/password-login', { method: 'POST', body: JSON.stringify({ accountName, password }) });
 }
-export async function getGameAccount(accessToken?: string) { return request<{ account: GameAccount }>('/game-auth/me', {}, accessToken); }
+export async function getGameAccount() {
+  const result = await request<{ account: GameAccount }>('/game-auth/me');
+  if (typeof result?.account?.id !== 'string' || !result.account.id.trim()) {
+    throw Object.assign(Error('没有有效的登录资料。'), { status: 401 });
+  }
+  return result;
+}
 export async function updateGameProfile(displayName: string, avatar?: File, accessToken?: string) {
   let avatarData: string | undefined;
   if (avatar) avatarData = await compressAvatar(avatar);

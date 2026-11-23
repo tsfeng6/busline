@@ -175,10 +175,12 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     return body;
   };
   const profileFor=async(auth:string)=>{
-    const response=await transport(base+'/rest/v1/rpc/current_game_profile',{method:'POST',headers:{apikey:env.SUPABASE_ANON_KEY!,Authorization:auth,'Content-Type':'application/json'},body:'{}'});
-    if(!response.ok)throw fail(400,'用户资料读取失败。');return response.json();
+    const response=await transport(base+'/rest/v1/rpc/current_game_profile',{method:'POST',headers:{apikey:env.SUPABASE_ANON_KEY!,Authorization:auth,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(15000)});
+    if(response.status===401)throw fail(401,'登录已失效，请重新登录。');
+    if(!response.ok)throw fail(503,'用户资料读取失败。');
+    return response.json();
   };
-  const withAvatarUrl=(account:{avatarUrl?:string})=>{if(account.avatarUrl)account.avatarUrl=base+'/storage/v1/object/public/game-avatars/'+account.avatarUrl;return account;};
+  const withAvatarUrl=(account:ReturnType<typeof gameAccount>)=>{if(account.avatarUrl)account.avatarUrl=base+'/storage/v1/object/public/game-avatars/'+account.avatarUrl;return account;};
   if(path==='/game-auth/session'&&request.method==='POST'){
     if(!/^Bearer\s+\S+$/i.test(headerBearer))throw fail(401,'请先登录。');
     await supabase('/auth/v1/user',{},true);
@@ -236,7 +238,16 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
   // current_game_profile derives auth.uid() from the same verified bearer and
   // also returns the profile id. This avoids a second, serial /auth/v1/user
   // round trip on every page-load session restore.
-  if(path==='/game-auth/me'&&request.method==='GET'){const profile=await profileFor(bearer),row=Array.isArray(profile)?profile[0]:profile;return json({account:withAvatarUrl(gameAccount(null,row))});}
+  if(path==='/game-auth/me'&&request.method==='GET'){
+    if(!bearer)throw fail(401,'请先登录。');
+    const profile=await profileFor(bearer),row=Array.isArray(profile)?profile[0]:profile;
+    if(typeof row?.display_name!=='string')throw fail(401,'未找到登录资料，请重新登录。');
+    // Older deployments return profile fields without including the user ID.
+    const user=uuid.test(row.id||'')?null:await supabase('/auth/v1/user',{},true);
+    const account=withAvatarUrl(gameAccount(user,row));
+    if(!uuid.test(account.id))throw fail(401,'登录已失效，请重新登录。');
+    return json({account});
+  }
   if(path==='/game-profile'&&request.method==='POST'){
     const input=await jsonBody(request,300000),displayName=String(input.displayName||'').trim(),avatarData=input.avatarData===undefined?undefined:String(input.avatarData);
     if(displayName.length<2||displayName.length>24)throw fail(400,'昵称须为 2–24 个字。');
