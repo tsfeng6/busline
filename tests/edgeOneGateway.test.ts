@@ -89,13 +89,14 @@ test('Node function request adapters without a Web stream body can submit valid 
  assert.equal(response.status,200);assert.ok((await response.json()).token);
 });
 
-test('WeChat callback verifies its signature and directs first-time users to the QR registration flow',async()=>{
+test('WeChat callback verifies its signature and sends first-time users a registration link',async()=>{
  const data=new Map<string,string|ArrayBuffer>(),store:UploadStore={async get(){return null;},async set(){},async delete(){},async list(){return {blobs:[]};}};
  const wechatEnv={...env,SUPABASE_URL:'https://project.supabase.co',SUPABASE_SERVICE_ROLE_KEY:'server-only-test-key',WECHAT_CALLBACK_TOKEN:'wechat-callback-test-token',PUBLIC_APP_URL:'https://busline.cc',PUBLIC_GATEWAY_URL:'https://gateway.busline.cc'};
  const transport:typeof fetch=async(input,init)=>{
    const path=new URL(String(input)).pathname;
    if(path.endsWith('/claim_wechat_inbound'))return new Response('true',{headers:{'Content-Type':'application/json'}});
    if(path==='/rest/v1/wechat_bindings')return new Response('[]',{headers:{'Content-Type':'application/json'}});
+   if(path==='/rest/v1/rpc/create_wechat_link_token'||path==='/rest/v1/wechat_link_tokens')return new Response('{}',{headers:{'Content-Type':'application/json'}});
    if(path==='/auth/v1/admin/users')return new Response('{"id":"00000000-0000-0000-0000-000000000001"}',{headers:{'Content-Type':'application/json'}});
    if(path==='/rest/v1/wechat_bindings'||path==='/rest/v1/game_profiles')return new Response('{}',{headers:{'Content-Type':'application/json'}});
    throw Error('unexpected upstream '+path);
@@ -103,6 +104,6 @@ test('WeChat callback verifies its signature and directs first-time users to the
  const timestamp=String(Math.floor(Date.now()/1000)),nonce='nonce-1',signature=createHash('sha1').update([wechatEnv.WECHAT_CALLBACK_TOKEN!,timestamp,nonce].sort().join('')).digest('hex');
  const raw='<xml><ToUserName><![CDATA[busline]]></ToUserName><FromUserName><![CDATA[openid-123]]></FromUserName><CreateTime>1</CreateTime><MsgType><![CDATA[text]]></MsgType><Content><![CDATA[注册账号]]></Content><MsgId>42</MsgId></xml>';
  const response=await handleEdgeOneGateway(new Request(`https://gateway.example/wechat/callback?timestamp=${timestamp}&nonce=${nonce}&signature=${signature}`,{method:'POST',body:raw}),wechatEnv,store,transport);
- assert.equal(response.status,200);const body=await response.text();assert.match(body,/登录二维码/);assert.match(body,/注册链接/);
+ assert.equal(response.status,200);const body=await response.text();assert.match(body,/完成注册/);assert.match(body,/wechat=register/);
  assert.equal((await handleEdgeOneGateway(new Request('https://gateway.example/wechat/callback?timestamp='+timestamp+'&nonce='+nonce+'&signature=bad',{method:'POST',body:raw}),wechatEnv,store,transport)).status,401);
 });

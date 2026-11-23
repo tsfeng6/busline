@@ -52,7 +52,7 @@ export async function getGameLeaderboard(key: GameLeaderboardKey, accessToken?: 
   return request<{ entries: LeaderboardEntry[] }>(`/leaderboards?${query}`, {}, accessToken);
 }
 
-async function compressAvatar(file: File): Promise<string> {
+export async function compressAvatar(file: File): Promise<string> {
   if (!file.type.startsWith('image/')) throw Error('请选择图片文件。');
   const image = await createImageBitmap(file);
   const scale = Math.min(1, 256 / Math.max(image.width, image.height));
