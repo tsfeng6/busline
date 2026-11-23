@@ -8082,7 +8082,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   {gameLoading && (
                     <>
                       {gameLaunchAnimation ? <motion.div initial={{ scale: 0.4, opacity: 0, rotate: -40 }} animate={{ scale: 1, opacity: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 320, damping: 18 }} className="relative flex h-24 w-24 items-center justify-center rounded-[30px] bg-m3-primary text-white shadow-[0_0_70px_rgba(82,121,111,0.8)]"><motion.div animate={{ scale: [1, 1.28, 1], opacity: [0.8, 0.15, 0.8] }} transition={{ duration: 1.05, repeat: Infinity }} className="absolute inset-[-18px] rounded-[40px] border-2 border-m3-primary" /><Route className="h-10 w-10" /></motion.div> : <Loader2 className="w-10 h-10 animate-spin text-m3-primary" />}
-                      <motion.p key={gameLaunchAnimation ? 'launch' : 'loading'} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-sm font-black tracking-wide">{gameLaunchAnimation ? '路线已就绪，挑战出发！' : gameLoadingText}</motion.p>
+                      {!gameLaunchAnimation && <motion.p key="loading" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-sm font-black tracking-wide">{gameLoadingText}</motion.p>}
                       <button type="button" onClick={returnToMinigameMenu} className="mt-2 rounded-xl border border-white/35 px-4 py-2 text-xs font-black text-white transition-colors hover:bg-white/10">取消并返回菜单</button>
                     </>
                   )}
