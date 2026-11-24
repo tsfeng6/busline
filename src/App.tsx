@@ -56,7 +56,7 @@ import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { getGameTimeLimit, formatGameTime } from './utils/gameTimer';
 import { establishGameSession, gameAccountEnabled, finishGameRun, getGameAccount, getGameLeaderboard, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
-import { WechatAccountLink } from './components/WechatAccountLink';
+import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
 import { GameModeVisual } from './components/GameModeVisual';
 import { GameLadderPanel } from './components/GameLadderPanel';
 
@@ -1136,7 +1136,7 @@ export default function App() {
 
   const stopCountCacheRef = useRef<Map<string, number>>(new Map());
 
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(() => Boolean(getWechatRegistrationToken()));
   const [showBuslineAI, setShowBuslineAI] = useState(false);
   const [showBusPlanner, setShowBusPlanner] = useState(false);
   const plannerOverlaysRef = useRef<any[]>([]);
@@ -1154,7 +1154,8 @@ export default function App() {
 
   const [aiSearchProgress, setAISearchProgress] = useState('');
   const [aiRegionContext, setAIRegionContext] = useState<AIRegionContext | null>(null);
-  const [settingsTab, setSettingsTab] = useState<'general' | 'about'>('general');
+  const [settingsTab, setSettingsTab] = useState<'profile' | 'general' | 'about'>('profile');
+  const appSettingsVisible = showSettings && settingsTab === 'general';
 
   // WeChat Group QR Code management
   const [showWeChatQR, setShowWeChatQR] = useState(false);
@@ -1297,10 +1298,10 @@ export default function App() {
   }, [refreshLineCacheStats]);
 
   useEffect(() => {
-    if (showSettings) {
+    if (appSettingsVisible) {
       checkAndPurgeIfMonthChanged().then(() => refreshLineCacheStats());
     }
-  }, [showSettings, refreshLineCacheStats]);
+  }, [appSettingsVisible, refreshLineCacheStats]);
   const [lineThickness] = useState<'thick' | 'thin'>('thick');
 
 
@@ -6319,7 +6320,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
   useEffect(() => {
     if (!mapInstance || !sharedCityDataEnabled || !currentCity || currentCity === '全国' || showMinigameModal
-      || (!showSettings && (onboardingStep !== 0 || zoomLevel < CITY_DETAIL_ZOOM))) {
+      || (!appSettingsVisible && (onboardingStep !== 0 || zoomLevel < CITY_DETAIL_ZOOM))) {
       setCityDataNotice(null);
       return;
     }
@@ -6333,7 +6334,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       }).catch(() => {});
     }, 700);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [mapInstance, currentCity, zoomLevel >= CITY_DETAIL_ZOOM, showMinigameModal, onboardingStep, showSettings]);
+  }, [mapInstance, currentCity, zoomLevel >= CITY_DETAIL_ZOOM, showMinigameModal, onboardingStep, appSettingsVisible]);
 
   useEffect(() => {
     const AMap = (window as any).AMap;
@@ -6734,7 +6735,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
   return (
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
-      <WechatAccountLink account={gameAccount} accessToken={gameAccessToken} authLoading={gameAuthLoading} onSignedIn={(account, accessToken) => { setGameAccount(account); setGameAccessToken(accessToken); setGameAuthLoading(false); }} onLogout={()=>{setGameAccessToken('');setGameAccount(null);setGameAuthLoading(false);}} onOpenAppSettings={(tab) => { setSettingsTab(tab); setShowSettings(true); }} />
       {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
       {/* Global API Quota / Error Banner */}
       <AnimatePresence>
@@ -8798,54 +8798,30 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           )}
         </AnimatePresence>
 
-        {/* Settings Modal - Material 3 Design */}
-        <AnimatePresence>
-          {showSettings && (
-            <>
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setShowSettings(false)}
-                className="fixed inset-0 z-[100] bg-m3-dark-surface/30 backdrop-blur-sm pointer-events-auto"
-              />
-              <motion.div
-                initial={{ opacity: 0, scale: 0.92, y: 16 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.92, y: 16 }}
-                transition={{ type: 'spring', damping: 24, stiffness: 220 }}
-                className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[101] w-[920px] max-w-[94vw] h-[680px] max-h-[86vh] bg-m3-surface-container-high border border-m3-outline-variant/30 rounded-[28px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
-              >
-                <div className="flex h-full">
-                  {/* Application-only settings; account profile lives in the unified profile card. */}
-                  <div className="w-[210px] bg-m3-surface-container-highest border-r border-m3-outline-variant/20 flex flex-col p-4 gap-1.5 relative overflow-hidden shrink-0 select-none">
-                    <button 
-                      onClick={() => setSettingsTab('general')}
-                      className={`px-4 py-2.5 rounded-xl text-left text-xs font-bold transition-all ${settingsTab === 'general' ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-600 hover:bg-m3-primary/5 hover:text-slate-800'}`}
-                    >
-                      应用设置
-                    </button>
-                    <button 
-                      onClick={() => setSettingsTab('about')}
-                      className={`px-4 py-2.5 rounded-xl text-left text-xs font-bold transition-all ${settingsTab === 'about' ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-600 hover:bg-m3-primary/5 hover:text-slate-800'}`}
-                    >
-                      {t('about')}
-                    </button>
-                  </div>
-
-                  <div className="flex-1 p-8 overflow-y-auto relative bg-m3-surface">
+        <WechatAccountLink
+          account={gameAccount}
+          accessToken={gameAccessToken}
+          authLoading={gameAuthLoading}
+          open={showSettings}
+          tab={settingsTab}
+          onTabChange={setSettingsTab}
+          onOpen={() => { setSettingsTab('profile'); setShowSettings(true); }}
+          onClose={() => setShowSettings(false)}
+          onSignedIn={(account, accessToken) => {
+            setGameAccount(account);
+            setGameAccessToken(accessToken);
+            setGameAuthLoading(false);
+          }}
+          onLogout={() => {
+            setGameAccessToken('');
+            setGameAccount(null);
+            setGameAuthLoading(false);
+          }}
+        >
                     {settingsTab === 'general' && <div className="mb-6"><CityDataPanel data={lastCityDataset}
                       summary={publishedCitySummary?.city.replace(/市$/, '') === currentCity.replace(/市$/, '') ? publishedCitySummary : null}
                       status={sharedCityStatus} onUpload={lastCityDataset && !lastCityDataset.filtered ? () => { setShowSettings(false); setCityUploadError(''); setPendingCityUpload(lastCityDataset); } : undefined} onRefresh={(lastCityDataset ? !citySnapshotFresh(lastCityDataset)
                         : !!publishedCitySummary && Date.now() >= cityDatasetExpiresAt(publishedCitySummary)) ? () => { if (!isSearching) { setShowSettings(false); void handleSearch(true); } } : undefined} /></div>}
-
-                    <button
-                      type="button"
-                      onClick={() => setShowSettings(false)}
-                      className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-full bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-500 hover:text-slate-800 transition-colors z-10"
-                    >
-                      <X className="w-5.5 h-5.5" />
-                    </button>
 
                     {settingsTab === 'general' ? (
                       <div className="space-y-5">
@@ -9105,12 +9081,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         </div>
                       </div>
                     )}
-                  </div>
-                </div>
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
+        </WechatAccountLink>
 
         {/* WeChat Group QR Code Modal */}
         <AnimatePresence>
