@@ -107,6 +107,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         const routes = new Set<string>(), stops = new Map<string, ViewportStop>();
         const stationPaths = new Map<string, Path2D>();
         const zoom = map.getZoom();
+        const stationRadius = settings.stationMode === 'terminal' ? 9.5 : zoom >= 15 ? 7.5 : 5.5;
         const strokeWidth = transitStrokeWidth(zoom, map.getZooms?.()?.[1] ?? 20, settings.thick);
         const cells = visibleCells();
         const tiles = sources(cells);
@@ -148,7 +149,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
             if (stop.x < x || stop.x > x + size || stop.y < y || stop.y > y + size) continue;
             const px = origin.x + (dx * stop.x + sx * stop.y) / EXTENT;
             const py = origin.y + (dy * stop.x + sy * stop.y) / EXTENT;
-            if (px < -5 || py < -5 || px > width + 5 || py > height + 5) continue;
+            if (px < -stationRadius || py < -stationRadius || px > width + stationRadius || py > height + stationRadius) continue;
             const lines = stop.lines.filter(name => !settings.blocked(name));
             if (stop.lines.length && !lines.length) continue;
             const [lng, lat] = tileLngLat([source.x + stop.x / EXTENT, source.y + stop.y / EXTENT], source.z);
@@ -157,10 +158,9 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
             stops.set(key, { ...stop, lines, location: { lng, lat }, key, isBusStop: true });
             const color = settings.stationMode === 'terminal' ? '#52525b'
               : settings.stationLineStats && lines.length ? lines.length <= 2 ? '#5e8271' : lines.length <= 6 ? '#c29b63' : '#b56666' : '#3576bc';
-            const radius = settings.stationMode === 'terminal' ? 8 : zoom >= 15 ? 6 : 4;
             const path = stationPaths.get(color) ?? new Path2D();
-            path.moveTo(px + radius, py);
-            path.arc(px, py, radius, 0, 2 * Math.PI);
+            path.moveTo(px + stationRadius, py);
+            path.arc(px, py, stationRadius, 0, 2 * Math.PI);
             stationPaths.set(color, path);
           }
         }

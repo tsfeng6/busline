@@ -3404,7 +3404,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const map = mapRef.current;
     if (!layer || !map || timelineAvailable) return false;
     const pixel = map.lngLatToContainer(point);
-    let nearest = 9;
+    let nearest = 11;
     let selected;
     for (const stop of layer.stops()) {
       const where = map.lngLatToContainer(getLatLng(stop.location));
