@@ -3,7 +3,9 @@ import { distanceMeters, type Point, type PublishedCity } from './localTransit';
 
 export function plannerCorridorWidths(from: PlannerPoint, to: PlannerPoint): number[] {
   const wide = Math.ceil(distanceMeters(from.location, to.location) * .15 / 1000);
-  return wide > 100 ? [30, 100, wide] : [30, 100];
+  const widths = wide > 100 ? [30, 100, wide] : [30, 100];
+  if (plannerCityKey(from.city) !== plannerCityKey(to.city)) widths.push(Math.max(200, wide * 2));
+  return widths;
 }
 
 export const plannerCityKey = (name: string) => name.trim().replace(/市$/, '');

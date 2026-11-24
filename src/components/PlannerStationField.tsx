@@ -39,7 +39,7 @@ export function PlannerStationField({ label, value, onChange, load, onPick, disa
     if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
   }}>
     <div className="grid grid-cols-[10px_62px_minmax(0,1fr)_auto_auto] items-center gap-1.5 sm:grid-cols-[10px_80px_minmax(0,1fr)_auto_auto]">
-      <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full border-2 ${label === '起点' ? 'border-emerald-500' : 'border-red-500'}`} />
+      <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full border-2 ${label === '起点' ? 'border-emerald-500' : label === '终点' ? 'border-red-500' : 'border-amber-500'}`} />
       <input aria-label={`${label}城市`} placeholder="城市" disabled={disabled} className={fieldClassName}
         value={value.city} onChange={event => onChange({ city: event.target.value, name: value.name })} />
       <input aria-label={`${label}公交站`} placeholder={`输入${label}公交站名`} disabled={disabled} className={fieldClassName}

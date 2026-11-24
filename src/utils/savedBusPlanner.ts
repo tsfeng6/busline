@@ -4,6 +4,9 @@ import { isLocalBusLine } from './busPlanner';
 import { distanceMeters, type Point } from './localTransit';
 
 export const MAX_TRANSFER_RADIUS = 800;
+export const LONG_WALK_WARNING = '自由通行距离较长';
+// AMap Walking verifies individual legs up to 100 km.
+const MAX_WALKING_REQUEST = 100_000;
 const gridSize = .01;
 const BUS_DISTANCE_WEIGHT = .22;
 const TRANSFER_COST = 450;
@@ -38,6 +41,17 @@ export function paretoBusPlans(plans: BusPlan[]): BusPlan[] {
 }
 
 export function transfers(plan: BusPlan) { return Math.max(0, plan.buses - 1); }
+
+export function combineBusPlans(before: BusPlan[], after: BusPlan[], walkingLimit: number): BusPlan[] {
+  return paretoBusPlans(before.flatMap(a => after.map(b => ({
+    steps: [...a.steps, ...b.steps], time: a.time + b.time, distance: a.distance + b.distance,
+    walking: a.walking + b.walking, buses: a.buses + b.buses,
+  }))).filter(plan => plan.walking <= walkingLimit));
+}
+
+export function hasLongWalking(plan: BusPlan, preferredWalking: number) {
+  return plan.walking > preferredWalking || plan.steps.some(step => step.mode === 'WALK' && step.distance > 3000);
+}
 
 export function busPlanScore(plan: BusPlan) {
   return plan.walking + transfers(plan) * TRANSFER_COST + Math.max(0, plan.distance - plan.walking) * BUS_DISTANCE_WEIGHT;
@@ -110,6 +124,218 @@ function indexSavedNetwork(lines: readonly BusLine[]) {
     return nearby;
   };
   return { platforms, routes, routesByPlatform, transfersFrom };
+}
+
+type SearchLabel = { stop: Stop; walking: number; ride?: Ride; previous?: SearchLabel };
+type WalkingCell = { stops: Stop[]; remaining: number; unknown: number; highestWalking: number };
+
+// Walking-only labels may board a bus. Arrival labels can also walk to
+// another platform. This keeps walking transfers from chaining invisibly.
+async function leastWalkingCandidate(
+  { platforms, routes }: ReturnType<typeof indexSavedNetwork>,
+  start: Stop, end: Stop, range: number, upperBound: number, verified: WalkResults, reverse: boolean, cancelled: () => boolean,
+): Promise<SearchLabel | undefined> {
+  const departures = new Map<string, Ride[]>();
+  const cells = new Map<string, WalkingCell>();
+  const cellSize = .05;
+  const cellFor = (point: Point) => gridKey(Math.floor(point[0] / cellSize), Math.floor(point[1] / cellSize));
+  for (const [route, { line, stops }] of routes.entries()) {
+    for (let i = 1; i < stops.length; i++) {
+      const key = stops[reverse ? i : i - 1].key;
+      const rides = departures.get(key) ?? [];
+      rides.push({ route, line, stops, from: i - 1, to: i });
+      departures.set(key, rides);
+    }
+  }
+  const bestBoarding = new Map<string, SearchLabel>();
+  const bestArrival = new Map<string, SearchLabel>();
+  const boarded = new Set<string>();
+  const queue: SearchLabel[] = [];
+  let best: SearchLabel | undefined;
+  const checkedByStop = new Map<string, WalkResults>();
+  for (const [key, result] of verified) {
+    const endpoints = key.split('>');
+    const [from, to] = reverse ? endpoints.reverse() : endpoints;
+    const checked = checkedByStop.get(from) ?? new Map();
+    checked.set(to, result);
+    checkedByStop.set(from, checked);
+  }
+  const walkingCost = (from: Stop, to: Stop, direct: number) => {
+    if (from.key === to.key) return 0;
+    if (direct > range) return Infinity;
+    const result = checkedByStop.get(from.key)?.get(to.key);
+    return result === null ? Infinity : result?.distance ?? direct;
+  };
+  const estimate = (from: Stop, to: Stop) => reverse ? distanceMeters(to.point, from.point) : distanceMeters(from.point, to.point);
+  const enqueue = (label: SearchLabel) => {
+    const labels = label.ride ? bestArrival : bestBoarding;
+    if (label.walking > upperBound || label.walking >= (labels.get(label.stop.key)?.walking ?? Infinity)) return;
+    const key = label.stop.key;
+    if (!bestBoarding.has(key) && !bestArrival.has(key)) cells.get(cellFor(label.stop.point))!.unknown--;
+    labels.set(label.stop.key, label);
+    let index = queue.length;
+    queue.push(label);
+    while (index && queue[(index - 1) >> 1].walking > label.walking) {
+      queue[index] = queue[(index - 1) >> 1];
+      index = (index - 1) >> 1;
+    }
+    queue[index] = label;
+  };
+  const dequeue = () => {
+    const first = queue[0], tail = queue.pop()!;
+    if (!queue.length) return first;
+    let index = 0;
+    while (index * 2 + 1 < queue.length) {
+      let child = index * 2 + 1;
+      if (child + 1 < queue.length && queue[child + 1].walking < queue[child].walking) child++;
+      if (queue[child].walking >= tail.walking) break;
+      queue[index] = queue[child];
+      index = child;
+    }
+    queue[index] = tail;
+    return first;
+  };
+
+  for (const stop of platforms.values()) {
+    const key = cellFor(stop.point);
+    const cell = cells.get(key) ?? { stops: [], remaining: 0, unknown: 0, highestWalking: Infinity };
+    cell.stops.push(stop);
+    cell.remaining++;
+    cell.unknown++;
+    cells.set(key, cell);
+  }
+  for (const stop of platforms.values()) {
+    enqueue({ stop, walking: walkingCost(start, stop, estimate(start, stop)) });
+  }
+  let nextYield = Date.now() + 32;
+  while (queue.length && !cancelled()) {
+    if (Date.now() >= nextYield) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (cancelled()) return;
+      nextYield = Date.now() + 32;
+    }
+    const label = dequeue();
+    const { stop, walking, ride } = label;
+    if (walking > upperBound || (best && walking === upperBound)) break;
+    if ((ride ? bestArrival : bestBoarding).get(stop.key) !== label) continue;
+    if (!boarded.has(stop.key)) {
+      boarded.add(stop.key);
+      cells.get(cellFor(stop.point))!.remaining--;
+      for (const next of departures.get(stop.key) ?? []) {
+        enqueue({ stop: next.stops[reverse ? next.from : next.to], walking, ride: next, previous: label });
+      }
+    }
+    if (!ride) continue;
+    const finish = walking + walkingCost(stop, end, estimate(stop, end));
+    if (finish < upperBound || (!best && finish === upperBound && Number.isFinite(finish))) {
+      upperBound = finish;
+      best = { stop: end, walking: finish, previous: label };
+    }
+    const remaining = Math.min(range, upperBound - walking);
+    const latPad = remaining / 110000;
+    const longitudeScale = 110000 * Math.max(.1, Math.cos((Math.abs(stop.point[1]) + latPad) * Math.PI / 180));
+    const lngPad = remaining / longitudeScale;
+    const checked = checkedByStop.get(stop.key);
+    for (let x = Math.floor((stop.point[0] - lngPad) / cellSize); x <= Math.floor((stop.point[0] + lngPad) / cellSize); x++) {
+      for (let y = Math.floor((stop.point[1] - latPad) / cellSize); y <= Math.floor((stop.point[1] + latPad) / cellSize); y++) {
+        const cell = cells.get(gridKey(x, y));
+        if (!cell?.remaining) continue;
+        // A settled cell, or one already reachable more cheaply through a bus
+        // or another transfer, does not need every pair of stops compared.
+        if (!checked?.size) {
+          const west = x * cellSize, south = y * cellSize;
+          const lngGap = Math.max(0, west - stop.point[0], stop.point[0] - west - cellSize);
+          const latGap = Math.max(0, south - stop.point[1], stop.point[1] - south - cellSize);
+          const lower = Math.hypot(lngGap * longitudeScale, latGap * 110000);
+          if (lower > remaining || walking + lower >= cell.highestWalking) continue;
+        }
+        let highestWalking = 0;
+        for (const next of cell.stops) {
+          if (boarded.has(next.key)) continue;
+          const previousWalking = Math.min(bestBoarding.get(next.key)?.walking ?? Infinity, bestArrival.get(next.key)?.walking ?? Infinity);
+          if (previousWalking <= walking) { highestWalking = Math.max(highestWalking, previousWalking); continue; }
+          const direct = estimate(stop, next);
+          const cost = direct <= remaining ? walking + walkingCost(stop, next, direct) : Infinity;
+          if (cost < previousWalking && cost <= upperBound) {
+            enqueue({ stop: next, walking: cost, previous: label });
+            highestWalking = Math.max(highestWalking, cost);
+          } else highestWalking = Math.max(highestWalking, previousWalking);
+        }
+        if (!cell.unknown) cell.highestWalking = Math.min(cell.highestWalking, highestWalking);
+      }
+    }
+  }
+  return best;
+}
+
+export async function planLongWalkingBus(
+  lines: readonly BusLine[], origin: PlannerPoint, destination: PlannerPoint,
+  verify: (from: Point, to: Point) => Promise<PlannerStep | null>, cancelled: () => boolean,
+  onCandidates?: () => void,
+  initialPlan?: BusPlan,
+  walkingLimit = Infinity,
+): Promise<BusPlan[]> {
+  const start = stopAt(origin.name, origin.location), end = stopAt(destination.name, destination.location);
+  const network = indexSavedNetwork(lines);
+  const verified: WalkResults = new Map();
+  let nearbyStart = 0, nearbyEnd = 0;
+  for (const platform of network.platforms.values()) {
+    if (distanceMeters(platform.point, start.point) <= 15000) nearbyStart++;
+    if (distanceMeters(platform.point, end.point) <= 15000) nearbyEnd++;
+  }
+  const reverse = nearbyEnd < nearbyStart;
+  const [searchStart, searchEnd] = reverse ? [end, start] : [start, end];
+  let best = initialPlan && initialPlan.walking <= walkingLimit ? initialPlan : undefined;
+  const ranges = [...new Set([3_000, 15_000, 50_000, MAX_WALKING_REQUEST].map(range => Math.min(range, walkingLimit)))];
+  let stage = 0;
+  while (!cancelled()) {
+    const comparing = best !== undefined;
+    // An improving solution cannot have a single walk longer than the best
+    // total. Try that full range once after finding a usable itinerary.
+    const range = best ? Math.min(MAX_WALKING_REQUEST, best.walking) : ranges[stage];
+    if (!range) break;
+    const path = await leastWalkingCandidate(network, searchStart, searchEnd, range, best?.walking ?? walkingLimit, verified, reverse, cancelled);
+    if (cancelled()) return [];
+    if (!path) {
+      if (comparing) break;
+      stage++;
+      continue;
+    }
+    onCandidates?.();
+    const chain: SearchLabel[] = [];
+    for (let node: SearchLabel | undefined = path; node; node = node.previous) chain.push(node);
+    chain.reverse();
+    const pieces: (Ride | Walk)[] = [];
+    let from = searchStart;
+    for (const node of chain) {
+      const previous = pieces.at(-1);
+      if (node.ride) {
+        if (previous && 'route' in previous && previous.route === node.ride.route
+          && (reverse ? previous.from === node.ride.to : previous.to === node.ride.from)) {
+          if (reverse) previous.from = node.ride.from;
+          else previous.to = node.ride.to;
+        } else pieces.push({ ...node.ride });
+      } else if (from.key !== node.stop.key) pieces.push(reverse ? { from: node.stop, to: from } : { from, to: node.stop });
+      from = node.stop;
+    }
+    const steps: PlannerStep[] = [];
+    let walking = 0, buses = 0, complete = true;
+    for (const piece of reverse ? pieces.reverse() : pieces) {
+      if (cancelled()) return [];
+      if ('route' in piece) { steps.push(rideStep(piece)); buses++; continue; }
+      const key = walkKey(piece);
+      if (!verified.has(key)) verified.set(key, await verify(piece.from.point, piece.to.point));
+      const result = verified.get(key);
+      if (!result) { complete = false; break; }
+      walking += result.distance;
+      steps.push({ ...result, instruction: `步行至${piece.to.name}`, from: piece.from.point, to: piece.to.point });
+    }
+    if (complete && walking <= walkingLimit && (!best || walking < best.walking)) best = {
+      steps, walking, buses, distance: steps.reduce((sum, step) => sum + step.distance, 0), time: 0,
+    };
+    if (comparing) break;
+  }
+  return best && !cancelled() ? [best] : [];
 }
 
 export function savedBusCandidates(

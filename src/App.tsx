@@ -6832,6 +6832,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       <AnimatePresence>
         {showBusPlanner && <BusPlanner onClose={() => { setShowBusPlanner(false); clearBusPlan(); }}
           currentCity={currentCity} onMapPick={setPlannerStopPicker} onPreload={setPlannerPreloading}
+          showDetails={isAdminVerified}
           disabled={isSearching || loading || showMinigameModal || isDrawingMode}
           onSearchStart={() => { plannerSearchVersionRef.current = searchVersionRef.current; }}
           onClear={() => {

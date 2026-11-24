@@ -7,7 +7,7 @@ import { distanceMeters, type Point, type PublishedCity } from '../src/utils/loc
 import type { CityDataset } from '../src/utils/cityDataset';
 import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities } from '../src/utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
-import { planSavedBus, recommendedBusPlans, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
+import { combineBusPlans, hasLongWalking, planLongWalkingBus, planSavedBus, recommendedBusPlans, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
 
 const point = (lng: number): Point => [lng, 40];
 const place = (lng: number): PlannerPoint => ({ city: '北京市', name: String(lng), location: point(lng) });
@@ -104,6 +104,13 @@ test('prioritizes cities in boundary crossing order and keeps unreadable cities 
     ['北京市', '西侧市', '东侧市', '天津市', '北侧市', '未读取市']);
 });
 
+test('the final cross-city corridor can include a city beyond the original search area', () => {
+  const nearbyDetour = city('绕行市', '河北', [116.3, 41.2, 116.8, 41.4]);
+  const widths = plannerCorridorWidths(crossBorderOrigin, crossBorderDestination);
+  assert.ok(!plannerCorridorCities([nearbyDetour], crossBorderOrigin, crossBorderDestination, 100).includes(nearbyDetour.city));
+  assert.ok(plannerCorridorCities([nearbyDetour], crossBorderOrigin, crossBorderDestination, widths.at(-1)!).includes(nearbyDetour.city));
+});
+
 test('marks both ends of a walking transfer and copies the complete selected trip', async () => {
   const origin = place(116), destination = place(116.04);
   const plans = await planSavedBus(network, origin, destination, 3000, verify, () => false);
@@ -169,6 +176,49 @@ test('indicates reachable bus candidates without returning an unverified plan', 
     async () => null, () => false, () => { found = true; });
   assert.equal(found, true);
   assert.deepEqual(plans, []);
+});
+
+test('returns the shortest verified long connection after the preferred walking distance fails', async () => {
+  const origin = place(116), destination = place(116.6);
+  const lines = [
+    bus('1路', 116, 116.10),
+    bus('2路', 116.23, 116.6),
+    bus('3路', 116.28, 116.6),
+  ];
+  assert.deepEqual(await planSavedBus(lines, origin, destination, 10000, verify, () => false), []);
+  const plans = await planLongWalkingBus(lines, origin, destination, async (from, to) => {
+    assert.ok(from[0] < to[0], 'walking verification stays in the requested direction');
+    if (from[0] === 116.10 && to[0] === 116.23) return null;
+    return verify(from, to);
+  }, () => false);
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0].buses, 2);
+  assert.equal(plannerBusSequence(plans[0]), '1路 → 3路');
+  assert.equal(plans[0].walking, (await verify(point(116.10), point(116.28))).distance);
+  assert.equal(hasLongWalking(plans[0], 10000), true);
+});
+
+test('an optional hard walking cap applies to the verified distance without rounding or clamping', async () => {
+  const lines = [bus('1路', 116, 116.1), bus('2路', 116.28, 116.6)];
+  const from = place(116), to = place(116.6);
+  const walking = (await verify(point(116.1), point(116.28))).distance;
+  const limited = (cap: number) => planLongWalkingBus(lines, from, to, verify, () => false, undefined, undefined, cap);
+  assert.deepEqual(await limited(walking - .1), []);
+  assert.equal((await limited(walking))[0].walking, walking);
+  assert.equal((await limited(1_000_000))[0].walking, walking);
+});
+
+test('combines more than eight waypoint legs in order and applies the walking cap to the full trip', () => {
+  const legs = Array.from({ length: 12 }, (_, index) => [{
+    steps: [{ mode: 'BUS' as const, instruction: `第${index + 1}段`, path: [] as Point[], distance: 1000, time: 0 }],
+    buses: 1, walking: 5000, distance: 6000, time: 0,
+  }]);
+  const empty = [{ steps: [], buses: 0, walking: 0, distance: 0, time: 0 }];
+  const combine = (cap: number) => legs.reduce((before, after) => combineBusPlans(before, after, cap), empty);
+  const [plan] = combine(Infinity);
+  assert.deepEqual(plan.steps.map(step => step.instruction), legs.map(leg => leg[0].steps[0].instruction));
+  assert.equal(combine(60_000)[0].walking, 60_000);
+  assert.deepEqual(combine(59_999), []);
 });
 
 test('station suggestions are restricted to bus platforms and preserve separate same-name platforms', () => {
