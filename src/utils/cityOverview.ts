@@ -1,6 +1,6 @@
 export const CITY_DETAIL_ZOOM = 13;
-const DEFAULT_DETAIL_STROKE_PX = 3;
-const DISTANT_OVERVIEW_STROKE_PX = .75;
+const DEFAULT_DETAIL_STROKE_PX = 3.75;
+const DISTANT_OVERVIEW_STROKE_PX = .875;
 
 /** Keep dense regional views readable and match the detailed layer at handoff. */
 export function overviewStrokeWidth(zoom: number): number {

@@ -17,7 +17,7 @@ import { TransitTilePublisher } from './transit-tiles';
 import { TRANSIT_TILE_BASE, type TransitTileIndex } from '../src/utils/transitTiles';
 import { cityStorageFiles } from './city-storage-files';
 
-const CITY_OVERVIEW_RASTER_VERSION = 4;
+const CITY_OVERVIEW_RASTER_VERSION = 5;
 // GitHub Pages has a 1 GiB site limit.  The source branch intentionally keeps
 // readable JSON, but the static mirror must split and gzip sizeable legacy
 // snapshots or latest/history copies exhaust that limit before deployment.
