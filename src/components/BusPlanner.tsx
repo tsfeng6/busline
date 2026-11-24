@@ -6,7 +6,7 @@ import { loadGameCity, loadPublishedCities } from '../utils/publishedTransit';
 import { plannerCityKey, plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities } from '../utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../utils/plannerStops';
 import { PlannerStationField, type PlannerStationInput } from './PlannerStationField';
-import { combineBusPlans, hasLongWalking, LONG_WALK_WARNING, planLongWalkingBus, planSavedBus, recommendedBusPlans, transfers } from '../utils/savedBusPlanner';
+import { busPlanScore, combineBusPlans, hasLongWalking, LONG_WALK_WARNING, planLongWalkingBus, planSavedBus, recommendedBusPlans, transfers } from '../utils/savedBusPlanner';
 import { verifyWalking } from '../utils/plannerWalking';
 interface Props {
   onClose: () => void;
@@ -129,7 +129,7 @@ export function BusPlanner({ onClose, disabled, showDetails, currentCity, onMapP
       catalogFailed ||= failed;
       const attempted = new Set<string>();
       const networks: Awaited<ReturnType<typeof readCity>>[] = [];
-      let shortestKnown: BusPlan | undefined;
+      let baseline: BusPlan | undefined;
       const onWalking = () => {
         setStatus('正在核验步行接驳…');
         onCandidates();
@@ -163,11 +163,11 @@ export function BusPlanner({ onClose, disabled, showDetails, currentCity, onMapP
         const results = await planSavedBus(networks.flatMap(data => data.lines), from, to, Math.min(preferredWalking, remainingWalking), verify, () => !isCurrent(), onWalking);
         if (results.some(plan => !hasLongWalking(plan, preferredWalking))) return results;
         for (const result of results) {
-          if (!shortestKnown || result.walking < shortestKnown.walking) shortestKnown = result;
+          if (!baseline || busPlanScore(result) < busPlanScore(baseline)) baseline = result;
         }
       }
       setStatus('正在搜索周边城市的长距离接驳…');
-      return planLongWalkingBus(networks.flatMap(data => data.lines), from, to, verify, () => !isCurrent(), onWalking, shortestKnown, remainingWalking);
+      return planLongWalkingBus(networks.flatMap(data => data.lines), from, to, verify, () => !isCurrent(), onWalking, baseline, remainingWalking);
     };
     try {
       const requests = [...waypoints.map(point => point.value), destination];

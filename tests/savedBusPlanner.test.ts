@@ -7,7 +7,7 @@ import { distanceMeters, type Point, type PublishedCity } from '../src/utils/loc
 import type { CityDataset } from '../src/utils/cityDataset';
 import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities } from '../src/utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
-import { combineBusPlans, hasLongWalking, planLongWalkingBus, planSavedBus, recommendedBusPlans, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
+import { busPlanScore, combineBusPlans, hasLongWalking, planLongWalkingBus, planSavedBus, recommendedBusPlans, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
 
 const point = (lng: number): Point => [lng, 40];
 const place = (lng: number): PlannerPoint => ({ city: '北京市', name: String(lng), location: point(lng) });
@@ -196,6 +196,22 @@ test('returns the shortest verified long connection after the preferred walking 
   assert.equal(plannerBusSequence(plans[0]), '1路 → 3路');
   assert.equal(plans[0].walking, (await verify(point(116.10), point(116.28))).distance);
   assert.equal(hasLongWalking(plans[0], 10000), true);
+});
+
+test('uses the nearby outward platform before a long walk without riding a large detour', async () => {
+  const origin = place(116), destination = place(116.11);
+  const arrival = bus('208路', 116.09, 116.106, 116.11);
+  const opposite = bus('5路(回城)', 116, 115.86);
+  const outward = bus('5路(出城)', 115.86, 116.003, 116.03);
+  const [baseline] = await planSavedBus([arrival], origin, destination, 15_000, verify, () => false);
+  assert.equal(plannerBusSequence(baseline), '208路');
+  const plans = await planLongWalkingBus([opposite, outward, arrival], origin, destination, verify, () => false, undefined, baseline);
+  const best = plans.reduce((a, b) => busPlanScore(a) < busPlanScore(b) ? a : b);
+  assert.ok(best.walking < baseline.walking);
+  assert.deepEqual(best.steps.map(step => step.mode), ['WALK', 'BUS', 'WALK', 'BUS']);
+  assert.match(best.steps[1].instruction, /^5路\(出城\)/);
+  assert.deepEqual(best.steps[1].from, point(116.003));
+  assert.deepEqual(best.steps.at(-1)?.to, destination.location);
 });
 
 test('an optional hard walking cap applies to the verified distance without rounding or clamping', async () => {
