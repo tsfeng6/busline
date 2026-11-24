@@ -1,6 +1,8 @@
 import { CITY_DETAIL_ZOOM, mercatorY } from './cityOverview';
 
-export const TRANSIT_TILE_LEVELS = [13, 15] as const;
+export const TIMELINE_TILE_ZOOM = 10;
+export const TIMELINE_OVERVIEW_ZOOM = 9;
+export const TRANSIT_TILE_LEVELS = [TIMELINE_TILE_ZOOM, 13, 15] as const;
 export const TRANSIT_TILE_EXTENT = 4096;
 export const TRANSIT_TILE_BASE = 'tiles/transit-v1';
 export const MAX_TRANSIT_TILE_BYTES = 12 * 1024 * 1024;
@@ -22,7 +24,11 @@ export type TileStop = {
 };
 export type TransitTileData = { routes: TileRoute[]; stops: TileStop[]; bytes: number };
 export const MAX_TRANSIT_PACK_BYTES = 2 * 1024 * 1024;
-export type TransitTileIndex = { base: string; revision: string; groups: Record<string, [mask: string, digest: string]> };
+export type TimelineCity = { city: string; center: TransitPoint; hours: [first: string, last: string, directions: number][] };
+export type TransitTileIndex = {
+  base: string; revision: string; groups: Record<string, [mask: string, digest: string]>;
+  timelineCities?: TimelineCity[];
+};
 
 export const tileKey = ({ z, x, y }: TransitTile) => `${z}/${x}/${y}`;
 export const tileCoordinates = ([lng, lat]: TransitPoint, z: number): TransitPoint => {
@@ -38,8 +44,10 @@ export function tileAncestor(tile: TransitTile, z: number): TransitTile {
   return { z, x: Math.floor(tile.x / scale), y: Math.floor(tile.y / scale) };
 }
 
+const transitPackWidth = (z: number) => z === TIMELINE_TILE_ZOOM ? 1 : z === 13 ? 4 : 8;
+
 export function transitPackLocation(tile: TransitTile) {
-  const width = tile.z === 13 ? 4 : 8;
+  const width = transitPackWidth(tile.z);
   const group = tileAncestor(tile, tile.z - Math.log2(width));
   return {
     key: tileKey({ z: tile.z, x: group.x, y: group.y }),
@@ -51,12 +59,19 @@ export function transitPackLocation(tile: TransitTile) {
 export function validTransitTileIndex(value: any): value is TransitTileIndex {
   if (value?.base !== TRANSIT_TILE_BASE || !/^[a-f0-9]{40}$/.test(value.revision)
     || !value.groups || typeof value.groups !== 'object' || Array.isArray(value.groups)) return false;
+  if (value.timelineCities !== undefined && (!Array.isArray(value.timelineCities) || value.timelineCities.length > 1000
+    || !value.timelineCities.every((entry: TimelineCity) =>
+      typeof entry?.city === 'string' && Array.isArray(entry.center) && entry.center.length === 2 && entry.center.every(Number.isFinite)
+      && Array.isArray(entry.hours) && entry.hours.every(slot =>
+        Array.isArray(slot) && slot.length === 3 && /^\d{2}:\d{2}$/.test(slot[0]) && /^\d{2}:\d{2}$/.test(slot[1])
+        && Number.isSafeInteger(slot[2]) && slot[2] > 0)))) return false;
   const entries = Object.entries(value.groups);
   return entries.length <= 50000 && entries.every(([key, entry]) => {
-    if (!/^(13|15)\/\d+\/\d+$/.test(key) || !Array.isArray(entry) || entry.length !== 2) return false;
-    const [z, x, y] = key.split('/').map(Number), side = 2 ** (z - (z === 13 ? 2 : 3));
+    if (!/^(10|13|15)\/\d+\/\d+$/.test(key) || !Array.isArray(entry) || entry.length !== 2) return false;
+    const [z, x, y] = key.split('/').map(Number);
+    const width = transitPackWidth(z), side = 2 ** z / width;
     return x < side && y < side && typeof entry[0] === 'string'
-      && (z === 13 ? /^[a-f0-9]{4}$/ : /^[a-f0-9]{16}$/).test(entry[0])
+      && entry[0].length === Math.max(1, width * width / 4) && /^[a-f0-9]+$/.test(entry[0])
       && /^[a-f0-9]{16}$/.test(entry[1]);
   });
 }
@@ -106,11 +121,21 @@ export function transitLevel(zoom: number): number | null {
   return zoom < 15 ? 13 : 15;
 }
 
+export function timelineTransitLevel(zoom: number, hasOverviewTiles: boolean): number | null {
+  if (!hasOverviewTiles) return transitLevel(zoom);
+  if (zoom < TIMELINE_OVERVIEW_ZOOM) return null;
+  return transitLevel(zoom) ?? TIMELINE_TILE_ZOOM;
+}
+
 /** An indexed child can use its cached parent while its own data is pending. */
-export function transitTileSource(tile: TransitTile, indexed: (tile: TransitTile) => boolean, cached: (key: string) => boolean): TransitTile | null {
+export function transitTileSource(tile: TransitTile, indexed: (tile: TransitTile) => boolean, cached: (key: string) => boolean, timeline = false): TransitTile | null {
   const key = tileKey(tile);
   if (cached(key)) return tile;
-  if (tile.z === 13 || !indexed(tile)) return null;
-  const parent = tileAncestor(tile, 13);
-  return cached(tileKey(parent)) ? parent : null;
+  if (!indexed(tile)) return null;
+  for (const level of timeline ? [13, TIMELINE_TILE_ZOOM] : [13]) {
+    if (level >= tile.z) continue;
+    const parent = tileAncestor(tile, level);
+    if (cached(tileKey(parent))) return parent;
+  }
+  return null;
 }

@@ -4,7 +4,7 @@ import { transitTileTransport } from '../utils/transitTileTransport';
 import { isLineOperating } from '../utils/timeline';
 import { transitStrokeWidth } from '../utils/cityOverview';
 import {
-  TRANSIT_TILE_EXTENT as EXTENT, tileKey, tileLngLat, tileAncestor, tilesInBounds, transitLevel,
+  TRANSIT_TILE_EXTENT as EXTENT, tileKey, tileLngLat, tileAncestor, tilesInBounds, transitLevel, timelineTransitLevel, TIMELINE_TILE_ZOOM, TIMELINE_OVERVIEW_ZOOM,
   transitTileSource, transitTileIndexed, validTransitTileIndex, type TileRoute, type TileStop, type TransitTileData, type TransitBounds, type TransitPoint, type TransitTile,
 } from '../utils/transitTiles';
 
@@ -24,7 +24,7 @@ type Options = {
   subdued: boolean;
   suspendNeighborPrefetch?: boolean;
   timelineMinute?: number;
-  onTimelineStats?: (stats: { active: number; total: number }) => void;
+  onTimelineStats?: (stats: { active: number; total: number; overview: boolean }) => void;
   blocked: (name: string) => boolean;
   selection: MutableRefObject<ViewportTransitSelection | null>;
   onStats: (stats: { lines: number; stops: number }) => void;
@@ -37,9 +37,10 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
   const repaint = useRef<(() => void) | undefined>(undefined);
   const updateTileRequests = useRef<(() => void) | undefined>(undefined);
   useEffect(() => { repaint.current?.(); }, [style.stationMode, style.thick, style.subdued, style.blocked, style.stationLineStats]);
+  const timelineEnabled = style.timelineMinute !== undefined;
   const timelineFrame = style.timelineMinute === undefined ? undefined : Math.floor(style.timelineMinute) * 2 + Number(!Number.isInteger(style.timelineMinute));
   useEffect(() => { repaint.current?.(); }, [timelineFrame]);
-  useEffect(() => { updateTileRequests.current?.(); }, [style.suspendNeighborPrefetch]);
+  useEffect(() => { updateTileRequests.current?.(); }, [style.suspendNeighborPrefetch, timelineEnabled]);
 
   useEffect(() => {
     const AMap = (window as any).AMap;
@@ -59,6 +60,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
       canvas.style.pointerEvents = 'none';
       const transport = transitTileTransport(index, import.meta.env.BASE_URL);
       const indexed = transitTileIndexed(index);
+      const hasOverviewTiles = Object.keys(index.groups).some(key => key.startsWith(`${TIMELINE_TILE_ZOOM}/`));
       const lowMemory = ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4) <= 4;
       const cache = new TransitTileCache(transport.load, schedulePaint, (lowMemory ? 12 : 28) * 1024 ** 2, lowMemory ? 3 : 5);
       const layer = new AMap.CustomLayer(canvas, { zIndex: 5, zooms: [2, 30] });
@@ -76,13 +78,17 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         const sw = b?.getSouthWest(), ne = b?.getNorthEast();
         if (sw && ne) return [sw.lng, sw.lat, ne.lng, ne.lat];
       }
+      function tileLevel() {
+        const zoom = map.getZoom();
+        return options.current.timelineMinute === undefined ? transitLevel(zoom) : timelineTransitLevel(zoom, hasOverviewTiles);
+      }
       function visibleCells() {
-        const b = bounds(), z = transitLevel(map.getZoom());
+        const b = bounds(), z = tileLevel();
         return b && z !== null ? tilesInBounds(b, z).filter(indexed) : [];
       }
       function sources(cells = visibleCells()) {
         return cells.flatMap(cell => {
-          const source = transitTileSource(cell, indexed, key => cache.has(key));
+          const source = transitTileSource(cell, indexed, key => cache.has(key), options.current.timelineMinute !== undefined);
           const data = source && cache.get(tileKey(source));
           return source && data ? [{ cell, source, data }] : [];
         });
@@ -123,6 +129,26 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
           // Use one geometry cache at a time on memory-constrained devices.
           if (paintingTimeline) routePaths = new WeakMap();
           else timelinePaths = new WeakMap();
+        }
+        if (timelineMinute !== undefined && map.getZoom() < TIMELINE_OVERVIEW_ZOOM && index.timelineCities?.length) {
+          let total = 0, active = 0;
+          for (const city of index.timelineCities) {
+            const pixel = map.lngLatToContainer(city.center);
+            if (pixel.x < 0 || pixel.x > width || pixel.y < 0 || pixel.y > height) continue;
+            let running = 0;
+            for (const [stime, etime, count] of city.hours) {
+              total += count;
+              if (isLineOperating({ stime, etime }, timelineMinute)) running += count;
+            }
+            active += running;
+            context.beginPath();
+            context.arc(pixel.x, pixel.y, Math.min(9, 3 + Math.sqrt(running) / 4), 0, 2 * Math.PI);
+            context.fillStyle = running ? '#52796f' : '#a9b1ad';
+            context.fill();
+          }
+          visibleStops = [];
+          reportTimeline(active, total, true);
+          return;
         }
         const stationPaths = new Map<string, Path2D>();
         const zoom = map.getZoom();
@@ -215,11 +241,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         settings.onDetailReady(cells.length > 0 && tiles.length === cells.length);
         visibleStops = [...stops.values()];
         if (timelineMinute !== undefined) {
-          const stats = `${activeDirections.size}/${scheduledDirections.size}`;
-          if (lastTimelineStats !== stats) {
-            lastTimelineStats = stats;
-            settings.onTimelineStats?.({ active: activeDirections.size, total: scheduledDirections.size });
-          }
+          reportTimeline(activeDirections.size, scheduledDirections.size, false);
           return;
         }
         lastTimelineStats = '';
@@ -230,8 +252,15 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         }
       }
 
+      function reportTimeline(active: number, total: number, overview: boolean) {
+        const stats = `${active}/${total}/${overview}`;
+        if (lastTimelineStats === stats) return;
+        lastTimelineStats = stats;
+        options.current.onTimelineStats?.({ active, total, overview });
+      }
+
       function request(allowNeighbors: boolean) {
-        const b = bounds(), zoom = map.getZoom(), z = transitLevel(zoom);
+        const b = bounds(), z = tileLevel();
         if (!b || z === null) { cache.update([], []); return; }
         const foreground = tilesInBounds(b, z).filter(indexed).map(tileKey);
         if (options.current.suspendNeighborPrefetch) {
@@ -260,14 +289,14 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         settled = setTimeout(() => request(false), 75);
         idle = setTimeout(() => request(true), 350);
         const retryVisible = () => { request(false); retry = setTimeout(retryVisible, 11000); };
-        if (transitLevel(map.getZoom()) !== null) retry = setTimeout(retryVisible, 11000);
+        if (tileLevel() !== null) retry = setTimeout(retryVisible, 11000);
       }
 
       selection.current = {
         stops: () => visibleStops,
         routesAt(point) {
           const p = map.lngLatToContainer(point), matches = new Map<string, ViewportRoute>();
-          const z = transitLevel(map.getZoom());
+          const z = tileLevel();
           if (z === null) return [];
           // A small hit box includes the neighboring tile at a seam.
           for (const { source, data } of sources()) {

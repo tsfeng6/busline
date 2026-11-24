@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { gzipSync } from 'node:zlib';
+import { formatOperatingTime } from '../src/utils/operatingHours';
 import type { CityDataset } from '../src/utils/cityDataset';
 import {
-  MAX_TRANSIT_PACK_BYTES, MAX_TRANSIT_TILE_BYTES, TRANSIT_TILE_BASE, TRANSIT_TILE_EXTENT, TRANSIT_TILE_LEVELS,
+  MAX_TRANSIT_PACK_BYTES, MAX_TRANSIT_TILE_BYTES, TRANSIT_TILE_BASE, TRANSIT_TILE_EXTENT, TRANSIT_TILE_LEVELS, TIMELINE_TILE_ZOOM,
   tileCoordinates, tileKey, transitPackLocation, type TransitPoint,
 } from '../src/utils/transitTiles';
 
@@ -78,7 +79,7 @@ export function tileRoutePaths(path: TransitPoint[], z: number): Map<string, num
   }
   const output = new Map<string, number[][]>();
   for (const [key, runs] of cells) {
-    const paths = runs.filter(run => run.length > 1).map(run => compactPath(run, z === 13 ? 9 : 0));
+    const paths = runs.filter(run => run.length > 1).map(run => compactPath(run, z === TIMELINE_TILE_ZOOM ? 12 : z === 13 ? 9 : 0));
     if (paths.length) output.set(key, paths);
   }
   return output;
@@ -121,6 +122,7 @@ export class TransitTilePublisher {
       };
       for (const line of data.lines ?? []) {
         if (!line.name || !line.path?.length) continue;
+        if (z === TIMELINE_TILE_ZOOM && (!formatOperatingTime(line.stime) || !formatOperatingTime(line.etime))) continue;
         // Keep the two compact display times with the tile. The viewport deliberately
         // avoids a second AMap request after a map click, so dropping these fields
         // makes an otherwise complete route look like it has no operating hours.
@@ -128,7 +130,7 @@ export class TransitTilePublisher {
           add(key, [0, data.city, line.id ?? '', line.name, line.stime ?? '', line.etime ?? '', paths]);
         }
       }
-      for (const stop of stops.values()) {
+      for (const stop of z === TIMELINE_TILE_ZOOM ? [] : stops.values()) {
         const [px, py] = tileCoordinates([stop.lng, stop.lat], z);
         const x = Math.floor(px), y = Math.floor(py);
         if (x < 0 || x >= 2 ** z || y < 0 || y >= 2 ** z) continue;
@@ -210,7 +212,7 @@ export class TransitTilePublisher {
       const content = Buffer.concat(payloads, offset);
       const digest = createHash('sha256').update(content).digest('hex').slice(0, 16);
       yield {
-        key: group, descriptor: [mask.toString(16).padStart(slots / 4, '0'), digest] as [string, string],
+        key: group, descriptor: [mask.toString(16).padStart(Math.max(1, slots / 4), '0'), digest] as [string, string],
         path: `city-data/v1/${TRANSIT_TILE_BASE}/${group}-${digest}.pack`, content,
       };
     }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { BusLine } from '../src/types';
 import type { PlannerPoint, PlannerStep } from '../src/utils/busPlanner';
-import { plannerBusSequence, plannerPlanText, plannerTransferPoints } from '../src/utils/busPlanner';
+import { plannerBusSequence, plannerPlanText, plannerTransferMarkers, plannerTransferPoints } from '../src/utils/busPlanner';
 import { distanceMeters, type Point, type PublishedCity } from '../src/utils/localTransit';
 import type { CityDataset } from '../src/utils/cityDataset';
 import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities, preloadPlannerCities } from '../src/utils/plannerCityCoverage';
@@ -363,4 +363,19 @@ test('straight walking uses station endpoints and the exact option uses the road
   assert.equal(routed.walking, 700);
   assert.deepEqual(routed.steps[0].path, [origin.location, detour, point(116.001)]);
   assert.match(plannerPlanText(routed, [origin, destination]), /步行 700米/);
+});
+
+
+test('overlapping map markers link every boarding and alighting to its itinerary step', () => {
+  const a = point(116), b = point(116.02);
+  const [busOut, walkBack, busAgain] = [
+    { mode: 'BUS' as const, path: [a, b] },
+    { mode: 'WALK' as const, path: [b, a] },
+    { mode: 'BUS' as const, path: [a, b] },
+  ].map(step => ({ ...step, instruction: '', time: 0, distance: 1 }));
+  const markers = plannerTransferMarkers([busOut, walkBack, busAgain, walkBack, busAgain]);
+  assert.deepEqual(markers, [
+    { center: b, changes: [{ stepIndex: 1, label: '下车后步行' }, { stepIndex: 3, label: '下车后步行' }] },
+    { center: a, changes: [{ stepIndex: 2, label: '步行后上车' }, { stepIndex: 4, label: '步行后上车' }] },
+  ]);
 });

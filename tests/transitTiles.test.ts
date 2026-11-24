@@ -12,9 +12,10 @@ import { cityStorageFiles } from '../scripts/city-storage-files';
 import { normalizeCityDataset } from '../src/utils/cityDataset';
 import { TransitTileCache } from '../src/utils/transitTileCache';
 import { nearbyTileRoutes } from '../src/utils/nearbyTransitTiles';
+import { isLineOperating } from '../src/utils/timeline';
 import { decodeTransitTile } from '../src/utils/transitTileDecode';
 import {
-  tileKey, tileLngLat, tilesInBounds, tileAncestor, transitLevel, transitTileSource, transitPackTile, transitPackLocation, transitTileIndexed, validTransitTileIndex,
+  tileKey, tileLngLat, tilesInBounds, tileAncestor, transitLevel, timelineTransitLevel, TIMELINE_TILE_ZOOM, transitTileSource, transitPackTile, transitPackLocation, transitTileIndexed, validTransitTileIndex,
   type TransitTileData,
 } from '../src/utils/transitTiles';
 
@@ -36,10 +37,16 @@ test('a path crossing tiles retains matching clipped endpoints and full-resoluti
 
 test('viewport levels and exact child readiness preserve the coarse parent during pan and zoom', () => {
   assert.deepEqual([3, 12, 12.99, 13, 14.8, 15, 20].map(transitLevel), [null, null, null, 13, 13, 15, 15]);
+  assert.deepEqual([7, 9, 11.5, 13, 15].map(zoom => timelineTransitLevel(zoom, true)), [null, 10, 10, 13, 15]);
+  assert.equal(timelineTransitLevel(11.5, false), null);
   const child = { z: 15, x: 26950, y: 12430 };
   const parent = tileAncestor(child, 13);
   const index = new Set([tileKey(parent), tileKey(child)]), loaded = new Set([tileKey(parent)]);
   assert.deepEqual(transitTileSource(child, tile => index.has(tileKey(tile)), key => loaded.has(key)), parent);
+  const overview = tileAncestor(child, TIMELINE_TILE_ZOOM);
+  const onlyOverview = (key: string) => key === tileKey(overview);
+  assert.deepEqual(transitTileSource(child, () => true, onlyOverview, true), overview);
+  assert.equal(transitTileSource(child, () => true, onlyOverview), null);
   loaded.add(tileKey(child));
   assert.deepEqual(transitTileSource(child, tile => index.has(tileKey(tile)), key => loaded.has(key)), child);
   assert.equal(transitTileSource({ ...child, x: child.x + 1 }, tile => index.has(tileKey(tile)), key => loaded.has(key)), null);
@@ -93,7 +100,8 @@ test('single publication merges Beijing, Baoding and Langfang from BVPK1, legacy
     const index = JSON.parse(readFileSync(join(out, 'city-data/v1/transit.json'), 'utf8'));
     assert.ok(validTransitTileIndex(index));
     assert.equal(index.revision, git('rev-parse', 'HEAD'));
-    for (const z of [13, 15]) {
+    assert.deepEqual(index.timelineCities.map(city => city.hours), cities.map(() => [['05:30', '22:00', 1]]));
+    for (const z of [TIMELINE_TILE_ZOOM, 13, 15]) {
       const [tile] = tilesInBounds([stop[0], stop[1], stop[0], stop[1]], z);
       const group = transitPackLocation(tile);
       assert.ok(transitTileIndexed(index)(tile));
@@ -104,7 +112,8 @@ test('single publication merges Beijing, Baoding and Langfang from BVPK1, legacy
       assert.ok(gunzipSync(tileBytes).byteLength > 0);
       assert.deepEqual(decoded.routes.map(route => route.city).sort(), cities.map(name => name + '市').sort());
       assert.ok(decoded.routes.every(route => route.stime === '05:30' && route.etime === '22:00'));
-      assert.equal(decoded.stops.length, 3);
+      assert.equal(decoded.stops.length, z === TIMELINE_TILE_ZOOM ? 0 : 3);
+      assert.ok(decoded.routes.every(route => isLineOperating(route, 720) && isLineOperating(route, 0) === false));
       assert.ok(decoded.stops.every(stop => stop.terminal && stop.lines.includes('1路')));
       assert.deepEqual(nearbyTileRoutes([{ tile, data: decoded }], [116.2, 39.5]).map(route => route.city).sort(), cities.map(name => name + '市').sort());
     }

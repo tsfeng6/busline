@@ -116,7 +116,7 @@ export async function replaceShortTransferRides(
         if (cancelled()) return plan;
         if (!sameStop && (!link || link.distance > allowance)) continue;
         const name = next.instruction.split('：')[1]?.split(' → ')[0];
-        const replacement = link ? [{ ...link, instruction: name ? `步行至${name}换乘` : '步行换乘', from: option.alight, to }] : [];
+        const replacement = link ? [{ ...link, instruction: name ? `步行至${name}换乘` : '步行换乘', from: option.alight, to, toName: name }] : [];
         steps.splice(before, removed.length + 1, option.ride, ...replacement);
         walking += (link?.distance ?? 0) - oldWalking;
         distance += option.ride.distance - prior.distance + (link?.distance ?? 0) - removedDistance;
@@ -525,7 +525,7 @@ export async function planLongWalkingBus(
       const result = verified.get(key);
       if (!result || result.distance > MAX_WALKING_REQUEST) { complete = false; break; }
       walking += result.distance;
-      steps.push({ ...result, instruction: `步行至${piece.to.name}`, from: piece.from.point, to: piece.to.point });
+      steps.push({ ...result, instruction: `步行至${piece.to.name}`, from: piece.from.point, to: piece.to.point, fromName: piece.from.name, toName: piece.to.name });
     }
     if (complete && walking <= walkingLimit) {
       const plan = { steps, walking, buses, distance: steps.reduce((sum, step) => sum + step.distance, 0), time: 0 };
@@ -672,7 +672,7 @@ function rideStep({ line, stops, from, to }: Ride): PlannerStep {
   }
   const path = nearest > first ? line.path.slice(first, nearest + 1) : stops.slice(from, to + 1).map(stop => stop.point);
   const distance = path.reduce((sum, point, index) => index ? sum + distanceMeters(path[index - 1], point) : sum, 0);
-  return { mode: 'BUS', instruction: `${line.name}：${stops[from].name} → ${stops[to].name}`, distance, time: 0, path, from: stops[from].point, to: stops[to].point };
+  return { mode: 'BUS', instruction: `${line.name}：${stops[from].name} → ${stops[to].name}`, distance, time: 0, path, from: stops[from].point, to: stops[to].point, fromName: stops[from].name, toName: stops[to].name };
 }
 
 export async function planSavedBus(
@@ -728,7 +728,7 @@ export async function planSavedBus(
           }
           const result = verified.get(key);
           if (!result) { complete = false; break; }
-          walkingSteps.set(index, { ...result, instruction: `步行至${walk.to.name}`, from: walk.from.point, to: walk.to.point });
+          walkingSteps.set(index, { ...result, instruction: `步行至${walk.to.name}`, from: walk.from.point, to: walk.to.point, fromName: walk.from.name, toName: walk.to.name });
         }
       }
       const walking = [...walkingSteps.values()].reduce((sum, step) => sum + step.distance, 0);

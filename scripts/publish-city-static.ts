@@ -1,3 +1,4 @@
+import { formatOperatingTime } from '../src/utils/operatingHours';
 import {provinceForCity,savedCountySeats} from '../src/utils/localTransit';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -23,7 +24,10 @@ const CITY_OVERVIEW_RASTER_VERSION = 5;
 // snapshots or latest/history copies exhaust that limit before deployment.
 const STATIC_CITY_PART_BYTES = 512 * 1024;
 interface CityLayer { id: string; overview: CityOverview; thumbnail: Buffer; coverage: Buffer; }
-interface CityContribution { fingerprint: string; groups: string[]; overviewKeys: string[]; }
+interface CityContribution {
+  fingerprint: string; groups: string[]; overviewKeys: string[];
+  hours?: NonNullable<TransitTileIndex['timelineCities']>[number]['hours'];
+}
 interface PublicationCache { version: 1; cities: Record<string, CityContribution>; }
 const PUBLICATION_CACHE_VERSION = 1;
 
@@ -169,7 +173,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
     }
     // Git object ids are content hashes.  Coupling this to snapshotId catches an
     // accidental mutable snapshot without loading an unchanged legacy dataset.
-    const fingerprint = `${currentId ?? 'legacy'}:${git(['rev-parse', `${commit}:${file}`]).trim()}`;
+    const fingerprint = `${currentId ?? 'legacy'}:${git(['rev-parse', `${commit}:${file}`]).trim()}:timeline-v1`;
     const cached=cachedLayers.get(city);
     const previous = previousCities[city];
     const contributionDir = publicationCacheDir ? join(publicationCacheDir, 'transit', city) : '';
@@ -193,7 +197,19 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
         reused++; cityTiles.mergeSerializedLayer(cached!.coverage); overviews.push(cached!.overview);
       }else cityTiles.add(latest);
       const overviewKeys=cityTiles.keys;
-      const contribution:CityContribution={fingerprint,groups:[...cityTransit.groups()].sort(),overviewKeys};
+      const schedules = new Map<string, NonNullable<CityContribution['hours']>[number]>();
+      for (const line of latest.lines) {
+        if (!line.path?.length || !line.name) continue;
+        const first = formatOperatingTime(line.stime), last = formatOperatingTime(line.etime);
+        if (!first || !last) continue;
+        const key = `${first}/${last}`;
+        const entry = schedules.get(key);
+        if (entry) entry[2]++;
+        else schedules.set(key, [first, last, 1]);
+      }
+      const contribution: CityContribution = {
+        fingerprint, groups: [...cityTransit.groups()].sort(), overviewKeys, hours: [...schedules.values()],
+      };
       contributions.set(city,contribution);
       if(publicationCacheDir){
         const destination=contributionDir, staging=`${destination}.next`;
@@ -261,7 +277,12 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   const overviewKeys=[...new Set([...contributions.values()].flatMap(contribution=>contribution.overviewKeys))].sort();
   // Write indexes last.  A deployed reader therefore sees all immutable
   // snapshots and packs before an index can point at them.
-  await copy('city-data/v1/transit.json', JSON.stringify({ schemaVersion: 1, base: TRANSIT_TILE_BASE, revision: commit, groups }));
+  const hoursByCity = new Map([...contributions].map(([city, data]) => [city.replace(/市$/, ''), data.hours]));
+  const timelineCities = overviews.flatMap(({ city, center }) => {
+    const hours = hoursByCity.get(city.replace(/市$/, ''));
+    return hours?.length ? [{ city, center, hours }] : [];
+  });
+  await copy('city-data/v1/transit.json', JSON.stringify({ schemaVersion: 1, base: TRANSIT_TILE_BASE, revision: commit, groups, timelineCities }));
   const overviewRevision = createHash('sha1').update(`${commit}:raster:${CITY_OVERVIEW_RASTER_VERSION}`).digest('hex');
   await copy('city-data/v1/overview.json',JSON.stringify({schemaVersion:3,cities:overviews,tiles:{base:tileBase,pixelRatio:TILE_PIXEL_RATIO,revision:overviewRevision,minZoom:TILE_MIN_ZOOM,maxZoom:TILE_MAX_ZOOM,keys:overviewKeys}}));
   await mkdir(join(output, 'city-data/v1'), { recursive: true });

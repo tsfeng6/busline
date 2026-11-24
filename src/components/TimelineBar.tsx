@@ -1,8 +1,8 @@
 import React from 'react';
 import { Pause, Play, X } from 'lucide-react';
 import { formatTimelineMinute } from '../utils/timeline';
-export function TimelineBar({ minute, onChange, onClose, onTogglePlayback, playing, active, total, viewport }: {
-  minute: number; onChange: (value: number) => void; onClose: () => void; onTogglePlayback: () => void; playing: boolean; active: number; total: number; viewport?: boolean;
+export function TimelineBar({ minute, onChange, onClose, onTogglePlayback, playing, active, total, viewport, overview }: {
+  minute: number; onChange: (value: number) => void; onClose: () => void; onTogglePlayback: () => void; playing: boolean; active: number; total: number; viewport?: boolean; overview?: boolean;
 }) {
   return <div className="fixed bottom-[max(.75rem,env(safe-area-inset-bottom))] sm:bottom-5 left-1/2 -translate-x-1/2 z-40 w-[min(640px,calc(100vw-32px))] rounded-3xl bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 shadow-xl px-3 py-2 sm:px-5 sm:py-3 pointer-events-auto">
     <div className="flex items-center justify-between gap-2 mb-2">
@@ -12,6 +12,6 @@ export function TimelineBar({ minute, onChange, onClose, onTogglePlayback, playi
     <input type="range" min={0} max={1439} step={1 / 3} value={minute} onChange={event => onChange(Number(event.target.value))}
       aria-label="线路运营时间轴" aria-valuetext={formatTimelineMinute(minute)} className="w-full accent-m3-primary cursor-ew-resize h-5" />
     <div className="flex justify-between text-[10px] text-slate-500 tabular-nums"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:59</span></div>
-    <p className="mt-1.5 text-[10px] text-slate-500">按始发站首末班时间估算，非实时到站。</p>
+    <p className="mt-1.5 text-[10px] text-slate-500">{overview ? '城市运营概览，放大可查看线路。' : '按始发站首末班时间估算，非实时到站。'}</p>
   </div>;
 }

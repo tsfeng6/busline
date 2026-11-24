@@ -1,7 +1,7 @@
 import { distanceMeters } from './localTransit';
 
 export interface PlannerPoint { city: string; name: string; location: [number, number] }
-export interface PlannerStep { mode: 'BUS' | 'WALK'; instruction: string; distance: number; time: number; path: [number, number][]; from?: PlannerPoint['location']; to?: PlannerPoint['location']; walkingGeometry?: 'straight' }
+export interface PlannerStep { mode: 'BUS' | 'WALK'; instruction: string; distance: number; time: number; path: [number, number][]; from?: PlannerPoint['location']; to?: PlannerPoint['location']; fromName?: string; toName?: string; walkingGeometry?: 'straight' }
 export interface BusPlan { steps: PlannerStep[]; time: number; distance: number; walking: number; buses: number }
 const forbidden = /地铁|轻轨|有轨电车|磁悬浮|单轨|高铁|动车|火车|铁路|机场|航空|长途|客运班线|旅游|定制|大巴/;
 export const isLocalBusLine = (name: string) => Boolean(name) && !forbidden.test(name.split(/[（(]/, 1)[0]);
@@ -32,16 +32,36 @@ export function normalizeBusPlan(plan: any, maxWalking: number): BusPlan | null 
 export function plannerDistance(meters: number): string { return meters >= 1000 ? `${(meters / 1000).toFixed(1)}公里` : `${Math.round(meters)}米`; }
 export function plannerDuration(seconds: number): string { const minutes = Math.ceil(seconds / 60); return `${Math.floor(minutes / 60)}小时${minutes % 60}分`; }
 
-export function plannerTransferPoints(steps: readonly PlannerStep[]): PlannerPoint['location'][] {
-  const points: PlannerPoint['location'][] = [];
+export type PlannerMapSelection = { kind: 'step'; indices: number[] } | { kind: 'transfer'; index: number };
+
+export type PlannerTransferChange = { stepIndex: number; label: string; stopName?: string };
+
+export function plannerTransferMarkers(steps: readonly PlannerStep[]) {
+  const markers: { center: PlannerPoint['location']; changes: PlannerTransferChange[] }[] = [];
   for (let index = 1; index < steps.length; index++) {
     const previous = steps[index - 1], next = steps[index];
     if (previous.mode === 'WALK' && next.mode === 'WALK') continue;
-    for (const point of [previous.to ?? previous.path.at(-1), next.from ?? next.path[0]]) {
-      if (point && point.every(Number.isFinite) && !points.some(existing => distanceMeters(existing, point) < 12)) points.push(point);
+    const from = previous.to ?? previous.path.at(-1), to = next.from ?? next.path[0];
+    const add = (point: PlannerPoint['location'] | undefined, label: string, stopName?: string) => {
+      if (!point?.every(Number.isFinite)) return;
+      const change: PlannerTransferChange = { stepIndex: index, label };
+      if (stopName) change.stopName = stopName;
+      const marker = markers.find(item => distanceMeters(item.center, point) < 12);
+      if (marker) marker.changes.push(change);
+      else markers.push({ center: point, changes: [change] });
+    };
+    if (from && to && distanceMeters(from, to) < 12) {
+      add(from, previous.mode === next.mode ? '同站换乘' : next.mode === 'BUS' ? '步行后上车' : '下车后步行', previous.toName || next.fromName);
+    } else {
+      add(from, previous.mode === 'BUS' ? '下车' : '步行结束', previous.toName);
+      add(to, next.mode === 'BUS' ? '上车' : '开始步行', next.fromName);
     }
   }
-  return points;
+  return markers;
+}
+
+export function plannerTransferPoints(steps: readonly PlannerStep[]): PlannerPoint['location'][] {
+  return plannerTransferMarkers(steps).map(marker => marker.center);
 }
 
 export function plannerBusSequence(plan: BusPlan): string {
