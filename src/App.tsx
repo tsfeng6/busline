@@ -6733,6 +6733,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   }, [activeBusLine, currentCity]);
 
   const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
+  const isAnswering = showMinigameModal && gameState === 'playing';
   return (
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
       {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
@@ -6791,7 +6792,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       </AnimatePresence>
 
       <header className="fixed top-0 left-0 right-0 z-20 px-4 pt-5 pb-0 pointer-events-none">
-        {!isDrawingMode && (
+        {!isAnswering && !isDrawingMode && (
           <div className="flex items-start justify-between gap-4 w-full h-[46px]">
             {/* Pure Material 3 Search Bar (without logo, slightly narrower) */}
             <div ref={searchContainerRef} className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative w-[180px] sm:w-[240px] md:w-[280px] rounded-full'}`}>
@@ -8802,6 +8803,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           account={gameAccount}
           accessToken={gameAccessToken}
           authLoading={gameAuthLoading}
+          hideTrigger={isAnswering}
           open={showSettings}
           tab={settingsTab}
           onTabChange={setSettingsTab}
@@ -9264,7 +9266,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         )}
 
         <AnimatePresence>
-          {(selectedStop || selectedSegmentLines) && !(showMinigameModal && gameState === 'playing') && (
+          {(selectedStop || selectedSegmentLines) && !isAnswering && (
             <motion.div
               layout
               transition={{ type: "spring", stiffness: 260, damping: 26 }}
@@ -9433,7 +9435,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         </AnimatePresence>
 
         <AnimatePresence>
-          {stationConnectivityCard && !(showMinigameModal && gameState === 'playing') && (
+          {stationConnectivityCard && !isAnswering && (
             <motion.div
               layout
               transition={{ type: "spring", stiffness: 260, damping: 26 }}
@@ -9548,7 +9550,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         </AnimatePresence>
 
         <AnimatePresence>
-          {activeBusLine && !(showMinigameModal && gameState === 'playing') && (
+          {activeBusLine && !isAnswering && (
             <motion.div
               layout
               transition={{ type: "spring", stiffness: 260, damping: 26 }}
@@ -9664,7 +9666,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           )}
         </AnimatePresence>
 
-        {!isDrawingMode && (
+        {!isAnswering && !isDrawingMode && (
           <button 
             type="button"
             onClick={handleLocate}
@@ -9695,7 +9697,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       </main>
 
-      <footer className="fixed bottom-2 right-4 sm:bottom-3 sm:right-6 z-10 pointer-events-none flex flex-col items-end gap-1.5">
+      {!isAnswering && <footer className="fixed bottom-2 right-4 sm:bottom-3 sm:right-6 z-10 pointer-events-none flex flex-col items-end gap-1.5">
         <p className="max-w-[70vw] text-right text-[10px] leading-snug text-slate-600 bg-m3-surface/85 rounded px-1.5 py-0.5">
           公交线路数据来源：高德地图开放平台 · 仅供参考
         </p>
@@ -9717,7 +9719,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
             </div>
           </div>
         )}
-      </footer>
+      </footer>}
 
 
     </div>
