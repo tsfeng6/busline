@@ -6974,7 +6974,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   <Clock className="w-4.5 h-4.5" />
                 </button>
               )}
-              {/* 公交路线规划入口暂时隐藏，保留实现以便后续恢复。 */}
+              {!showMinigameModal && <button type="button" aria-label="公交路线规划" title="公交路线规划" aria-pressed={showBusPlanner}
+                onClick={() => { setShowBusPlanner(true); setShowBuslineAI(false); }}
+                className="pointer-events-auto fixed bottom-36 right-4 flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-2xl border border-m3-outline-variant/40 bg-m3-surface/95 text-m3-primary shadow-sm transition-transform active:scale-95 sm:static">
+                <Route className="h-4.5 w-4.5" />
+              </button>}
               <div className="pointer-events-auto shrink-0">
                 <button onClick={() => { setShowBuslineAI(prev => !prev); setShowBusPlanner(false); }} title="Busline AI" aria-label="打开 Busline AI"
                   className="backdrop-blur-md bg-m3-primary-container/95 text-m3-on-primary-container border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center hover:scale-105 transition-all duration-200 active:scale-95">

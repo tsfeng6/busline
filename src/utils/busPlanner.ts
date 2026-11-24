@@ -2,6 +2,7 @@ export interface PlannerPoint { city: string; name: string; location: [number, n
 export interface PlannerStep { mode: 'BUS' | 'WALK'; instruction: string; distance: number; time: number; path: [number, number][] }
 export interface BusPlan { steps: PlannerStep[]; time: number; distance: number; walking: number; buses: number }
 const forbidden = /地铁|高铁|动车|火车|铁路|机场|航空|长途|客运班线|旅游|定制|大巴/;
+export const isLocalBusLine = (name: string) => Boolean(name) && !forbidden.test(name.split(/[（(]/, 1)[0]);
 export function normalizeBusPlan(plan: any, maxWalking: number): BusPlan | null {
   if (!Array.isArray(plan?.segments) || !plan.segments.length || Number(plan.railway_distance || 0) > 0 || Number(plan.taxi_distance || 0) > 0) return null;
   const steps: PlannerStep[] = [];
