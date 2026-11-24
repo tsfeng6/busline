@@ -1,10 +1,10 @@
 import { getBuslineAIEndpoint, readBuslineAIResponse, describeBuslineAIError } from '../utils/buslineAIClient';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Route, Loader2, Footprints, Bus, Search } from 'lucide-react';
-import { BusPlan, PlannerPoint, normalizeBusPlan, plannerDistance, plannerDuration } from '../utils/busPlanner';
+import { X, ArrowDownUp, Copy, Loader2, Footprints, Bus, Search } from 'lucide-react';
+import { BusPlan, PlannerPoint, normalizeBusPlan, plannerBusSequence, plannerDistance, plannerPlanText } from '../utils/busPlanner';
 import { loadGameCity, loadPublishedCities } from '../utils/publishedTransit';
-import { plannerCityKey, plannerCorridorCities, plannerCorridorWidths } from '../utils/plannerCityCoverage';
+import { plannerCityKey, plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities } from '../utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../utils/plannerStops';
 import { PlannerStationField, type PlannerStationInput } from './PlannerStationField';
 import { MAX_TRANSFER_RADIUS, paretoBusPlans, planSavedBus, recommendedBusPlans, transfers } from '../utils/savedBusPlanner';
@@ -14,10 +14,12 @@ interface Props {
   disabled: boolean;
   currentCity: string;
   onMapPick: (handler: ((station: PlannerPoint) => void) | null) => void;
+  onPreload: (active: boolean) => void;
+  onSearchStart: () => void;
   onDraw: (plan: BusPlan) => void;
   onClear: () => void;
 }
-export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, onClear }: Props) {
+export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onPreload, onSearchStart, onDraw, onClear }: Props) {
   const initialCity = currentCity && currentCity !== '全国' ? currentCity : '北京市';
   const [origin, setOrigin] = useState<PlannerStationInput>({ city: initialCity, name: '' });
   const [destination, setDestination] = useState<PlannerStationInput>({ city: initialCity, name: '' });
@@ -32,6 +34,9 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
   const [error, setError] = useState('');
   const [plans, setPlans] = useState<BusPlan[]>([]);
   const [selected, setSelected] = useState(0);
+  const [order, setOrder] = useState<'推荐' | '少换乘' | '少步行'>('推荐');
+  const [planPoints, setPlanPoints] = useState<PlannerPoint[]>([]);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'manual'>('idle');
   const [resolved, setResolved] = useState<PlannerPoint[]>([]);
   const sessionRef = useRef(0);
   const cityReads = useRef(new Map<string, ReturnType<typeof loadGameCity>>());
@@ -71,14 +76,15 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
     });
   };
   useEffect(() => { if (disabled) stopPicking(); }, [disabled, stopPicking]);
-  useEffect(() => () => { onMapPick(null); sessionRef.current++; aiAbortRef.current?.abort(); }, [onMapPick]);
+  useEffect(() => () => { onMapPick(null); onPreload(false); sessionRef.current++; aiAbortRef.current?.abort(); }, [onMapPick, onPreload]);
   const search = async () => {
     if (busy || disabled || picking || !origin.name.trim() || !destination.name.trim() || !origin.city.trim() || !destination.city.trim()) return;
     const AMap = (window as any).AMap;
     if (!AMap) { setError('地图服务尚未就绪，请稍后重试。'); return; }
     const session = ++sessionRef.current;
     const isCurrent = () => session === sessionRef.current;
-    setBusy(true); setError(''); setPlans([]); setResolved([]); setAINotes([]); onClear();
+    onSearchStart();
+    setBusy(true); setError(''); setResolved([]); setAINotes([]);
     let transferCalls = 0, aiCalls = 0;
     const pointCache = new Map<string, PlannerPoint>();
     const merge = (before: BusPlan[], after: BusPlan[]) => paretoBusPlans(before.flatMap(a => after.map(b => ({
@@ -120,18 +126,27 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
       const networks: Awaited<ReturnType<typeof readCity>>[] = [];
       for (const radius of plannerCorridorWidths(from, to)) {
         check();
-        const cities = plannerCorridorCities(catalog, from, to, radius).filter(city => !attempted.has(plannerCityKey(city)));
-        if (!cities.length) continue;
-        for (let offset = 0; offset < cities.length; offset += 4) {
+        const pendingCities = plannerCorridorCities(catalog, from, to, radius).filter(city => !attempted.has(plannerCityKey(city)));
+        if (!pendingCities.length) continue;
+        onPreload(true);
+        try {
+          setStatus('正在确认沿途城市…');
+          const cities = await prioritizePlannerCities(AMap, pendingCities, from, to, () => !isCurrent());
           check();
-          setStatus(`正在读取沿途线网（${offset}/${cities.length}）…`);
-          const results = await Promise.allSettled(cities.slice(offset, offset + 4).map(readCity));
-          results.forEach((result, index) => {
-            const city = cities[offset + index];
-            attempted.add(plannerCityKey(city));
-            if (result.status === 'fulfilled') networks.push(result.value);
-            else unavailableCities.add(city);
-          });
+          for (let offset = 0; offset < cities.length; offset += 2) {
+            check();
+            setStatus(`正在预载沿途线网（${offset}/${cities.length}）…`);
+            const results = await Promise.allSettled(cities.slice(offset, offset + 2).map(readCity));
+            results.forEach((result, index) => {
+              const city = cities[offset + index];
+              attempted.add(plannerCityKey(city));
+              if (result.status === 'fulfilled') networks.push(result.value);
+              else unavailableCities.add(city);
+            });
+            await new Promise(resolve => setTimeout(resolve, 0));
+          }
+        } finally {
+          if (isCurrent()) onPreload(false);
         }
         check();
         setStatus('正在比较换乘次数与步行距离…');
@@ -230,7 +245,7 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
           ? '部分沿途线网暂时无法读取，现有数据未找到完整方案。请稍后重试或开启备用规划。'
           : hadCandidates
             ? '已找到公交接续，但未能核验出符合总步行上限的完整方案。可检查步行上限，或开启备用规划。'
-            : '已收录线网中暂未找到符合换乘和步行限制的公交接续。可指定途经公交站，或开启备用规划。');
+            : '沿途已收录的公交线路目前无法在设定的步行范围内接续。可指定途经公交站，或开启备用规划。');
         const result = savedPlans.length ? { plans: savedPlans, points: [from, to] } : await tryConnection(from, to, 0);
         combined = merge(combined, result.plans);
         if (!combined.length) throw new Error('组合方案的步行总距离超过限制，请调整换乘点。');
@@ -238,28 +253,47 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
       }
       check();
       const recommendations = recommendedBusPlans(combined);
+      onClear();
       onDraw(recommendations[0]);
-      setResolved(verifiedPoints); setPlans(recommendations); setSelected(0);
+      setResolved(verifiedPoints); setPlanPoints(verifiedPoints); setPlans(recommendations); setSelected(0); setOrder('推荐'); setCopyState('idle');
       setStatus(transferCalls ? '部分路段使用备用规划。' : catalogFailed || unavailableCities.size
         ? '已找到方案，部分沿途线网暂时无法读取。' : '已找到基于 Busline 收录线网的方案。');
     } catch (e: any) { if (isCurrent()) { setError(e.message || '规划失败，请重试。'); setStatus(''); } }
     finally { if (isCurrent()) setBusy(false); }
   };
-  const field = 'w-full rounded-xl border border-m3-outline-variant/50 bg-m3-surface-container px-3 py-2 text-xs outline-none focus:border-m3-primary';
+  const field = 'w-full rounded-lg bg-m3-surface-container/75 px-2 py-2.5 text-xs outline-none focus:ring-1 focus:ring-m3-primary';
+  const selectedPlan = plans[selected];
+  const rankedPlans = plans.map((plan, index) => ({ plan, index }));
+  if (order === '少步行') rankedPlans.sort((a, b) => a.plan.walking - b.plan.walking || transfers(a.plan) - transfers(b.plan));
+  if (order === '少换乘') rankedPlans.sort((a, b) => transfers(a.plan) - transfers(b.plan) || a.plan.walking - b.plan.walking);
+  const copyPlan = async () => {
+    if (!selectedPlan) return;
+    try {
+      await navigator.clipboard.writeText(plannerPlanText(selectedPlan, planPoints));
+      setCopyState('copied');
+    } catch {
+      setCopyState('manual');
+    }
+  };
   return <motion.aside initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ type: 'spring', damping: 26, stiffness: 260 }}
-    aria-label="公交路线规划" className={`fixed top-20 left-4 ${picking ? '' : 'bottom-24'} z-[75] w-[calc(100vw-32px)] sm:w-[400px] flex flex-col rounded-3xl bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/50 shadow-2xl pointer-events-auto overflow-hidden`}>
-    <div className="flex justify-between items-center px-4 py-3 border-b border-m3-outline-variant/30"><h2 className="text-sm font-black text-m3-primary flex items-center gap-2"><Route className="w-4 h-4" />公交规划 · 试验版</h2><button onClick={() => { stopPicking(); onClose(); }} aria-label="关闭公交规划" className="p-2 rounded-full hover:bg-m3-primary/10"><X className="w-4 h-4" /></button></div>
+    aria-label="公交路线规划" className="fixed top-20 left-4 z-[75] w-[calc(100vw-32px)] sm:w-[400px] max-h-[calc(100dvh-9rem)] flex flex-col gap-2 pointer-events-none">
+    <div className="pointer-events-auto rounded-2xl bg-m3-surface border border-m3-outline-variant/50 shadow-lg">
+    <div className="flex justify-between items-center px-4 py-2 border-b border-m3-outline-variant/30"><h2 className="text-sm font-black text-m3-primary flex items-center gap-2"><Bus className="w-4 h-4" />公交规划</h2><button onClick={() => { stopPicking(); onClose(); }} aria-label="关闭公交规划" className="p-2 rounded-full hover:bg-m3-primary/10"><X className="w-4 h-4" /></button></div>
     {picking && <div className="flex items-center justify-between gap-3 px-4 py-3 text-xs">
       <p role="status">放大地图后点击公交站圆点，设为{picking}。</p>
       <button type="button" className="shrink-0 font-bold text-m3-primary" onClick={stopPicking}>取消选站</button>
     </div>}
-    <div hidden={Boolean(picking)} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-3">
-      <p className="text-[11px] text-slate-500 leading-relaxed">优先使用 Busline 收录线路。推荐方案综合步行、换乘和乘车距离，步行接驳由道路接口核验。</p>
-      <form onSubmit={event => { event.preventDefault(); void search(); }} className="space-y-2">
-        <PlannerStationField label="起点" value={origin} onChange={setOrigin} load={loadStations} onPick={() => pick('起点')} disabled={busy || disabled} fieldClassName={field} />
-        <PlannerStationField label="终点" value={destination} onChange={setDestination} load={loadStations} onPick={() => pick('终点')} disabled={busy || disabled} fieldClassName={field} />
-        <label className="flex items-center gap-2 text-xs font-bold text-m3-primary py-1"><input type="checkbox" checked={enableAI} disabled={busy} onChange={e => setEnableAI(e.target.checked)} className="accent-m3-primary" />收录线网无结果时，尝试高德与 AI 备用规划</label>
-        <details><summary className="text-xs font-bold text-m3-primary cursor-pointer py-1">分段规划与步行设置</summary>
+      <form hidden={Boolean(picking)} onSubmit={event => { event.preventDefault(); void search(); }} className="space-y-2 px-3 py-3 max-h-[48dvh] overflow-y-auto">
+        <div className="flex items-center gap-2">
+          <button type="button" disabled={busy || disabled} aria-label="交换起点与终点" title="交换起点与终点"
+            onClick={() => { setOrigin(destination); setDestination(origin); }} className="shrink-0 rounded-full p-1.5 text-m3-primary hover:bg-m3-primary-container disabled:opacity-40"><ArrowDownUp className="h-4 w-4" /></button>
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <PlannerStationField label="起点" value={origin} onChange={setOrigin} load={loadStations} onPick={() => pick('起点')} disabled={busy || disabled} fieldClassName={field} />
+            <PlannerStationField label="终点" value={destination} onChange={setDestination} load={loadStations} onPick={() => pick('终点')} disabled={busy || disabled} fieldClassName={field} />
+          </div>
+        </div>
+        <details><summary className="text-xs font-bold text-m3-primary cursor-pointer py-1">规划设置</summary>
+          <label className="flex items-center gap-2 text-xs font-bold text-m3-primary py-1"><input type="checkbox" checked={enableAI} disabled={busy} onChange={e => setEnableAI(e.target.checked)} className="accent-m3-primary" />收录线网无结果时，尝试高德与 AI 备用规划</label>
           <p className="text-[10px] text-slate-500 my-2">自动搜索沿途城市线网。换乘站直线间距最多 {MAX_TRANSFER_RADIUS} 米。可指定途经站，每行填“城市|公交站名”。</p>
           <textarea aria-label="途经换乘点" rows={3} disabled={busy} value={via} onChange={e => setVia(e.target.value)} placeholder={'涿州市|具体公交换乘站名\n保定市|具体公交换乘站名'} className={field} />
           <label className="text-xs text-slate-600 flex items-center gap-2 mt-2">总步行上限<input aria-label="总步行上限（公里）" type="number" min={1} max={50} disabled={busy} value={maxWalk} onChange={e => setMaxWalk(Math.max(1, Math.min(50, Number(e.target.value) || 1)))} className="w-16 rounded-lg p-1 border border-m3-outline-variant" />公里</label>
@@ -267,20 +301,35 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
         {busy ? <button type="button" onClick={() => {
           sessionRef.current++;
           aiAbortRef.current?.abort();
+          onPreload(false);
           setBusy(false);
           setStatus('已取消规划。');
         }} className="w-full rounded-xl border border-m3-outline-variant/50 py-2.5 flex items-center justify-center gap-2 text-xs font-bold text-m3-primary"><Loader2 className="w-4 h-4 animate-spin" />取消规划</button>
           : <button type="submit" disabled={disabled || !origin.name.trim() || !destination.name.trim() || !origin.city.trim() || !destination.city.trim()} className="w-full rounded-xl bg-m3-primary text-white py-2.5 flex items-center justify-center gap-2 text-xs font-bold disabled:opacity-40"><Search className="w-4 h-4" />开始公交规划</button>}
       </form>
+    </div>
+    {!picking && (status || error || aiNotes.length > 0 || selectedPlan) && <div className="pointer-events-auto min-h-0 overflow-y-auto custom-scrollbar rounded-2xl bg-m3-surface border border-m3-outline-variant/50 shadow-lg p-3 space-y-3">
       {status && <p role="status" className="text-xs text-m3-primary">{status}</p>}
       {aiNotes.length > 0 && <details className="rounded-xl bg-m3-primary-container/40 p-3"><summary className="text-xs font-bold text-m3-primary cursor-pointer">Busline AI 接驳建议（待逐段验证）</summary>{aiNotes.map((note, index) => <p key={index} className="text-[11px] whitespace-pre-wrap leading-relaxed mt-2 text-slate-600">{note}</p>)}</details>}
       {error && <p role="alert" className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900 whitespace-pre-wrap leading-relaxed">{error}</p>}
-      {resolved.length > 0 && <div className="text-[10px] text-slate-500">已定位：{resolved.map(point => `${point.city}·${point.name}`).join(' → ')}</div>}
-      {plans.length > 0 && <>
-        <div className="flex flex-wrap gap-2">{plans.map((plan, index) => <button key={index} onClick={() => { onDraw(plan); setSelected(index); }} className={`min-w-20 flex-1 rounded-xl p-2 text-[11px] ${selected === index ? 'bg-m3-primary text-white' : 'bg-m3-surface-container text-slate-600'}`}>{index === 0 && <span className="block font-bold">推荐</span>}换乘 {transfers(plan)} 次<br />步行 {plannerDistance(plan.walking)}</button>)}</div>
-        <p className="text-[10px] text-slate-500">公交 {plans[selected].buses} 段 · 全程约 {plannerDistance(plans[selected].distance)}。{plans[selected].steps.every(step => step.mode === 'WALK' || step.time > 0) ? `预计 ${plannerDuration(plans[selected].time)}，请核实班次和候车时间。` : '班次和候车时间待核实。'}</p>
-        {plans[selected].steps.map((step, index) => <div key={index} className="rounded-2xl border border-m3-outline-variant/40 p-3 flex gap-2 text-xs leading-relaxed">{step.mode === 'WALK' ? <Footprints className="w-4 h-4 shrink-0 text-amber-700" /> : <Bus className="w-4 h-4 shrink-0 text-m3-primary" />}<span>{index + 1}. {step.instruction}</span></div>)}
+      {!selectedPlan && resolved.length > 0 && <div className="text-[10px] text-slate-500">已定位：{resolved.map(point => `${point.city}·${point.name}`).join(' → ')}</div>}
+      {selectedPlan && <>
+        <div aria-label="方案排序" className="flex gap-1 rounded-xl bg-m3-surface-container p-1">
+          {(['推荐', '少换乘', '少步行'] as const).map(option => <button key={option} type="button" aria-pressed={order === option} onClick={() => setOrder(option)}
+            className={`flex-1 rounded-lg py-1.5 text-xs font-bold ${order === option ? 'bg-m3-surface text-m3-primary shadow-sm' : 'text-slate-600'}`}>{option}</button>)}
+        </div>
+        <div className="space-y-1.5">{rankedPlans.map(({ plan, index }) => <button key={index} type="button" aria-pressed={selected === index} onClick={() => {
+          try { onDraw(plan); setSelected(index); setCopyState('idle'); }
+          catch { setError('地图状态已改变，请重新规划。'); }
+        }} className={`block w-full rounded-xl border px-3 py-2.5 text-left ${selected === index ? 'border-m3-primary/50 bg-m3-primary-container/55' : 'border-m3-outline-variant/40 hover:bg-m3-surface-container'}`}>
+          <span className="block line-clamp-3 text-sm font-bold text-m3-primary">{plannerBusSequence(plan)}</span>
+          <span className="mt-1 block text-xs text-slate-600">{plannerDistance(plan.distance)} · 换乘 {transfers(plan)} 次 · 步行 {plannerDistance(plan.walking)}</span>
+        </button>)}</div>
+        <div className="flex items-center justify-between gap-3"><h3 className="text-xs font-bold">行程详情</h3>
+          <button type="button" onClick={() => void copyPlan()} className="flex items-center gap-1 rounded-lg bg-m3-primary-container px-2.5 py-1.5 text-xs font-bold text-m3-primary"><Copy className="h-3.5 w-3.5" />{copyState === 'copied' ? '已复制' : '复制方案'}</button></div>
+        {copyState === 'manual' && <textarea aria-label="方案文本，选中后复制" readOnly rows={5} value={plannerPlanText(selectedPlan, planPoints)} onFocus={event => event.currentTarget.select()} className={field} />}
+        <ol className="space-y-2 border-l border-m3-outline-variant/45 pl-3">{selectedPlan.steps.map((step, index) => <li key={index} className="flex items-start gap-2 text-xs leading-relaxed">{step.mode === 'WALK' ? <Footprints className="w-4 h-4 shrink-0 text-amber-700" /> : <Bus className="w-4 h-4 shrink-0 text-m3-primary" />}<span>{step.instruction} <span className="text-slate-500">· {plannerDistance(step.distance)}</span></span></li>)}</ol>
       </>}
-    </div>
+    </div>}
   </motion.aside>;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { MapPin } from 'lucide-react';
+import { MapPin, X } from 'lucide-react';
 import type { PlannerPoint } from '../utils/busPlanner';
 import { matchPlannerStations, type PlannerStation } from '../utils/plannerStops';
 
@@ -38,7 +38,8 @@ export function PlannerStationField({ label, value, onChange, load, onPick, disa
   return <div className="space-y-1.5" onBlur={event => {
     if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false);
   }}>
-    <div className="grid grid-cols-[76px_minmax(0,1fr)_auto] gap-1.5 sm:grid-cols-[94px_minmax(0,1fr)_auto]">
+    <div className="grid grid-cols-[10px_62px_minmax(0,1fr)_auto_auto] items-center gap-1.5 sm:grid-cols-[10px_80px_minmax(0,1fr)_auto_auto]">
+      <span aria-hidden="true" className={`h-2.5 w-2.5 rounded-full border-2 ${label === '起点' ? 'border-emerald-500' : 'border-red-500'}`} />
       <input aria-label={`${label}城市`} placeholder="城市" disabled={disabled} className={fieldClassName}
         value={value.city} onChange={event => onChange({ city: event.target.value, name: value.name })} />
       <input aria-label={`${label}公交站`} placeholder={`输入${label}公交站名`} disabled={disabled} className={fieldClassName}
@@ -51,10 +52,12 @@ export function PlannerStationField({ label, value, onChange, load, onPick, disa
             optionsRef.current?.querySelector('button')?.focus();
           }
         }} />
+      <button type="button" disabled={disabled || !value.name} aria-label={`清空${label}`} onClick={() => onChange({ city: value.city, name: '' })}
+        className="p-1 text-slate-500 disabled:invisible"><X className="h-3.5 w-3.5" /></button>
       <button type="button" disabled={disabled} onClick={() => { setFocused(false); onPick(); }}
         aria-label={`在地图上选择${label}公交站`} title="地图选站"
         className="flex items-center gap-1 rounded-xl border border-m3-outline-variant/50 px-2 text-xs font-bold text-m3-primary hover:bg-m3-primary-container disabled:opacity-50">
-        <MapPin className="h-4 w-4" />选站
+        <MapPin className="h-4 w-4" />
       </button>
     </div>
     {showSuggestions && (matches.length ? <ul ref={optionsRef} aria-label={`${label}公交站建议`} className="max-h-40 overflow-y-auto rounded-xl border border-m3-outline-variant/30 bg-m3-surface">

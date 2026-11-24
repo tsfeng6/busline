@@ -240,7 +240,7 @@ function rideStep({ line, stops, from, to }: Ride): PlannerStep {
   }
   const path = nearest > first ? line.path.slice(first, nearest + 1) : stops.slice(from, to + 1).map(stop => stop.point);
   const distance = path.reduce((sum, point, index) => index ? sum + distanceMeters(path[index - 1], point) : sum, 0);
-  return { mode: 'BUS', instruction: `${line.name}：${stops[from].name} → ${stops[to].name}`, distance, time: 0, path };
+  return { mode: 'BUS', instruction: `${line.name}：${stops[from].name} → ${stops[to].name}`, distance, time: 0, path, from: stops[from].point, to: stops[to].point };
 }
 
 export async function planSavedBus(
@@ -294,7 +294,7 @@ export async function planSavedBus(
           }
           const result = verified.get(key);
           if (!result) { complete = false; break; }
-          walkingSteps.set(index, { ...result, instruction: `步行至${walk.to.name}` });
+          walkingSteps.set(index, { ...result, instruction: `步行至${walk.to.name}`, from: walk.from.point, to: walk.to.point });
         }
       }
       const walking = [...walkingSteps.values()].reduce((sum, step) => sum + step.distance, 0);

@@ -1,5 +1,7 @@
+import { distanceMeters } from './localTransit';
+
 export interface PlannerPoint { city: string; name: string; location: [number, number] }
-export interface PlannerStep { mode: 'BUS' | 'WALK'; instruction: string; distance: number; time: number; path: [number, number][] }
+export interface PlannerStep { mode: 'BUS' | 'WALK'; instruction: string; distance: number; time: number; path: [number, number][]; from?: PlannerPoint['location']; to?: PlannerPoint['location'] }
 export interface BusPlan { steps: PlannerStep[]; time: number; distance: number; walking: number; buses: number }
 const forbidden = /地铁|轻轨|有轨电车|磁悬浮|单轨|高铁|动车|火车|铁路|机场|航空|长途|客运班线|旅游|定制|大巴/;
 export const isLocalBusLine = (name: string) => Boolean(name) && !forbidden.test(name.split(/[（(]/, 1)[0]);
@@ -29,3 +31,28 @@ export function normalizeBusPlan(plan: any, maxWalking: number): BusPlan | null 
 }
 export function plannerDistance(meters: number): string { return meters >= 1000 ? `${(meters / 1000).toFixed(1)}公里` : `${Math.round(meters)}米`; }
 export function plannerDuration(seconds: number): string { const minutes = Math.ceil(seconds / 60); return `${Math.floor(minutes / 60)}小时${minutes % 60}分`; }
+
+export function plannerTransferPoints(steps: readonly PlannerStep[]): PlannerPoint['location'][] {
+  const points: PlannerPoint['location'][] = [];
+  for (let index = 1; index < steps.length; index++) {
+    const previous = steps[index - 1], next = steps[index];
+    if (previous.mode === 'WALK' && next.mode === 'WALK') continue;
+    for (const point of [previous.to ?? previous.path.at(-1), next.from ?? next.path[0]]) {
+      if (point && point.every(Number.isFinite) && !points.some(existing => distanceMeters(existing, point) < 12)) points.push(point);
+    }
+  }
+  return points;
+}
+
+export function plannerBusSequence(plan: BusPlan): string {
+  return plan.steps.filter(step => step.mode === 'BUS').map(step =>
+    step.instruction.split(/[：:（(]/, 1)[0].trim()).join(' → ');
+}
+
+export function plannerPlanText(plan: BusPlan, points: readonly PlannerPoint[]): string {
+  return [
+    points.map(point => `${point.city} · ${point.name}`).join(' → '),
+    `全程约 ${plannerDistance(plan.distance)} · 换乘 ${Math.max(0, plan.buses - 1)} 次 · 步行 ${plannerDistance(plan.walking)}`,
+    ...plan.steps.map((step, index) => `${index + 1}. ${step.instruction}（${plannerDistance(step.distance)}）`),
+  ].filter(Boolean).join('\n');
+}

@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { BusLine } from '../src/types';
 import type { PlannerPoint, PlannerStep } from '../src/utils/busPlanner';
+import { plannerBusSequence, plannerPlanText, plannerTransferPoints } from '../src/utils/busPlanner';
 import { distanceMeters, type Point, type PublishedCity } from '../src/utils/localTransit';
 import type { CityDataset } from '../src/utils/cityDataset';
-import { plannerCorridorCities, plannerCorridorWidths } from '../src/utils/plannerCityCoverage';
+import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities } from '../src/utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
 import { planSavedBus, recommendedBusPlans, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
 
@@ -84,6 +85,36 @@ test('includes a third city across provincial borders, expanding the corridor wh
   const plans = await planSavedBus(lines, crossBorderOrigin, crossBorderDestination, 100, verify, () => false);
   assert.equal(plans[0].walking, 0);
   assert.equal(transfers(plans[0]), 2);
+});
+
+test('prioritizes cities in boundary crossing order and keeps unreadable cities as fallbacks', async () => {
+  const boxes: Record<string, Point[]> = {
+    东侧市: [[116.6, 39.9], [116.9, 39.9], [116.9, 40.1], [116.6, 40.1]],
+    西侧市: [[116.1, 39.9], [116.3, 39.9], [116.3, 40.1], [116.1, 40.1]],
+    北侧市: [[116.1, 40.2], [116.5, 40.2], [116.5, 40.5], [116.1, 40.5]],
+  };
+  const AMap = { DistrictSearch: class {
+    search(name: string, callback: (status: string, result?: unknown) => void) {
+      if (boxes[name]) callback('complete', { districtList: [{ name, boundaries: [boxes[name]] }] });
+      else callback('error');
+    }
+  } };
+  const names = ['北京市', '天津市', '东侧市', '北侧市', '西侧市', '未读取市'];
+  assert.deepEqual(await prioritizePlannerCities(AMap, names, crossBorderOrigin, crossBorderDestination, () => false),
+    ['北京市', '西侧市', '东侧市', '天津市', '北侧市', '未读取市']);
+});
+
+test('marks both ends of a walking transfer and copies the complete selected trip', async () => {
+  const origin = place(116), destination = place(116.04);
+  const plans = await planSavedBus(network, origin, destination, 3000, verify, () => false);
+  const trip = plans[1];
+  assert.deepEqual(plannerTransferPoints(trip.steps), [point(116.020), point(116.021)]);
+  assert.equal(plannerBusSequence(trip), '2路 → 3路');
+  const text = plannerPlanText(trip, [origin, destination]);
+  assert.match(text, /北京市 · 116 → 北京市 · 116.04/);
+  assert.match(text, /换乘 1 次/);
+  assert.match(text, /2\. 步行至/);
+  assert.match(text, /3\. 3路/);
 });
 
 test('a through bus crossing a province boundary does not count as a transfer', async () => {

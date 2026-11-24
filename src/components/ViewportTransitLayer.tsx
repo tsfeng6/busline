@@ -21,6 +21,7 @@ type Options = {
   thick: boolean;
   stationLineStats: boolean;
   subdued: boolean;
+  suspendNeighborPrefetch?: boolean;
   blocked: (name: string) => boolean;
   selection: MutableRefObject<ViewportTransitSelection | null>;
   onStats: (stats: { lines: number; stops: number }) => void;
@@ -31,7 +32,9 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
   const options = useRef(style);
   options.current = style;
   const repaint = useRef<(() => void) | undefined>(undefined);
+  const updateTileRequests = useRef<(() => void) | undefined>(undefined);
   useEffect(() => { repaint.current?.(); }, [style.stationMode, style.thick, style.subdued, style.blocked, style.stationLineStats]);
+  useEffect(() => { updateTileRequests.current?.(); }, [style.suspendNeighborPrefetch]);
 
   useEffect(() => {
     const AMap = (window as any).AMap;
@@ -183,6 +186,10 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         const b = bounds(), zoom = map.getZoom(), z = transitLevel(zoom);
         if (!b || z === null) { cache.update([], []); return; }
         const foreground = tilesInBounds(b, z).filter(indexed).map(tileKey);
+        if (options.current.suspendNeighborPrefetch) {
+          cache.update(foreground, []);
+          return;
+        }
         const candidates = tilesInBounds(b, z, 1);
         const neighbors = new Set(candidates.filter(indexed).map(tileKey));
         if (z === 15) candidates.map(tile => tileAncestor(tile, 13)).filter(indexed).forEach(tile => neighbors.add(tileKey(tile)));
@@ -238,6 +245,12 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         },
       };
       repaint.current = schedulePaint;
+      updateTileRequests.current = () => {
+        if (options.current.suspendNeighborPrefetch) {
+          clearTimeout(idle);
+          request(false);
+        } else end();
+      };
       layer.render = paint;
       map.add(layer);
       const starts = ['movestart', 'zoomstart'];
@@ -260,6 +273,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         cache.dispose();
         transport.stop();
         repaint.current = undefined;
+        updateTileRequests.current = undefined;
         selection.current = null;
         options.current.onDetailReady(false);
         options.current.onStats({ lines: 0, stops: 0 });
