@@ -7,7 +7,7 @@ import { distanceMeters, type Point, type PublishedCity } from '../src/utils/loc
 import type { CityDataset } from '../src/utils/cityDataset';
 import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities } from '../src/utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
-import { busPlanScore, combineBusPlans, hasLongWalking, planLongWalkingBus, planSavedBus, recommendedBusPlans, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
+import { busPlanScore, combineBusPlans, hasLongWalking, planLongWalkingBus, planSavedBus, recommendedBusPlans, replaceShortTransferRides, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
 
 const point = (lng: number): Point => [lng, 40];
 const place = (lng: number): PlannerPoint => ({ city: '北京市', name: String(lng), location: point(lng) });
@@ -191,11 +191,12 @@ test('returns the shortest verified long connection after the preferred walking 
     if (from[0] === 116.10 && to[0] === 116.23) return null;
     return verify(from, to);
   }, () => false);
-  assert.equal(plans.length, 1);
-  assert.equal(plans[0].buses, 2);
-  assert.equal(plannerBusSequence(plans[0]), '1路 → 3路');
-  assert.equal(plans[0].walking, (await verify(point(116.10), point(116.28))).distance);
-  assert.equal(hasLongWalking(plans[0], 10000), true);
+  const shortest = plans.reduce((a, b) => a.walking <= b.walking ? a : b);
+  assert.equal(shortest.buses, 2);
+  assert.equal(plannerBusSequence(shortest), '1路 → 3路');
+  assert.equal(shortest.walking, (await verify(point(116.10), point(116.28))).distance);
+  assert.equal(hasLongWalking(shortest, 10000), true);
+  assert.ok(plans.some(plan => plan.buses < shortest.buses && plan.walking > shortest.walking));
 });
 
 test('uses the nearby outward platform before a long walk without riding a large detour', async () => {
@@ -214,6 +215,38 @@ test('uses the nearby outward platform before a long walk without riding a large
   assert.deepEqual(best.steps.at(-1)?.to, destination.location);
 });
 
+test('walks past short intermediate bus rides when the road and walking limit allow it', async () => {
+  const ride = (instruction: string, from: number, to: number, distance: number): PlannerStep => ({
+    mode: 'BUS', instruction, from: point(from), to: point(to), path: [point(from), point(to)], distance, time: 0,
+  });
+  const steps = [
+    ride('931路：远站 → 君悦华府', 115.5, 116, 58_800),
+    ride('9路：君悦华府 → 五中', 116, 116.002, 208),
+    ride('定州601路：五中 → 行政服务中心', 116.002, 116.006, 532),
+    ride('定州1路：行政服务中心 → 翰林实验学校', 116.006, 116.04, 3_500),
+  ];
+  const plan = { steps, distance: 63_040, walking: 0, buses: 4, time: 0 };
+  const road = async (from: Point, to: Point): Promise<PlannerStep> => ({
+    ...await verify(from, to), distance: Math.round((to[0] - from[0]) * 100000),
+  });
+  const simplified = await replaceShortTransferRides(plan, 1000, road, () => false);
+  assert.deepEqual(simplified.steps.map(step => step.mode), ['BUS', 'WALK', 'BUS']);
+  assert.equal(simplified.walking, 600);
+  assert.equal(transfers(simplified), 1);
+  assert.equal(simplified.steps[1].instruction, '步行至行政服务中心换乘');
+
+  const capped = await replaceShortTransferRides(plan, 300, road, () => false);
+  assert.equal(transfers(capped), 2);
+  assert.equal(capped.walking, 200);
+  assert.equal(await replaceShortTransferRides(plan, Infinity, async () => null, () => false), plan);
+
+  const through = bus('931路', 115.5, 116, 116.005);
+  const continued = await replaceShortTransferRides(plan, 300, road, () => false, new Map([['931路', [through]]]));
+  assert.equal(transfers(continued), 1);
+  assert.equal(continued.walking, 100);
+  assert.deepEqual(continued.steps[0].to, point(116.005));
+});
+
 test('an optional hard walking cap applies to the verified distance without rounding or clamping', async () => {
   const lines = [bus('1路', 116, 116.1), bus('2路', 116.28, 116.6)];
   const from = place(116), to = place(116.6);
@@ -221,7 +254,7 @@ test('an optional hard walking cap applies to the verified distance without roun
   const limited = (cap: number) => planLongWalkingBus(lines, from, to, verify, () => false, undefined, undefined, cap);
   assert.deepEqual(await limited(walking - .1), []);
   assert.equal((await limited(walking))[0].walking, walking);
-  assert.equal((await limited(1_000_000))[0].walking, walking);
+  assert.equal(Math.min(...(await limited(1_000_000)).map(plan => plan.walking)), walking);
 });
 
 test('combines more than eight waypoint legs in order and applies the walking cap to the full trip', () => {

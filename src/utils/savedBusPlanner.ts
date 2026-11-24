@@ -10,6 +10,7 @@ const MAX_WALKING_REQUEST = 100_000;
 const gridSize = .01;
 const BUS_DISTANCE_WEIGHT = .22;
 const TRANSFER_COST = 450;
+const SHORT_TRANSFER_RIDE = 800;
 
 type Stop = { name: string; point: Point; key: string };
 type Ride = { route: number; line: BusLine; stops: Stop[]; from: number; to: number };
@@ -28,6 +29,19 @@ function walkKey({ from, to }: Walk) { return from.key + '>' + to.key; }
 
 function gridKey(x: number, y: number) { return x + ':' + y; }
 
+// If an itinerary leaves a directed service only to board it farther along
+// the same run, the rider can remain on board through the intermediate stops.
+function continuousRides(rides: readonly Ride[]): Ride[] {
+  const result: Ride[] = [];
+  for (const ride of rides) {
+    let previous = result.length - 1;
+    while (previous >= 0 && (result[previous].route !== ride.route || result[previous].to > ride.from)) previous--;
+    if (previous < 0) result.push(ride);
+    else result.splice(previous, result.length - previous, { ...result[previous], to: ride.to });
+  }
+  return result;
+}
+
 export function paretoBusPlans(plans: BusPlan[]): BusPlan[] {
   const sorted = [...plans].sort((a, b) => transfers(a) - transfers(b) || a.walking - b.walking || a.distance - b.distance);
   const recommended = sorted.reduce<BusPlan | undefined>((best, plan) =>
@@ -41,6 +55,80 @@ export function paretoBusPlans(plans: BusPlan[]): BusPlan[] {
 }
 
 export function transfers(plan: BusPlan) { return Math.max(0, plan.buses - 1); }
+
+export async function replaceShortTransferRides(
+  plan: BusPlan, walkingLimit: number,
+  verify: (from: Point, to: Point) => Promise<PlannerStep | null>, cancelled: () => boolean,
+  services?: ReadonlyMap<string, readonly BusLine[]>,
+): Promise<BusPlan> {
+  const steps = [...plan.steps];
+  let { walking, distance, time, buses } = plan;
+  for (let index = 1; index < steps.length - 1 && !cancelled(); index++) {
+    const ride = steps[index];
+    if (ride.mode !== 'BUS' || ride.distance > SHORT_TRANSFER_RIDE) continue;
+    let before = index - 1, after = index + 1;
+    while (before >= 0 && steps[before].mode === 'WALK') before--;
+    while (after < steps.length && steps[after].mode === 'WALK') after++;
+    if (before < 0 || after >= steps.length) continue;
+    // Try to bypass a sequence of short rides at once. If the walk is too
+    // long or unverified, still try removing just the first short ride.
+    let following = after;
+    while (following < steps.length && (steps[following].mode === 'WALK' || steps[following].distance <= SHORT_TRANSFER_RIDE)) following++;
+    for (const target of following > after && following < steps.length ? [following, after] : [after]) {
+      const prior = steps[before], next = steps[target];
+      const from = prior.to ?? prior.path.at(-1), to = next.from ?? next.path[0];
+      if (!from || !to) continue;
+      const removed = steps.slice(before + 1, target);
+      const removedBuses = removed.filter(step => step.mode === 'BUS').length;
+      const oldWalking = removed.reduce((sum, step) => sum + (step.mode === 'WALK' ? step.distance : 0), 0);
+      const removedDistance = removed.reduce((sum, step) => sum + step.distance, 0);
+      const allowance = Math.min(oldWalking + SHORT_TRANSFER_RIDE * removedBuses, walkingLimit - walking + oldWalking);
+      const options = [{ ride: prior, alight: from, score: distanceMeters(from, to) }];
+      const serviceName = prior.instruction.split('：', 1)[0];
+      const board = prior.from ?? prior.path[0];
+      if (board && services) for (const line of services.get(serviceName) ?? []) {
+        const stops = (line.via_stops ?? []).map(stop => stopAt(stop.name,
+          Array.isArray(stop.location) ? stop.location as Point : [stop.location?.lng, stop.location?.lat]));
+        if (stops.some(stop => !stop.point.every(Number.isFinite))) continue;
+        const fromIndex = stops.findIndex(stop => distanceMeters(stop.point, board) < 1);
+        const toIndex = stops.findIndex((stop, i) => i > fromIndex && distanceMeters(stop.point, from) < 1);
+        if (fromIndex < 0 || toIndex < 0) continue;
+        for (let i = toIndex + 1; i < stops.length; i++) {
+          const alight = stops[i].point;
+          const walk = distanceMeters(alight, to);
+          if (walk > allowance || walk >= options[0].score) continue;
+          const ride = rideStep({ route: 0, line, stops, from: fromIndex, to: i });
+          const extraRide = Math.max(0, ride.distance - prior.distance);
+          // Trading short shuttles for a long excursion on the prior bus
+          // would defeat the shortcut even if the walk became shorter.
+          if (extraRide > removedDistance + SHORT_TRANSFER_RIDE * removedBuses) continue;
+          options.push({ ride, alight, score: walk + extraRide * BUS_DISTANCE_WEIGHT });
+        }
+      }
+      options.sort((a, b) => a.score - b.score);
+      let simplified = false;
+      for (const option of options) {
+        if (distanceMeters(option.alight, to) > allowance) continue;
+        const sameStop = option.alight[0] === to[0] && option.alight[1] === to[1];
+        const link = sameStop ? null : await verify(option.alight, to);
+        if (cancelled()) return plan;
+        if (!sameStop && (!link || link.distance > allowance)) continue;
+        const name = next.instruction.split('：')[1]?.split(' → ')[0];
+        const replacement = link ? [{ ...link, instruction: name ? `步行至${name}换乘` : '步行换乘', from: option.alight, to }] : [];
+        steps.splice(before, removed.length + 1, option.ride, ...replacement);
+        walking += (link?.distance ?? 0) - oldWalking;
+        distance += option.ride.distance - prior.distance + (link?.distance ?? 0) - removedDistance;
+        if (plan.time > 0) time = Math.max(0, time + option.ride.time - prior.time + (link?.time ?? 0) - removed.reduce((sum, step) => sum + step.time, 0));
+        buses -= removedBuses;
+        index = before;
+        simplified = true;
+        break;
+      }
+      if (simplified) break;
+    }
+  }
+  return buses === plan.buses ? plan : { steps, walking, distance, time, buses };
+}
 
 export function combineBusPlans(before: BusPlan[], after: BusPlan[], walkingLimit: number): BusPlan[] {
   return paretoBusPlans(before.flatMap(a => after.map(b => ({
@@ -319,6 +407,7 @@ export async function planLongWalkingBus(
     }), step);
   }
   let best = baseline;
+  const alternatives = baseline ? [baseline] : [];
   let busWeight = BUS_DISTANCE_WEIGHT;
   const scorePlan = (plan: BusPlan) => busWeight ? busPlanScore(plan) + TRANSFER_COST : plan.walking;
   const ranges = [...new Set([3_000, 15_000, 50_000, MAX_WALKING_REQUEST].map(range => Math.min(range, walkingLimit)))];
@@ -349,25 +438,23 @@ export async function planLongWalkingBus(
       continue;
     }
     onCandidates?.();
-    const chain: SearchLabel[] = [];
-    for (let node: SearchLabel | undefined = path; node; node = node.previous) chain.push(node);
-    chain.reverse();
-    const pieces: (Ride | Walk)[] = [];
-    let from = searchStart;
-    for (const node of chain) {
-      const previous = pieces.at(-1);
-      if (node.ride) {
-        if (previous && 'route' in previous && previous.route === node.ride.route
-          && (reverse ? previous.from === node.ride.to : previous.to === node.ride.from)) {
-          if (reverse) previous.from = node.ride.from;
-          else previous.to = node.ride.to;
-        } else pieces.push({ ...node.ride });
-      } else if (from.key !== node.stop.key) pieces.push(reverse ? { from: node.stop, to: from } : { from, to: node.stop });
-      from = node.stop;
+    const rides: Ride[] = [];
+    for (let node: SearchLabel | undefined = path; node; node = node.previous) {
+      if (node.ride) rides.push(node.ride);
     }
+    if (!reverse) rides.reverse();
+    const pieces: (Ride | Walk)[] = [];
+    let from = start;
+    for (const ride of continuousRides(rides)) {
+      const to = ride.stops[ride.from];
+      if (from.key !== to.key) pieces.push({ from, to });
+      pieces.push(ride);
+      from = ride.stops[ride.to];
+    }
+    if (from.key !== end.key) pieces.push({ from, to: end });
     const steps: PlannerStep[] = [];
     let walking = 0, buses = 0, complete = true;
-    for (const piece of reverse ? pieces.reverse() : pieces) {
+    for (const piece of pieces) {
       if (cancelled()) return [];
       if (finishComparison()) break search;
       if ('route' in piece) { steps.push(rideStep(piece)); buses++; continue; }
@@ -380,6 +467,7 @@ export async function planLongWalkingBus(
     }
     if (complete && walking <= walkingLimit) {
       const plan = { steps, walking, buses, distance: steps.reduce((sum, step) => sum + step.distance, 0), time: 0 };
+      alternatives.push(plan);
       if (!best || scorePlan(plan) < scorePlan(best)) {
         if (!best) compareUntil = Date.now() + 4_000;
         best = plan;
@@ -387,7 +475,7 @@ export async function planLongWalkingBus(
     }
     if (comparing && ++comparisons >= 3) break;
   }
-  return best && !cancelled() ? paretoBusPlans(baseline && baseline !== best ? [baseline, best] : [best]) : [];
+  return best && !cancelled() ? paretoBusPlans(alternatives) : [];
 }
 
 export function savedBusCandidates(
@@ -480,9 +568,9 @@ function* findCandidates(
     let candidate: Candidate | undefined;
     if (best && score(best) + leg * transferWeight < bestFinish) {
       bestFinish = score(best) + leg * transferWeight;
-      const rides: Ride[] = [];
-      for (let chain = best.chain; chain; chain = chain.previous) rides.push(chain.ride);
-      rides.reverse();
+      const reversedRides: Ride[] = [];
+      for (let chain = best.chain; chain; chain = chain.previous) reversedRides.push(chain.ride);
+      const rides = continuousRides(reversedRides.reverse());
       const walks: Walk[] = [];
       let from = start;
       for (const ride of rides) {
@@ -490,7 +578,11 @@ function* findCandidates(
         from = ride.stops[ride.to];
       }
       walks.push({ from, to: end });
-      candidate = { walk: best.walk, busDistance: best.busDistance, rides, walks };
+      candidate = {
+        walk: walks.reduce((sum, walk) => sum + walkCost(walk.from, walk.to), 0),
+        busDistance: rides.reduce((sum, ride) => sum + routes[ride.route].distances[ride.to] - routes[ride.route].distances[ride.from], 0),
+        rides, walks,
+      };
     }
     // A later round cannot improve on zero walking, or on a weighted result
     // once the additional transfers alone cost as much as that result.

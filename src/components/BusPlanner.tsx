@@ -6,8 +6,10 @@ import { loadGameCity, loadPublishedCities } from '../utils/publishedTransit';
 import { plannerCityKey, plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities } from '../utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../utils/plannerStops';
 import { PlannerStationField, type PlannerStationInput } from './PlannerStationField';
-import { busPlanScore, combineBusPlans, hasLongWalking, LONG_WALK_WARNING, planLongWalkingBus, planSavedBus, recommendedBusPlans, transfers } from '../utils/savedBusPlanner';
+import { busPlanScore, combineBusPlans, hasLongWalking, LONG_WALK_WARNING, paretoBusPlans, planLongWalkingBus, planSavedBus, recommendedBusPlans, replaceShortTransferRides, transfers } from '../utils/savedBusPlanner';
 import { verifyWalking } from '../utils/plannerWalking';
+import { distanceMeters } from '../utils/localTransit';
+import type { BusLine } from '../types';
 interface Props {
   onClose: () => void;
   disabled: boolean;
@@ -129,7 +131,24 @@ export function BusPlanner({ onClose, disabled, showDetails, currentCity, onMapP
       catalogFailed ||= failed;
       const attempted = new Set<string>();
       const networks: Awaited<ReturnType<typeof readCity>>[] = [];
-      let baseline: BusPlan | undefined;
+      let knownPlans: BusPlan[] = [];
+      // A high-transfer result is still available, but warrants searching the
+      // wider corridor for a more practical route before returning it.
+      const typicalTransfers = 4 + Math.ceil(distanceMeters(from.location, to.location) / 30_000);
+      const simplify = async (candidates: BusPlan[]) => {
+        const services = new Map<string, BusLine[]>();
+        for (const network of networks) for (const line of network.lines) {
+          const matching = services.get(line.name) ?? [];
+          matching.push(line);
+          services.set(line.name, matching);
+        }
+        const simplified: BusPlan[] = [];
+        for (const plan of candidates) {
+          check();
+          simplified.push(await replaceShortTransferRides(plan, remainingWalking, verify, () => !isCurrent(), services));
+        }
+        return paretoBusPlans(simplified);
+      };
       const onWalking = () => {
         setStatus('正在核验步行接驳…');
         onCandidates();
@@ -161,13 +180,13 @@ export function BusPlanner({ onClose, disabled, showDetails, currentCity, onMapP
         check();
         setStatus('正在比较换乘次数与步行距离…');
         const results = await planSavedBus(networks.flatMap(data => data.lines), from, to, Math.min(preferredWalking, remainingWalking), verify, () => !isCurrent(), onWalking);
-        if (results.some(plan => !hasLongWalking(plan, preferredWalking))) return results;
-        for (const result of results) {
-          if (!baseline || busPlanScore(result) < busPlanScore(baseline)) baseline = result;
-        }
+        knownPlans = paretoBusPlans([...knownPlans, ...results]);
+        if (knownPlans.some(plan => !hasLongWalking(plan, preferredWalking) && transfers(plan) <= typicalTransfers)) return simplify(knownPlans);
       }
       setStatus('正在搜索周边城市的长距离接驳…');
-      return planLongWalkingBus(networks.flatMap(data => data.lines), from, to, verify, () => !isCurrent(), onWalking, baseline, remainingWalking);
+      const baseline = knownPlans.reduce<BusPlan | undefined>((best, plan) => !best || busPlanScore(plan) < busPlanScore(best) ? plan : best, undefined);
+      const alternatives = await planLongWalkingBus(networks.flatMap(data => data.lines), from, to, verify, () => !isCurrent(), onWalking, baseline, remainingWalking);
+      return simplify(paretoBusPlans([...knownPlans, ...alternatives]));
     };
     try {
       const requests = [...waypoints.map(point => point.value), destination];
@@ -204,13 +223,6 @@ export function BusPlanner({ onClose, disabled, showDetails, currentCity, onMapP
       if (!combined.some(plan => plan.buses > 0)) throw new Error('请至少选择两个位置不同的公交站。');
       check();
       const recommendations = recommendedBusPlans(combined);
-      if (combined.every(plan => hasLongWalking(plan, preferredWalking))) {
-        const shortest = combined.reduce((best, plan) => plan.walking < best.walking ? plan : best);
-        if (!recommendations.includes(shortest)) recommendations.push(shortest);
-        recommendations.sort((a, b) => a.walking - b.walking || transfers(a) - transfers(b));
-      } else {
-        recommendations.sort((a, b) => Number(hasLongWalking(a, preferredWalking)) - Number(hasLongWalking(b, preferredWalking)));
-      }
       onClear();
       onDraw(recommendations[0]);
       setResolved(verifiedPoints); setPlanPoints(verifiedPoints); setPlans(recommendations); setSelected(0); setOrder('推荐'); setCopyState('idle');
@@ -222,9 +234,17 @@ export function BusPlanner({ onClose, disabled, showDetails, currentCity, onMapP
   const field = 'w-full rounded-lg bg-m3-surface-container/75 px-2 py-2.5 text-xs outline-none focus:ring-1 focus:ring-m3-primary';
   const selectedPlan = plans[selected];
   const visibleStatus = busy && !showDetails ? '正在加载中…' : status;
-  const rankedPlans = plans.map((plan, index) => ({ plan, index }));
-  if (order === '少步行') rankedPlans.sort((a, b) => a.plan.walking - b.plan.walking || transfers(a.plan) - transfers(b.plan));
-  if (order === '少换乘') rankedPlans.sort((a, b) => transfers(a.plan) - transfers(b.plan) || a.plan.walking - b.plan.walking);
+  const sortPlans = (priority: typeof order) => {
+    const ranked = plans.map((plan, index) => ({ plan, index }));
+    if (priority === '少步行') ranked.sort((a, b) => a.plan.walking - b.plan.walking || transfers(a.plan) - transfers(b.plan));
+    if (priority === '少换乘') ranked.sort((a, b) => transfers(a.plan) - transfers(b.plan) || a.plan.walking - b.plan.walking);
+    return ranked;
+  };
+  const rankedPlans = sortPlans(order);
+  const selectPlan = (index: number) => {
+    try { onDraw(plans[index]); setSelected(index); setCopyState('idle'); }
+    catch { setError('地图状态已改变，请重新规划。'); }
+  };
   const copyPlan = async () => {
     if (!selectedPlan) return;
     try {
@@ -286,13 +306,15 @@ export function BusPlanner({ onClose, disabled, showDetails, currentCity, onMapP
       {showDetails && !selectedPlan && resolved.length > 0 && <div className="text-[10px] text-slate-500">已定位：{resolved.map(point => `${point.city}·${point.name}`).join(' → ')}</div>}
       {selectedPlan && <>
         <div aria-label="方案排序" className="flex gap-1 rounded-xl bg-m3-surface-container p-1">
-          {(['推荐', '少换乘', '少步行'] as const).map(option => <button key={option} type="button" aria-pressed={order === option} onClick={() => setOrder(option)}
+          {(['推荐', '少换乘', '少步行'] as const).map(option => <button key={option} type="button" aria-pressed={order === option} onClick={() => {
+            if (order === option) return;
+            setOrder(option);
+            const first = sortPlans(option)[0];
+            if (first && first.index !== selected) selectPlan(first.index);
+          }}
             className={`flex-1 rounded-lg py-1.5 text-xs font-bold ${order === option ? 'bg-m3-surface text-m3-primary shadow-sm' : 'text-slate-600'}`}>{option}</button>)}
         </div>
-        <div className="space-y-1.5">{rankedPlans.map(({ plan, index }) => <button key={index} type="button" aria-pressed={selected === index} onClick={() => {
-          try { onDraw(plan); setSelected(index); setCopyState('idle'); }
-          catch { setError('地图状态已改变，请重新规划。'); }
-        }} className={`block w-full rounded-xl border px-3 py-2.5 text-left ${selected === index ? 'border-m3-primary/50 bg-m3-primary-container/55' : 'border-m3-outline-variant/40 hover:bg-m3-surface-container'}`}>
+        <div className="space-y-1.5">{rankedPlans.map(({ plan, index }) => <button key={index} type="button" aria-pressed={selected === index} onClick={() => selectPlan(index)} className={`block w-full rounded-xl border px-3 py-2.5 text-left ${selected === index ? 'border-m3-primary/50 bg-m3-primary-container/55' : 'border-m3-outline-variant/40 hover:bg-m3-surface-container'}`}>
           <span className="block line-clamp-3 text-sm font-bold text-m3-primary">{plannerBusSequence(plan)}</span>
           <span className="mt-1 block text-xs text-slate-600">{plannerDistance(plan.distance)} · 换乘 {transfers(plan)} 次 · 步行 {plannerDistance(plan.walking)}</span>
           {hasLongWalking(plan, preferredWalking) && <span className="mt-1 block text-[11px] text-amber-800">{LONG_WALK_WARNING}</span>}
