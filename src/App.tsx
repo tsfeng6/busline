@@ -676,6 +676,7 @@ export default function App() {
 
   const exitMinigameToMap = () => {
     gameSessionIdRef.current++;
+    gameRunRef.current = null;
     isMinigameActiveRef.current = false;
     setConfirmQuitGame(false);
     setShowMinigameModal(false);
@@ -691,6 +692,7 @@ export default function App() {
 
   const returnToMinigameMenu = () => {
     gameSessionIdRef.current++;
+    gameRunRef.current = null;
     isMinigameActiveRef.current = false;
     setConfirmQuitGame(false);
     setGameState('menu');
@@ -739,72 +741,65 @@ export default function App() {
     city: string,
     province?: string
   ) => {
-    if (gameState === 'playing' && isMinigameActiveRef.current) return;
-    if (gameAuthLoading) {
-      window.dispatchEvent(new Event('busline-account'));
-      return;
-    }
-    if (!gameAccount || !gameAccessToken || !gameAccountEnabled) {
-      window.dispatchEvent(new Event('busline-account'));
-      setGameAuthMessage('开始挑战前请先通过微信公众号登录。');
-      return;
-    }
+    if (gameLoading || (gameState === 'playing' && isMinigameActiveRef.current)) return;
     if (!(window as any).AMap || !mapInstance) {
       setApiErrorNotification('地图尚未就绪，请稍后再开始游戏。');
       return;
     }
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
+    const launchId = ++gameSessionIdRef.current;
     gameRunRef.current = null;
+    setGameDataError('');
+    setGameAuthMessage('');
+
+    const launch = (run: GameRun | null, message = '') => {
+      if (gameSessionIdRef.current !== launchId) return;
+      gameRunRef.current = run;
+      setGameAuthMessage(message);
+      setGameLaunchAnimation(true);
+      window.setTimeout(() => setGameLaunchAnimation(false), 1150);
+      isMinigameActiveRef.current = true;
+      if (!prevMapModeBeforeGameRef.current) prevMapModeBeforeGameRef.current = mapMode;
+      clearMapStateForMinigame();
+      setGameMode(mode);
+      setGameDifficulty(diff);
+      setGameCity(city);
+      const timeLimit = getGameTimeLimit(mode, diff);
+      gameTimeRemainingMsRef.current = timeLimit === null ? null : timeLimit * 1000;
+      gameDeadlineRef.current = null;
+      gameTimedOutRef.current = false;
+      setGameTimedOut(false);
+      setGameTimeLeft(timeLimit);
+      setGameState('playing');
+      setGameScore(0);
+      setGameHints({ remaining: 7, usedOnQuestion: 0 });
+      setGameQuestionNum(1);
+      setGameFeedback(null);
+      setGameUserInput('');
+      setGameQuestionData(null);
+      setGameHistory([]);
+      currentGameQuestionRef.current = null;
+      setReviewIndex(0);
+      setReviewAutoPlay(false);
+      setReviewHoveredStop(null);
+      setMapMode('normal');
+      void generateQuestion(mode, diff, city, 1, undefined, activeProv);
+    };
+
+    if (!gameAccountEnabled || !gameAccount || !gameAccessToken) {
+      launch(null, '本局成绩仅保存在本机。');
+      return;
+    }
     setGameLoading(true);
     setGameLoadingText('正在建立排行榜会话…');
-    setGameDataError('');
     void startGameRun(leaderboardKey(mode, diff, leaderboardScope(mode, city, activeProv)), gameAccessToken)
-      .then(result => {
-        // A local challenge is not allowed to start until it has one fresh,
-        // single-use server run.  This makes every completed score settleable.
-        gameRunRef.current = result.run;
-        setGameLaunchAnimation(true);
-        window.setTimeout(() => setGameLaunchAnimation(false), 1150);
-        isMinigameActiveRef.current = true;
-        if (!prevMapModeBeforeGameRef.current) prevMapModeBeforeGameRef.current = mapMode;
-        clearMapStateForMinigame();
-        setGameMode(mode);
-        setGameDifficulty(diff);
-        setGameCity(city);
-        const timeLimit = getGameTimeLimit(mode, diff);
-        gameTimeRemainingMsRef.current = timeLimit === null ? null : timeLimit * 1000;
-        gameDeadlineRef.current = null;
-        gameTimedOutRef.current = false;
-        setGameTimedOut(false);
-        setGameTimeLeft(timeLimit);
-        setGameState('playing');
-        setGameScore(0);
-        setGameHints({ remaining: 7, usedOnQuestion: 0 });
-        setGameQuestionNum(1);
-        setGameFeedback(null);
-        setGameUserInput('');
-        setGameQuestionData(null);
-        setGameHistory([]);
-        currentGameQuestionRef.current = null;
-        setReviewIndex(0);
-        setReviewAutoPlay(false);
-        setReviewHoveredStop(null);
-        setMapMode('normal');
-        void generateQuestion(mode, diff, city, 1, undefined, activeProv);
-      })
-      .catch((error: any) => {
-        const reason = error?.message || '排行榜服务暂时不可用';
-        setGameLoading(false);
-        setGameState('menu');
+      .then(({ run }) => launch(run), (error: any) => {
+        if (gameSessionIdRef.current !== launchId) return;
         if (error?.status === 401) {
           setGameAccount(null);
           setGameAccessToken('');
-          setGameDataError('登录已失效，请重新登录。');
-          window.dispatchEvent(new Event('busline-account'));
-          return;
         }
-        setGameDataError(`无法开始本局：${reason}`);
-        setGameAuthMessage(`排行榜会话创建失败：${reason}`);
+        launch(null, '本局成绩仅保存在本机，未计入排行榜。');
       });
   };
 
@@ -8329,6 +8324,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
                     {gameCatalogLoading&&<p role="status" className="text-xs text-slate-500">正在读取已有线路图城市…</p>}
                     {gameDataError&&<p role="alert" className="text-xs text-m3-error">{gameDataError}</p>}
+                    {!gameAccount && gameAccountEnabled && <p className="text-xs text-slate-500">游客可直接开始，成绩仅保存在本机。</p>}
                     {!gameCatalogLoading&&gameMode==='county'&&!countyProvinces.length&&<p role="status" className="text-xs text-slate-500">暂未收录可定位的县政府站点，请先选择其他模式。</p>}
                     {/* Start & Review Buttons */}
                     <div className="flex gap-2.5 md:col-start-2">
@@ -8591,6 +8587,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                     })()}
 
                     {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式已启用</p>}
+                    {gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
                     <div className="flex gap-2.5 w-full pt-2">
                       {gameHistory.length > 0 && (
                         <button
