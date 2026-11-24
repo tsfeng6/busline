@@ -7043,7 +7043,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 )}
               </div>
 
-              {!showMinigameModal && <button type="button" aria-label="公交路线规划" title="公交路线规划" aria-pressed={showBusPlanner && !showTimeline}
+              {!showMinigameModal && <button type="button" aria-label="公交线路规划 Beta" title="公交线路规划 Beta" aria-pressed={showBusPlanner && !showTimeline}
                 onClick={() => {
                   dismissSearchSuggestions();
                   setIsMobileSearchOpen(false);
