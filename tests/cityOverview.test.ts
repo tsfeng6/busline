@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {cityThumbnail,overviewPixel,mercatorY,validCityOverview,OVERVIEW_STROKE_CSS_PX,transitStrokeWidth} from '../src/utils/cityOverview';
+import {cityThumbnail,overviewPixel,mercatorY,validCityOverview,overviewStrokeWidth,transitStrokeWidth} from '../src/utils/cityOverview';
+import {tileLngLat} from '../src/utils/transitTiles';
 
 test('default line width matches the raster at handoff and only increases in the final zoom level', () => {
- assert.equal(transitStrokeWidth(13,20,true),OVERVIEW_STROKE_CSS_PX);
+ assert.equal(transitStrokeWidth(13,20,true),overviewStrokeWidth(13));
  assert.equal(transitStrokeWidth(19,20,true),3);
  assert.equal(transitStrokeWidth(19.5,20,true),3.625);
  assert.equal(transitStrokeWidth(20,20,true),4.25);
@@ -15,7 +16,20 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {mirrorCitySnapshots} from '../scripts/publish-city-static';
-import {CityOverviewTiles} from '../scripts/city-overview-tiles';
+import {CityOverviewTiles, OVERVIEW_RASTER_SIZE, TILE_PIXEL_RATIO, TILE_SIZE} from '../scripts/city-overview-tiles';
+
+test('nearby parallel lines leave a transparent gap in the regional overview', () => {
+  const z = 7, x = 105, y = 48;
+  const tiles = new CityOverviewTiles();
+  tiles.add({lines:[100, 102].map(row => ({
+    path: [80, 120].map(column => tileLngLat([x + column / TILE_SIZE, y + row / TILE_SIZE], z)),
+  }))});
+  const pixels = tiles.rawPixels(`${z}/${x}/${y}`);
+  const alpha = (row: number) => pixels[(row * OVERVIEW_RASTER_SIZE + 100) * TILE_PIXEL_RATIO];
+  assert.ok(alpha(100) > 0);
+  assert.equal(alpha(101), 0);
+  assert.ok(alpha(102) > 0);
+});
 
 test('per-city tile layers serialize and merge back losslessly', () => {
   const a = new CityOverviewTiles({ cacheDirectory: join(mkdtempSync(join(tmpdir(), 'busline-layer-')), 'a') });

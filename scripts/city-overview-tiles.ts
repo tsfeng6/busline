@@ -1,4 +1,4 @@
-import {mercatorY, OVERVIEW_STROKE_CSS_PX} from '../src/utils/cityOverview';
+import {mercatorY, overviewStrokeWidth} from '../src/utils/cityOverview';
 import {cityOverviewPNG} from './city-overview-png';
 import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {gzipSync,gunzipSync} from 'node:zlib';
@@ -44,7 +44,10 @@ export class CityOverviewTiles{
   if(alpha>pixels[index]){pixels[index]=alpha;tile.dirty=true;}
  }
  add(data:{lines?:{path:[number,number][]}[]}){
-  for(let z=TILE_MIN_ZOOM;z<=TILE_MAX_ZOOM;z++)for(const line of data.lines||[]){
+  for(let z=TILE_MIN_ZOOM;z<=TILE_MAX_ZOOM;z++){
+   const radius=overviewStrokeWidth(z)*TILE_PIXEL_RATIO/2;
+   const support=Math.ceil(radius+.5);
+   for(const line of data.lines||[]){
    let prev:[number,number]|null=null;
    for(const point of line.path||[]){
     if(!point.every(Number.isFinite)||Math.abs(point[0])>180||Math.abs(point[1])>85){prev=null;continue;}
@@ -55,8 +58,6 @@ export class CityOverviewTiles{
     // Coverage is scaled from a CSS-pixel width, so changing raster density or
     // map zoom affects sharpness, not the visual line weight.
     const steep=Math.abs(dy)>Math.abs(dx),count=Math.max(1,Math.ceil(major));
-    const radius=OVERVIEW_STROKE_CSS_PX*TILE_PIXEL_RATIO/2;
-    const support=Math.ceil(radius+.5);
     for(let i=0;i<=count;i++){
      const t=i/count,x=a[0]+dx*t,y=a[1]+dy*t;
      const primary=Math.round(steep?y:x),secondary=steep?x:y,base=Math.floor(secondary);
@@ -66,6 +67,7 @@ export class CityOverviewTiles{
      }
     }
     prev=p;
+   }
    }
   }
  }

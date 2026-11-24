@@ -1,8 +1,15 @@
 export const CITY_DETAIL_ZOOM = 13;
-export const OVERVIEW_STROKE_CSS_PX = 3;
+const DEFAULT_DETAIL_STROKE_PX = 3;
+const DISTANT_OVERVIEW_STROKE_PX = .75;
+
+/** Keep dense regional views readable and match the detailed layer at handoff. */
+export function overviewStrokeWidth(zoom: number): number {
+  const transition = Math.max(0, Math.min(1, (zoom - 10) / (CITY_DETAIL_ZOOM - 10)));
+  return DISTANT_OVERVIEW_STROKE_PX + transition * (DEFAULT_DETAIL_STROKE_PX - DISTANT_OVERVIEW_STROKE_PX);
+}
 
 export function transitStrokeWidth(zoom: number, maxZoom: number, thick: boolean): number {
-  const base = thick ? OVERVIEW_STROKE_CSS_PX : 1.65;
+  const base = thick ? DEFAULT_DETAIL_STROKE_PX : 1.65;
   const finalZoomProgress = Math.max(0, Math.min(1, zoom - maxZoom + 1));
   return base + finalZoomProgress * (thick ? 1.25 : 0.75);
 }
