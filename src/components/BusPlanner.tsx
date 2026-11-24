@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { X, ArrowDownUp, Copy, Plus, Loader2, Footprints, Bus, Search, ChevronUp, ChevronDown } from 'lucide-react';
 import { BusPlan, PlannerPoint, plannerBusSequence, plannerDistance, plannerPlanText } from '../utils/busPlanner';
 import { loadGameCity, loadPublishedCities } from '../utils/publishedTransit';
-import { plannerCityKey, plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities } from '../utils/plannerCityCoverage';
+import { plannerCityKey, plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities, preloadPlannerCities } from '../utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../utils/plannerStops';
 import { PlannerStationField, type PlannerStationInput } from './PlannerStationField';
 import { busPlanScore, combineBusPlans, hasLongWalking, LONG_WALK_WARNING, paretoBusPlans, planLongWalkingBus, planSavedBus, recommendedBusPlans, replaceShortTransferRides, transfers, type BusPlanPriority } from '../utils/savedBusPlanner';
@@ -47,6 +47,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
   const resultCache = useRef(new Map<BusPlanPriority, { plans: BusPlan[]; points: PlannerPoint[]; status: string }>());
   const searchKey = JSON.stringify([origin, waypoints.map(point => point.value), destination, walkingLimit]);
   const lastSearchKey = useRef('');
+  const verifiedWalks = useRef(new Map<string, NonNullable<Awaited<ReturnType<typeof verifyWalking>>>>());
   const displayedSearchKey = useRef('');
   const [planPoints, setPlanPoints] = useState<PlannerPoint[]>([]);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'manual'>('idle');
@@ -117,6 +118,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
     onSearchStart();
     if (lastSearchKey.current !== searchKey) {
       resultCache.current.clear();
+      verifiedWalks.current = new Map();
       lastSearchKey.current = searchKey;
     }
     const cached = resultCache.current.get(priority);
@@ -144,13 +146,22 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
     const unavailableCities = new Set<string>();
     let catalogFailed = false;
     const walkingCache = new Map<string, ReturnType<typeof verifyWalking>>();
+    const verifiedWalkCache = verifiedWalks.current;
     const trySavedConnection = async (from: PlannerPoint, to: PlannerPoint, remainingWalking: number, onCandidates: () => void) => {
       const verify = (start: PlannerPoint['location'], end: PlannerPoint['location']) => {
         const key = `${start.join(',')}>${end.join(',')}`;
+        const verified = verifiedWalkCache.get(key);
+        if (verified) return Promise.resolve(verified);
         const cached = walkingCache.get(key);
         if (cached) return cached;
         if (!AMap.Walking) return Promise.resolve(null);
-        const pending = verifyWalking(AMap, start, end, 8_000);
+        const pending = verifyWalking(AMap, start, end, 8_000).then(step => {
+          if (step) {
+            verifiedWalkCache.set(key, step);
+            if (verifiedWalkCache.size > 256) verifiedWalkCache.delete(verifiedWalkCache.keys().next().value!);
+          }
+          return step;
+        });
         walkingCache.set(key, pending);
         return pending;
       };
@@ -158,7 +169,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
       const { cities: catalog, failed } = await catalogTask;
       catalogFailed ||= failed;
       const attempted = new Set<string>();
-      const networks: Awaited<ReturnType<typeof readCity>>[] = [];
+      let corridorLines: BusLine[] = [];
       let knownPlans: BusPlan[] = [];
       // A high-transfer result is still available, but warrants searching the
       // wider corridor for a more practical route before returning it.
@@ -166,7 +177,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
       const simplify = async (candidates: BusPlan[]) => {
         if (priority !== '推荐') return candidates;
         const services = new Map<string, BusLine[]>();
-        for (const network of networks) for (const line of network.lines) {
+        for (const line of corridorLines) {
           const matching = services.get(line.name) ?? [];
           matching.push(line);
           services.set(line.name, matching);
@@ -191,24 +202,23 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
           setStatus('正在确认沿途城市…');
           const cities = await prioritizePlannerCities(AMap, pendingCities, from, to, () => !isCurrent());
           check();
-          for (let offset = 0; offset < cities.length; offset += 2) {
-            check();
-            setStatus(`正在预载沿途线网（${offset}/${cities.length}）…`);
-            const results = await Promise.allSettled(cities.slice(offset, offset + 2).map(readCity));
-            results.forEach((result, index) => {
-              const city = cities[offset + index];
-              attempted.add(plannerCityKey(city));
-              if (result.status === 'fulfilled') networks.push(result.value);
-              else unavailableCities.add(city);
-            });
-            await new Promise(resolve => setTimeout(resolve, 0));
-          }
+          const loaded = await preloadPlannerCities(cities, readCity, () => !isCurrent(),
+            completed => setStatus(`正在预载沿途线网（${completed}/${cities.length}）…`));
+          check();
+          const added = loaded.flatMap(({ city, data }) => {
+            attempted.add(plannerCityKey(city));
+            if (data) return data.lines;
+            unavailableCities.add(city);
+            return [];
+          });
+          if (!added.length) continue;
+          corridorLines = [...corridorLines, ...added];
         } finally {
           if (isCurrent()) onPreload(false);
         }
         check();
         setStatus('正在比较换乘次数与步行距离…');
-        const results = await planSavedBus(networks.flatMap(data => data.lines), from, to, priority === '推荐' ? Math.min(preferredWalking, remainingWalking) : remainingWalking, verify, () => !isCurrent(), onWalking, priority);
+        const results = await planSavedBus(corridorLines, from, to, priority === '推荐' ? Math.min(preferredWalking, remainingWalking) : remainingWalking, verify, () => !isCurrent(), onWalking, priority);
         knownPlans = paretoBusPlans([...knownPlans, ...results]);
         if (knownPlans.some(plan => priority === '少换乘' ? transfers(plan) === 0 && (!Number.isFinite(walkingLimit) || !waypoints.length || plan.walking === 0)
           : priority === '少步行' ? plan.walking === 0
@@ -216,7 +226,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
       }
       setStatus('正在搜索周边城市的长距离接驳…');
       const baseline = [...knownPlans].sort(comparePlans(priority))[0];
-      const alternatives = await planLongWalkingBus(networks.flatMap(data => data.lines), from, to, verify, () => !isCurrent(), onWalking, baseline, remainingWalking, priority);
+      const alternatives = await planLongWalkingBus(corridorLines, from, to, verify, () => !isCurrent(), onWalking, baseline, remainingWalking, priority);
       return simplify(paretoBusPlans([...knownPlans, ...alternatives]));
     };
     try {

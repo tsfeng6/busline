@@ -5,7 +5,7 @@ import type { PlannerPoint, PlannerStep } from '../src/utils/busPlanner';
 import { plannerBusSequence, plannerPlanText, plannerTransferPoints } from '../src/utils/busPlanner';
 import { distanceMeters, type Point, type PublishedCity } from '../src/utils/localTransit';
 import type { CityDataset } from '../src/utils/cityDataset';
-import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities } from '../src/utils/plannerCityCoverage';
+import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities, preloadPlannerCities } from '../src/utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
 import { busPlanScore, combineBusPlans, hasLongWalking, planLongWalkingBus, planSavedBus, recommendedBusPlans, replaceShortTransferRides, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
 
@@ -309,4 +309,30 @@ test('optimized searches choose different plans for transfers and walking', asyn
     undefined, undefined, 1000, '少换乘');
   assert.ok(capped.length);
   assert.ok(capped.every(plan => transfers(plan) === 1 && plan.walking <= 1000));
+});
+
+
+test('preload advances a free slot without waiting for the other city and preserves corridor order', async () => {
+  let finishSlow!: (value: string) => void;
+  let startLast!: () => void;
+  const lastStarted = new Promise<void>(resolve => { startLast = resolve; });
+  const started: string[] = [];
+  const progress: number[] = [];
+  const loaded = preloadPlannerCities(['慢城市', '快城市', '下一座'], async city => {
+    started.push(city);
+    if (city === '慢城市') return new Promise<string>(resolve => { finishSlow = resolve; });
+    if (city === '快城市') throw new Error('snapshot unavailable');
+    startLast();
+    return city;
+  }, () => false, completed => progress.push(completed));
+
+  await lastStarted;
+  assert.deepEqual(started, ['慢城市', '快城市', '下一座']);
+  finishSlow('首个快照');
+  assert.deepEqual(await loaded, [
+    { city: '慢城市', data: '首个快照' },
+    { city: '快城市' },
+    { city: '下一座', data: '下一座' },
+  ]);
+  assert.deepEqual(progress, [0, 1, 2, 3]);
 });

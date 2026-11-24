@@ -108,3 +108,28 @@ export function plannerCorridorCities(
   }
   return [...cities.values()];
 }
+
+export async function preloadPlannerCities<T>(
+  cities: readonly string[],
+  readCity: (city: string) => Promise<T>,
+  cancelled: () => boolean,
+  onProgress: (completed: number) => void,
+) {
+  const results: { city: string; data?: T }[] = [];
+  let next = 0;
+  let completed = 0;
+  const load = async () => {
+    while (next < cities.length && !cancelled()) {
+      const index = next++;
+      const city = cities[index];
+      try { results[index] = { city, data: await readCity(city) }; }
+      catch { results[index] = { city }; }
+      if (cancelled()) return;
+      onProgress(++completed);
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  };
+  onProgress(0);
+  await Promise.all([load(), load()]);
+  return results;
+}

@@ -157,7 +157,19 @@ export function recommendedBusPlans(plans: BusPlan[]): BusPlan[] {
     && best.walking - plan.walking <= 750));
 }
 
+// The caller keeps the same immutable line list while comparing a corridor.
+const savedNetworkCache = new WeakMap<readonly BusLine[], ReturnType<typeof buildSavedNetwork>>();
+
 function indexSavedNetwork(lines: readonly BusLine[]) {
+  let network = savedNetworkCache.get(lines);
+  if (!network) {
+    network = buildSavedNetwork(lines);
+    savedNetworkCache.set(lines, network);
+  }
+  return network;
+}
+
+function buildSavedNetwork(lines: readonly BusLine[]) {
   const platforms = new Map<string, Stop>();
   const routes: { line: BusLine; stops: Stop[]; distances: number[] }[] = [];
   const routesByPlatform = new Map<string, number[]>();
@@ -219,15 +231,11 @@ function indexSavedNetwork(lines: readonly BusLine[]) {
 type SearchLabel = { stop: Stop; walking: number; score: number; ride?: Ride; previous?: SearchLabel };
 type WalkingCell = { stops: Stop[]; remaining: number; unknown: number; highestScore: number };
 
-// Walking-only labels may board a bus. Arrival labels can also walk to
-// another platform. This keeps walking transfers from chaining invisibly.
-async function findLongConnectionCandidate(
+function prepareLongConnection(
   { platforms, routes }: ReturnType<typeof indexSavedNetwork>,
-  start: Stop, end: Stop, range: number, upperBound: number, walkingLimit: number, busWeight: number,
-  verified: WalkResults, reverse: boolean, cancelled: () => boolean, boardingPenalty: number, keepWalkingTradeoffs: boolean,
-): Promise<SearchLabel | undefined> {
+  start: Stop, end: Stop, reverse: boolean,
+) {
   const departures = new Map<string, { ride: Ride; distance: number }[]>();
-  const cells = new Map<string, WalkingCell>();
   const cellSize = .05;
   const cellFor = (point: Point) => gridKey(Math.floor(point[0] / cellSize), Math.floor(point[1] / cellSize));
   for (const [route, { line, stops, distances }] of routes.entries()) {
@@ -238,6 +246,23 @@ async function findLongConnectionCandidate(
       departures.set(key, rides);
     }
   }
+  const startDistances = new Map<string, number>();
+  const endDistances = new Map<string, number>();
+  for (const stop of platforms.values()) {
+    startDistances.set(stop.key, distanceMeters(start.point, stop.point));
+    endDistances.set(stop.key, distanceMeters(stop.point, end.point));
+  }
+  return { platforms, departures, cellFor, cellSize, startDistances, endDistances };
+}
+
+// Walking-only labels may board a bus. Arrival labels can also walk to
+// another platform. This keeps walking transfers from chaining invisibly.
+async function findLongConnectionCandidate(
+  { platforms, departures, cellFor, cellSize, startDistances, endDistances }: ReturnType<typeof prepareLongConnection>,
+  start: Stop, end: Stop, range: number, upperBound: number, walkingLimit: number, busWeight: number,
+  verified: WalkResults, reverse: boolean, cancelled: () => boolean, boardingPenalty: number, keepWalkingTradeoffs: boolean,
+): Promise<SearchLabel | undefined> {
+  const cells = new Map<string, WalkingCell>();
   const bestBoarding = new Map<string, SearchLabel>();
   const bestArrival = new Map<string, SearchLabel>();
   const bestOnboard = new Map<string, SearchLabel>();
@@ -319,7 +344,7 @@ async function findLongConnectionCandidate(
     cells.set(key, cell);
   }
   for (const stop of platforms.values()) {
-    const walking = walkingCost(start, stop, estimate(start, stop));
+    const walking = walkingCost(start, stop, startDistances.get(stop.key)!);
     enqueue({ stop, walking, score: walking });
   }
   let nextYield = Date.now() + 32;
@@ -360,13 +385,15 @@ async function findLongConnectionCandidate(
       }
     }
     if (!ride) continue;
-    const finalWalk = walkingCost(stop, end, estimate(stop, end));
+    const finalWalk = walkingCost(stop, end, endDistances.get(stop.key)!);
     const finish = score + finalWalk;
     if (walking + finalWalk <= walkingLimit && (finish < upperBound || (!best && finish === upperBound && Number.isFinite(finish)))) {
       upperBound = finish;
       best = { stop: end, walking: walking + finalWalk, score: finish, previous: label };
     }
-    const remaining = Math.min(range, upperBound - score, walkingLimit - walking);
+    // Walking to another stop only helps if there is room to board again.
+    const remaining = Math.min(range, upperBound - score - boardingPenalty, walkingLimit - walking);
+    if (remaining < 0) continue;
     const latPad = remaining / 110000;
     const longitudeScale = 110000 * Math.max(.1, Math.cos((Math.abs(stop.point[1]) + latPad) * Math.PI / 180));
     const lngPad = remaining / longitudeScale;
@@ -442,6 +469,7 @@ export async function planLongWalkingBus(
   const ranges = [...new Set(searchRanges.map(range => Math.min(range, walkingLimit)))];
   let stage = 0;
   let comparisons = 0;
+  let connection: ReturnType<typeof prepareLongConnection> | undefined;
   let compareUntil = best ? Date.now() + 4_000 : Infinity;
   search: while (!cancelled()) {
     const comparing = best !== undefined;
@@ -460,7 +488,8 @@ export async function planLongWalkingBus(
       }
       break;
     }
-    const path = await findLongConnectionCandidate(network, searchStart, searchEnd, range,
+    connection ??= prepareLongConnection(network, searchStart, searchEnd, reverse);
+    const path = await findLongConnectionCandidate(connection, searchStart, searchEnd, range,
       best ? scorePlan(best) : Infinity, walkingLimit, busWeight, verified, reverse,
       () => cancelled() || finishComparison(), boardingPenalty(), priority === '少换乘' && Number.isFinite(walkingLimit));
     if (cancelled()) return [];
