@@ -1,4 +1,12 @@
 import type { PlannerPoint, PlannerStep } from './busPlanner';
+import { distanceMeters } from './localTransit';
+
+export async function estimateWalking(from: PlannerPoint['location'], to: PlannerPoint['location']): Promise<PlannerStep> {
+  return {
+    mode: 'WALK', instruction: '', distance: distanceMeters(from, to), time: 0,
+    path: [from, to], from, to, walkingGeometry: 'straight',
+  };
+}
 
 export function verifyWalking(AMap: any, from: PlannerPoint['location'], to: PlannerPoint['location'], timeoutMs: number) {
   return new Promise<PlannerStep | null>(resolve => {

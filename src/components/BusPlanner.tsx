@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { X, ArrowDownUp, Copy, Plus, Loader2, Footprints, Bus, Search, ChevronUp, ChevronDown } from 'lucide-react';
-import { BusPlan, PlannerPoint, plannerBusSequence, plannerDistance, plannerPlanText } from '../utils/busPlanner';
+import { BusPlan, PlannerPoint, plannerBusSequence, plannerDistance, plannerPlanText, plannerWalkingLabel } from '../utils/busPlanner';
 import { loadGameCity, loadPublishedCities } from '../utils/publishedTransit';
 import { plannerCityKey, plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities, preloadPlannerCities } from '../utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../utils/plannerStops';
 import { PlannerStationField, type PlannerStationInput } from './PlannerStationField';
 import { busPlanScore, combineBusPlans, hasLongWalking, LONG_WALK_WARNING, paretoBusPlans, planLongWalkingBus, planSavedBus, recommendedBusPlans, replaceShortTransferRides, transfers, type BusPlanPriority } from '../utils/savedBusPlanner';
-import { verifyWalking } from '../utils/plannerWalking';
+import { estimateWalking, verifyWalking } from '../utils/plannerWalking';
 import { distanceMeters } from '../utils/localTransit';
 import type { BusLine } from '../types';
 interface Props {
@@ -29,6 +29,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
   const [picking, setPicking] = useState<'起点' | '终点' | number | null>(null);
   const [waypoints, setWaypoints] = useState<{ id: number; value: PlannerStationInput }[]>([]);
   const waypointId = useRef(0);
+  const [preciseWalking, setPreciseWalking] = useState(false);
   const [limitWalking, setLimitWalking] = useState(false);
   const [walkingKilometers, setWalkingKilometers] = useState('10');
   const walkingKm = Number(walkingKilometers);
@@ -45,7 +46,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
   const [order, setOrder] = useState<BusPlanPriority>('推荐');
   const [mobileSection, setMobileSection] = useState<'edit' | 'summary' | 'details'>('edit');
   const resultCache = useRef(new Map<BusPlanPriority, { plans: BusPlan[]; points: PlannerPoint[]; status: string }>());
-  const searchKey = JSON.stringify([origin, waypoints.map(point => point.value), destination, walkingLimit]);
+  const searchKey = JSON.stringify([origin, waypoints.map(point => point.value), destination, walkingLimit, preciseWalking]);
   const lastSearchKey = useRef('');
   const verifiedWalks = useRef(new Map<string, NonNullable<Awaited<ReturnType<typeof verifyWalking>>>>());
   const displayedSearchKey = useRef('');
@@ -148,7 +149,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
     const walkingCache = new Map<string, ReturnType<typeof verifyWalking>>();
     const verifiedWalkCache = verifiedWalks.current;
     const trySavedConnection = async (from: PlannerPoint, to: PlannerPoint, remainingWalking: number, onCandidates: () => void) => {
-      const verify = (start: PlannerPoint['location'], end: PlannerPoint['location']) => {
+      const resolveWalking = preciseWalking ? (start: PlannerPoint['location'], end: PlannerPoint['location']) => {
         const key = `${start.join(',')}>${end.join(',')}`;
         const verified = verifiedWalkCache.get(key);
         if (verified) return Promise.resolve(verified);
@@ -164,7 +165,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
         });
         walkingCache.set(key, pending);
         return pending;
-      };
+      } : estimateWalking;
       setStatus('正在查找沿途已收录线网…');
       const { cities: catalog, failed } = await catalogTask;
       catalogFailed ||= failed;
@@ -185,12 +186,12 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
         const simplified: BusPlan[] = [];
         for (const plan of candidates) {
           check();
-          simplified.push(await replaceShortTransferRides(plan, remainingWalking, verify, () => !isCurrent(), services));
+          simplified.push(await replaceShortTransferRides(plan, remainingWalking, resolveWalking, () => !isCurrent(), services));
         }
         return paretoBusPlans(simplified);
       };
       const onWalking = () => {
-        setStatus('正在核验步行接驳…');
+        if (preciseWalking) setStatus('正在核验步行接驳…');
         onCandidates();
       };
       for (const radius of plannerCorridorWidths(from, to)) {
@@ -218,7 +219,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
         }
         check();
         setStatus('正在比较换乘次数与步行距离…');
-        const results = await planSavedBus(corridorLines, from, to, priority === '推荐' ? Math.min(preferredWalking, remainingWalking) : remainingWalking, verify, () => !isCurrent(), onWalking, priority);
+        const results = await planSavedBus(corridorLines, from, to, priority === '推荐' ? Math.min(preferredWalking, remainingWalking) : remainingWalking, resolveWalking, () => !isCurrent(), onWalking, priority);
         knownPlans = paretoBusPlans([...knownPlans, ...results]);
         if (knownPlans.some(plan => priority === '少换乘' ? transfers(plan) === 0 && (!Number.isFinite(walkingLimit) || !waypoints.length || plan.walking === 0)
           : priority === '少步行' ? plan.walking === 0
@@ -226,7 +227,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
       }
       setStatus('正在搜索周边城市的长距离接驳…');
       const baseline = [...knownPlans].sort(comparePlans(priority))[0];
-      const alternatives = await planLongWalkingBus(corridorLines, from, to, verify, () => !isCurrent(), onWalking, baseline, remainingWalking, priority);
+      const alternatives = await planLongWalkingBus(corridorLines, from, to, resolveWalking, () => !isCurrent(), onWalking, baseline, remainingWalking, priority);
       return simplify(paretoBusPlans([...knownPlans, ...alternatives]));
     };
     try {
@@ -252,8 +253,8 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
           const reason = catalogFailed || unavailableCities.size
             ? '部分沿途线网暂时无法读取。'
             : limitWalking
-              ? '未找到符合剩余步行上限、且通过道路核验的方案。'
-              : hadCandidates
+              ? preciseWalking ? '未找到符合剩余步行上限且通过道路核验的方案。' : '未找到符合剩余步行上限的方案。'
+              : preciseWalking && hadCandidates
                 ? '部分道路接驳未能核验，暂时无法组成完整方案。'
                 : '沿途和周边已收录的公交线路暂时无法接续。';
           throw new Error(`${from.name} → ${to.name}：${reason}`);
@@ -333,7 +334,8 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
         }} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold text-m3-primary hover:bg-m3-primary-container disabled:opacity-40">
           <Plus className="h-4 w-4" />添加途经站
         </button>
-        <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-700">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs font-medium text-slate-700">
+          <label className="flex items-center gap-1.5"><input type="checkbox" checked={preciseWalking} disabled={busy} onChange={event => setPreciseWalking(event.target.checked)} className="accent-m3-primary" />精确步行走向</label>
           <label className="flex items-center gap-1.5"><input type="checkbox" checked={limitWalking} disabled={busy} onChange={event => setLimitWalking(event.target.checked)} className="accent-m3-primary" />限制总步行距离</label>
           {limitWalking && <label className="flex items-center gap-1.5"><input aria-label="总步行上限（公里）" type="number" min={0} step="any" disabled={busy} required value={walkingKilometers}
             onChange={event => setWalkingKilometers(event.target.value)} className="w-24 rounded-lg border border-m3-outline-variant px-2 py-1" />公里</label>}
@@ -367,7 +369,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
         </div>
         <div className="space-y-1.5">{plans.map((plan, index) => <button key={index} type="button" aria-pressed={selected === index} onClick={() => selectPlan(index)} className={`w-full rounded-xl border px-3 py-2.5 text-left ${selected !== index && mobileSection !== 'details' ? 'hidden sm:block' : 'block'} ${selected === index ? 'border-m3-primary/50 bg-m3-primary-container/55' : 'border-m3-outline-variant/40 hover:bg-m3-surface-container'}`}>
           <span className="line-clamp-1 sm:line-clamp-3 text-sm font-bold text-m3-primary">{plannerBusSequence(plan)}</span>
-          <span className="mt-1 block text-xs text-slate-600">{plannerDistance(plan.distance)} · 换乘 {transfers(plan)} 次 · 步行 {plannerDistance(plan.walking)}</span>
+          <span className="mt-1 block text-xs text-slate-600">{plannerDistance(plan.distance)} · 换乘 {transfers(plan)} 次 · {plannerWalkingLabel(plan)} {plannerDistance(plan.walking)}</span>
           {hasLongWalking(plan, preferredWalking) && <span className="mt-1 block text-[11px] text-amber-800">{LONG_WALK_WARNING}</span>}
         </button>)}</div>
         <div className={`space-y-3 ${mobileSection !== 'details' ? 'hidden sm:block' : ''}`}>

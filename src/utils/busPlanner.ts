@@ -1,7 +1,7 @@
 import { distanceMeters } from './localTransit';
 
 export interface PlannerPoint { city: string; name: string; location: [number, number] }
-export interface PlannerStep { mode: 'BUS' | 'WALK'; instruction: string; distance: number; time: number; path: [number, number][]; from?: PlannerPoint['location']; to?: PlannerPoint['location'] }
+export interface PlannerStep { mode: 'BUS' | 'WALK'; instruction: string; distance: number; time: number; path: [number, number][]; from?: PlannerPoint['location']; to?: PlannerPoint['location']; walkingGeometry?: 'straight' }
 export interface BusPlan { steps: PlannerStep[]; time: number; distance: number; walking: number; buses: number }
 const forbidden = /地铁|轻轨|有轨电车|磁悬浮|单轨|高铁|动车|火车|铁路|机场|航空|长途|客运班线|旅游|定制|大巴/;
 export const isLocalBusLine = (name: string) => Boolean(name) && !forbidden.test(name.split(/[（(]/, 1)[0]);
@@ -49,10 +49,14 @@ export function plannerBusSequence(plan: BusPlan): string {
     step.instruction.split(/[：:（(]/, 1)[0].trim()).join(' → ');
 }
 
+export function plannerWalkingLabel(plan: BusPlan): string {
+  return plan.steps.some(step => step.walkingGeometry === 'straight') ? '步行直线估算' : '步行';
+}
+
 export function plannerPlanText(plan: BusPlan, points: readonly PlannerPoint[]): string {
   return [
     points.map(point => `${point.city} · ${point.name}`).join(' → '),
-    `全程约 ${plannerDistance(plan.distance)} · 换乘 ${Math.max(0, plan.buses - 1)} 次 · 步行 ${plannerDistance(plan.walking)}`,
+    `全程约 ${plannerDistance(plan.distance)} · 换乘 ${Math.max(0, plan.buses - 1)} 次 · ${plannerWalkingLabel(plan)} ${plannerDistance(plan.walking)}`,
     ...plan.steps.map((step, index) => `${index + 1}. ${step.instruction}（${plannerDistance(step.distance)}）`),
   ].filter(Boolean).join('\n');
 }

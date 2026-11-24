@@ -6,6 +6,7 @@ import { plannerBusSequence, plannerPlanText, plannerTransferPoints } from '../s
 import { distanceMeters, type Point, type PublishedCity } from '../src/utils/localTransit';
 import type { CityDataset } from '../src/utils/cityDataset';
 import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities, preloadPlannerCities } from '../src/utils/plannerCityCoverage';
+import { estimateWalking, verifyWalking } from '../src/utils/plannerWalking';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
 import { busPlanScore, combineBusPlans, hasLongWalking, planLongWalkingBus, planSavedBus, recommendedBusPlans, replaceShortTransferRides, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
 
@@ -335,4 +336,31 @@ test('preload advances a free slot without waiting for the other city and preser
     { city: '下一座', data: '下一座' },
   ]);
   assert.deepEqual(progress, [0, 1, 2, 3]);
+});
+
+
+test('straight walking uses station endpoints and the exact option uses the road result', async () => {
+  const origin = place(116), destination = place(116.04);
+  const lines = [bus('1路', 116.001, 116.04)];
+  let requests = 0;
+  const detour = [116.0005, 40.003] as Point;
+  const AMap = { Walking: class {
+    search(from: Point, to: Point, callback: (status: string, result: unknown) => void) {
+      requests++;
+      callback('complete', { routes: [{ distance: 700, steps: [{ path: [from, detour, to] }] }] });
+    }
+  } };
+  const [straight] = await planSavedBus(lines, origin, destination, 100, estimateWalking, () => false);
+  assert.equal(requests, 0);
+  assert.equal(straight.walking, distanceMeters(origin.location, point(116.001)));
+  assert.deepEqual(straight.steps[0].path, [origin.location, point(116.001)]);
+  assert.match(plannerPlanText(straight, [origin, destination]), /步行直线估算/);
+
+  const exact = (from: Point, to: Point) => verifyWalking(AMap, from, to, 1000);
+  assert.deepEqual(await planSavedBus(lines, origin, destination, 100, exact, () => false), []);
+  const [routed] = await planSavedBus(lines, origin, destination, 800, exact, () => false);
+  assert.ok(requests > 0);
+  assert.equal(routed.walking, 700);
+  assert.deepEqual(routed.steps[0].path, [origin.location, detour, point(116.001)]);
+  assert.match(plannerPlanText(routed, [origin, destination]), /步行 700米/);
 });
