@@ -422,6 +422,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
                   className={`flex items-start gap-2 rounded-lg px-2 py-1.5 ${selectedMarker ? 'bg-red-100 ring-1 ring-red-400' : 'text-slate-600'}`}>
                   <span aria-hidden="true" className="mt-1 h-2 w-2 shrink-0 rounded-full bg-red-600" />
                   <div><strong>换乘点 {marker.index + 1}</strong>
+                    {selectedMarker && <span className="ml-2 rounded bg-red-200 px-1.5 py-0.5 font-bold text-red-950">地图选中</span>}
                     {marker.changes.map(change => <div key={`${change.stepIndex}:${change.label}`}>
                       第 {change.stepIndex} 段 → 第 {change.stepIndex + 1} 段 · {change.stopName ? `${change.stopName} · ` : ''}{change.label}
                     </div>)}
@@ -431,7 +432,9 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
               <div data-map-selected={selectedStep} aria-current={selectedStep || undefined}
                 className={`flex items-start gap-2 rounded-lg px-2 py-1.5 ${selectedStep ? 'bg-amber-100 ring-1 ring-amber-400' : ''}`}>
                 {step.mode === 'WALK' ? <Footprints className="h-4 w-4 shrink-0 text-amber-700" /> : <Bus className="h-4 w-4 shrink-0 text-m3-primary" />}
-                <span><strong className="mr-1.5">第 {index + 1} 段</strong>{step.instruction} <span className="text-slate-500">· {plannerDistance(step.distance)}</span></span>
+                <span><strong className="mr-1.5">第 {index + 1} 段</strong>
+                  {selectedStep && <span className="mr-1.5 rounded bg-amber-200 px-1.5 py-0.5 font-bold text-amber-950">地图选中</span>}
+                  {step.instruction} <span className="text-slate-500">· {plannerDistance(step.distance)}</span></span>
               </div>
             </li>;
           })}

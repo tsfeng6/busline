@@ -198,7 +198,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       }else cityTiles.add(latest);
       const overviewKeys=cityTiles.keys;
       const schedules = new Map<string, NonNullable<CityContribution['hours']>[number]>();
-      for (const line of latest.lines) {
+      for (const line of latest.lines ?? []) {
         if (!line.path?.length || !line.name) continue;
         const first = formatOperatingTime(line.stime), last = formatOperatingTime(line.etime);
         if (!first || !last) continue;

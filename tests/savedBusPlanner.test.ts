@@ -6,6 +6,8 @@ import { plannerBusSequence, plannerPlanText, plannerTransferMarkers, plannerTra
 import { distanceMeters, type Point, type PublishedCity } from '../src/utils/localTransit';
 import type { CityDataset } from '../src/utils/cityDataset';
 import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities, preloadPlannerCities } from '../src/utils/plannerCityCoverage';
+import { pickPlannerMapSelection } from '../src/utils/plannerMapSelection';
+import { RouteRenderIndex } from '../src/utils/routeRenderIndex';
 import { estimateWalking, verifyWalking } from '../src/utils/plannerWalking';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
 import { busPlanScore, combineBusPlans, hasLongWalking, planLongWalkingBus, planSavedBus, recommendedBusPlans, replaceShortTransferRides, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
@@ -378,4 +380,20 @@ test('overlapping map markers link every boarding and alighting to its itinerary
     { center: b, changes: [{ stepIndex: 1, label: '下车后步行' }, { stepIndex: 3, label: '下车后步行' }] },
     { center: a, changes: [{ stepIndex: 2, label: '步行后上车' }, { stepIndex: 4, label: '步行后上车' }] },
   ]);
+});
+
+
+test('planner map hits ignore other roads and prioritize red markers over overlapping itinerary steps', () => {
+  const paths: Point[][] = [
+    [[100, 30], [101, 30]],
+    [[101, 30], [100, 30]],
+    [[100, 30.05], [101, 30.05]],
+  ];
+  const routes = new RouteRenderIndex(paths.map((path, index) => ({ name: String(index), path, displayPath: path })));
+  const project = ([lng, lat]: Point) => ({ x: (lng - 100) * 100, y: (lat - 30) * 100 });
+  const hit = (point: Point) => pickPlannerMapSelection(point, project(point), project, .2, routes, [{ center: [100.2, 30] }]);
+  assert.deepEqual(hit([100.7, 30]), { kind: 'step', indices: [0, 1] });
+  assert.deepEqual(hit([100.7, 30.05]), { kind: 'step', indices: [2] });
+  assert.deepEqual(hit([100.2, 30.05]), { kind: 'transfer', index: 0 });
+  assert.equal(hit([100.7, 30.16]), null);
 });

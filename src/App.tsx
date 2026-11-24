@@ -28,6 +28,7 @@ import { discoverStationLines, segmentGridKeys } from './utils/stationCoverage';
 import { joinLineSegments } from './utils/mapPerformance';
 import { getSuggestionKind, rankSearchSuggestions } from './utils/searchSuggestions';
 import { BusPlanner } from './components/BusPlanner';
+import { pickPlannerMapSelection } from './utils/plannerMapSelection';
 import { isLocalBusLine, plannerTransferMarkers, type BusPlan, type PlannerMapSelection, type PlannerPoint } from './utils/busPlanner';
 import { TimelineBar } from './components/TimelineBar';
 import { isLineOperating, updateTimelineVisibility, type TimelineOverlayEntry } from './utils/timeline';
@@ -1143,10 +1144,13 @@ export default function App() {
   const [plannerRouteVisible, setPlannerRouteVisible] = useState(false);
   const [plannerMapSelection, setPlannerMapSelection] = useState<PlannerMapSelection | null>(null);
   const plannerOverlaysRef = useRef<any[]>([]);
+  const plannerMapModeRef = useRef(false);
+  const plannerMapHitRef = useRef<((point: Point) => PlannerMapSelection | null) | null>(null);
   const plannerSearchVersionRef = useRef(0);
   const clearBusPlan = () => {
     if (plannerOverlaysRef.current.length) mapRef.current?.remove(plannerOverlaysRef.current);
     plannerOverlaysRef.current = [];
+    plannerMapHitRef.current = null;
     setPlannerRouteVisible(false);
     setPlannerMapSelection(null);
   };
@@ -1175,7 +1179,30 @@ export default function App() {
     if (selected) selectPlannerStop({ city: selected.city, name: selected.name, location: getLatLng(selected.location) }, selected.lines);
     return true;
   };
+  const handlePlannerMapClick = (point: Point, map: any, fallback?: PlannerMapSelection): boolean => {
+    if (!plannerMapModeRef.current) return false;
+    const validPoint = point.every(Number.isFinite);
+    if (validPoint && pickPlannerMapStop(point, map)) return true;
+    if (plannerStopPickerRef.current) return true;
+    const selection = (validPoint ? plannerMapHitRef.current?.(point) : null) ?? fallback;
+    if (selection) setPlannerMapSelection(selection);
+    return true;
+  };
   const [showTimeline, setShowTimeline] = useState(false);
+  const plannerMapMode = showBusPlanner && !showTimeline;
+  plannerMapModeRef.current = plannerMapMode;
+  useEffect(() => {
+    if (!plannerMapMode) return;
+    mapPointVersionRef.current++;
+    roadLookupVersionRef.current++;
+    selectedViewportRoutesRef.current = [];
+    setSelectedStop(null);
+    setSelectedSegmentLines(null);
+    setSelectedSegmentName(null);
+    setSelectedSegmentAddress(null);
+    setStationConnectivityCard(null);
+    setSelectionPos(null);
+  }, [plannerMapMode]);
   const [timelineAvailable, setTimelineAvailable] = useState(false);
   const [timelineMinute, setTimelineMinute] = useState(() => new Date().getHours() * 60 + new Date().getMinutes());
   const [timelinePlaying, setTimelinePlaying] = useState(false);
@@ -2872,7 +2899,7 @@ export default function App() {
           activeBusLinePolylineRef.current = polyline;
           polyline.on('click', (e: any) => {
             const clickLngLat = [e.lnglat.getLng(), e.lnglat.getLat()];
-            if (pickPlannerMapStop(clickLngLat as Point, map)) return;
+            if (handlePlannerMapClick(clickLngLat as Point, map)) return;
 
 
             if (!(window as any).AMap.GeometryUtil) return;
@@ -3038,7 +3065,7 @@ export default function App() {
         marker.on('click', async () => {
           if (isMinigameActiveRef.current) return;
           const stopLatLng = getLatLng(stop.location);
-          if (selectPlannerStop({ city: lineCity, name: stop.name, location: stopLatLng }, [line.name])) return;
+          if (selectPlannerStop({ city: lineCity, name: stop.name, location: stopLatLng }, [line.name]) || handlePlannerMapClick(stopLatLng, map)) return;
 
           setSelectionPos(stopLatLng);
           setTopCard('stop');
@@ -3051,6 +3078,7 @@ export default function App() {
 
           // Fetch full details to show all lines
           const details = await fetchStopDetails(stop.name, stopLatLng, AMap, lineCity);
+          if (plannerMapModeRef.current) return;
           if (details) {
             setSelectedStop({ ...details, city: lineCity });
           } else {
@@ -5012,8 +5040,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
           return;
         }
         const version = ++mapPointVersionRef.current;
-        const [lng, lat] = [e.lnglat.getLng(), e.lnglat.getLat()];
-        if (pickPlannerMapStop([lng, lat], map)) return;
+        if (!e?.lnglat) return;
+        const [lng, lat] = getLatLng(e.lnglat);
+        if (handlePlannerMapClick([lng, lat], map)) return;
         if (map.getZoom() >= CITY_DETAIL_ZOOM && pickViewportRef.current([lng, lat])) return;
         if (map.getZoom() < 14) return;
 
@@ -5542,7 +5571,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
           marker.on('click', () => {
             const stopPos: [number, number] = [poi.location.lng, poi.location.lat];
-            if (selectPlannerStop({ city: currentCity, name: poi.name, location: stopPos }, linesAr)) return;
+            if (selectPlannerStop({ city: currentCity, name: poi.name, location: stopPos }, linesAr) || handlePlannerMapClick(stopPos, map)) return;
 
             setSelectionPos(stopPos);
             setTopCard('stop');
@@ -5734,7 +5763,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
             marker.on('click', () => {
               const stopPos = getLatLng(poi.location);
-              if (selectPlannerStop({ city: currentCity, name: poi.name, location: stopPos }, linesArray)) return;
+              if (selectPlannerStop({ city: currentCity, name: poi.name, location: stopPos }, linesArray) || handlePlannerMapClick(stopPos, map)) return;
 
               setSelectionPos(stopPos);
               setSelectedSegmentLines(null);
@@ -6247,8 +6276,9 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         handleDrawingMapClick(e);
         return;
       }
-      const clickLngLat = [e.lnglat.lng, e.lnglat.lat] as [number, number];
-      if (pickPlannerMapStop(clickLngLat, map)) return;
+      if (!e?.lnglat) return;
+      const clickLngLat = getLatLng(e.lnglat);
+      if (handlePlannerMapClick(clickLngLat, map)) return;
 
       const currentZoom = map.getZoom();
       const zoomFactor = Math.max(1, Math.pow(2, 16 - currentZoom));
@@ -6589,23 +6619,21 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     if (plannerOverlaysRef.current.length) map.remove(plannerOverlaysRef.current);
     setPlannerMapSelection(null);
     const overlays: any[] = [];
+    const markers = plannerTransferMarkers(plan.steps);
     let routeIndex: RouteRenderIndex | undefined;
-    const pickStep = (index: number, event: any) => {
-      const point = event?.lnglat ? getLatLng(event.lnglat) : null;
-      if (point && pickPlannerMapStop(point, map)) return;
-      if (!point || plannerStopPickerRef.current) {
-        if (!plannerStopPickerRef.current) setPlannerMapSelection({ kind: 'step', indices: [index] });
-        return;
-      }
+    plannerMapHitRef.current = point => {
+      const project = (coord: Point) => map.lngLatToContainer(coord);
+      const pixel = project(point);
+      const bounds = map.getBounds();
+      const { width, height } = map.getSize();
+      const southwest = bounds?.getSouthWest(), northeast = bounds?.getNorthEast();
+      const searchRadius = southwest && northeast && width > 0 && height > 0
+        ? 12 * Math.hypot((northeast.lng - southwest.lng) / width, (northeast.lat - southwest.lat) / height)
+        : 0.0002;
       routeIndex ??= new RouteRenderIndex(plan.steps.map(({ path }, index) => ({
         name: String(index), path, displayPath: path,
       })));
-      const bounds = map.getBounds(), width = map.getSize().width;
-      const tolerance = bounds && width > 0
-        ? Math.abs(bounds.getNorthEast().lng - bounds.getSouthWest().lng) / width * 2 : 0.000025;
-      const hits = routeIndex.query(point, tolerance);
-      const indices = [...new Set([index, ...hits.flatMap(hit => [...hit.lines].map(Number))])].sort((a, b) => a - b);
-      setPlannerMapSelection({ kind: 'step', indices });
+      return pickPlannerMapSelection(point, pixel, project, searchRadius, routeIndex, markers);
     };
     plan.steps.forEach((step, index) => {
       if (step.path.length < 2) return;
@@ -6614,16 +6642,20 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         lineJoin: 'round', lineCap: 'round', cursor: 'pointer', bubble: false };
       const border = new AMap.Polyline({ ...options, strokeColor: '#775419', strokeWeight: walking ? 6 : 9, zIndex: 80 });
       const line = new AMap.Polyline({ ...options, strokeColor: '#FFD43B', strokeWeight: walking ? 4 : 7, zIndex: 81 });
-      for (const overlay of [border, line]) overlay.on('click', (event: any) => pickStep(index, event));
+      for (const overlay of [border, line]) overlay.on('click', (event: any) => {
+        if (event?.lnglat) handlePlannerMapClick(getLatLng(event.lnglat), map, { kind: 'step', indices: [index] });
+        else if (plannerMapModeRef.current && !plannerStopPickerRef.current) setPlannerMapSelection({ kind: 'step', indices: [index] });
+      });
       overlays.push(border, line);
     });
-    plannerTransferMarkers(plan.steps).forEach(({ center }, index) => {
+    markers.forEach(({ center }, index) => {
       const marker = new AMap.CircleMarker({
         center, radius: 6, fillColor: '#dc2626', fillOpacity: 1, strokeColor: '#fff',
         strokeWeight: 2, zIndex: 94, cursor: 'pointer', bubble: false,
       });
       marker.on('click', () => {
-        if (!pickPlannerMapStop(center, map)) setPlannerMapSelection({ kind: 'transfer', index });
+        if (!plannerMapModeRef.current || pickPlannerMapStop(center, map)) return;
+        setPlannerMapSelection({ kind: 'transfer', index });
       });
       overlays.push(marker);
     });
@@ -7166,7 +7198,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       </header>
 
-      {nearbyPanel && !showMinigameModal && onboardingStep===0 && !activeBusLine && !selectedStop && <NearbyRoutes state={nearbyPanel}
+      {nearbyPanel && !plannerMapMode && !showMinigameModal && onboardingStep===0 && !activeBusLine && !selectedStop && <NearbyRoutes state={nearbyPanel}
         onClose={()=>{locationRequestRef.current++;nearbyRequestRef.current?.abort();setNearbyPanel(null);}} onRetry={handleLocate}
         onSelect={({ city, line }) => void handleManualSearch({ name: line.name, routeId: line.id, sourceCity: city, type: 'busline' })} />}
       <CityUploadDialog data={pendingCityUpload} busy={cityUploadBusy} progress={cityUploadProgress} error={cityUploadError}
@@ -9446,7 +9478,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         )}
 
         <AnimatePresence>
-          {(selectedStop || selectedSegmentLines) && !isAnswering && (
+          {(selectedStop || selectedSegmentLines) && !plannerMapMode && !isAnswering && (
             <motion.div
               layout
               transition={{ type: "spring", stiffness: 260, damping: 26 }}
@@ -9615,7 +9647,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         </AnimatePresence>
 
         <AnimatePresence>
-          {stationConnectivityCard && !isAnswering && (
+          {stationConnectivityCard && !plannerMapMode && !isAnswering && (
             <motion.div
               layout
               transition={{ type: "spring", stiffness: 260, damping: 26 }}
@@ -9730,7 +9762,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         </AnimatePresence>
 
         <AnimatePresence>
-          {activeBusLine && !isAnswering && (
+          {activeBusLine && !plannerMapMode && !isAnswering && (
             <motion.div
               layout
               transition={{ type: "spring", stiffness: 260, damping: 26 }}
