@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {cityThumbnail,overviewPixel,mercatorY,validCityOverview} from '../src/utils/cityOverview';
+import {cityThumbnail,overviewPixel,mercatorY,validCityOverview,OVERVIEW_STROKE_CSS_PX,transitStrokeWidth} from '../src/utils/cityOverview';
+
+test('default line width matches the raster at handoff and only increases in the final zoom level', () => {
+ assert.equal(transitStrokeWidth(13,20,true),OVERVIEW_STROKE_CSS_PX);
+ assert.equal(transitStrokeWidth(19,20,true),3);
+ assert.equal(transitStrokeWidth(19.5,20,true),3.625);
+ assert.equal(transitStrokeWidth(20,20,true),4.25);
+ assert.equal(transitStrokeWidth(21,20,true),4.25);
+ assert.equal(transitStrokeWidth(18,18,true),4.25);
+});
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';

@@ -1,4 +1,11 @@
 export const CITY_DETAIL_ZOOM = 13;
+export const OVERVIEW_STROKE_CSS_PX = 3;
+
+export function transitStrokeWidth(zoom: number, maxZoom: number, thick: boolean): number {
+  const base = thick ? OVERVIEW_STROKE_CSS_PX : 1.65;
+  const finalZoomProgress = Math.max(0, Math.min(1, zoom - maxZoom + 1));
+  return base + finalZoomProgress * (thick ? 1.25 : 0.75);
+}
 /** A larger source image keeps small city-network previews sharp on retina screens. */
 export const CITY_THUMBNAIL_MAX_EDGE = 1024;
 export const CITY_THUMBNAIL_STROKE_PX = 3;

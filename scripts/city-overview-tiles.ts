@@ -1,11 +1,9 @@
-import {mercatorY} from '../src/utils/cityOverview';
+import {mercatorY, OVERVIEW_STROKE_CSS_PX} from '../src/utils/cityOverview';
 import {cityOverviewPNG} from './city-overview-png';
 import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import {gzipSync,gunzipSync} from 'node:zlib';
 import {dirname,join} from 'node:path';
 export const TILE_MIN_ZOOM=2,TILE_MAX_ZOOM=13,TILE_SIZE=256,TILE_PIXEL_RATIO=3;
-/** Route width is specified in CSS pixels, then converted to the raster scale. */
-export const OVERVIEW_STROKE_CSS_PX=1.5;
 export const OVERVIEW_RASTER_SIZE=TILE_SIZE*TILE_PIXEL_RATIO;
 const RASTER_SIZE=OVERVIEW_RASTER_SIZE;
 export function worldPixel(point:[number,number],zoom:number):[number,number]{

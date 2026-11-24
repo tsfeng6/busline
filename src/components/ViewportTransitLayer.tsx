@@ -1,6 +1,7 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { TransitTileCache } from '../utils/transitTileCache';
 import { transitTileTransport } from '../utils/transitTileTransport';
+import { transitStrokeWidth } from '../utils/cityOverview';
 import {
   TRANSIT_TILE_EXTENT as EXTENT, tileKey, tileLngLat, tileAncestor, tilesInBounds, transitLevel,
   transitTileSource, transitTileIndexed, validTransitTileIndex, type TileRoute, type TileStop, type TransitTileData, type TransitBounds, type TransitPoint, type TransitTile,
@@ -106,6 +107,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         const routes = new Set<string>(), stops = new Map<string, ViewportStop>();
         const stationPaths = new Map<string, Path2D>();
         const zoom = map.getZoom();
+        const strokeWidth = transitStrokeWidth(zoom, map.getZooms?.()?.[1] ?? 20, settings.thick);
         const cells = visibleCells();
         const tiles = sources(cells);
         for (const { cell, source, data } of tiles) {
@@ -120,7 +122,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
           context.beginPath();
           context.rect(x, y, size, size);
           context.clip();
-          context.lineWidth = (settings.thick ? 2.8 : 1.65) / scale;
+          context.lineWidth = strokeWidth / scale;
           let geometry = routePaths.get(data);
           if (!geometry || geometry.blocked !== settings.blocked) {
             const path = new Path2D(), names: string[] = [];

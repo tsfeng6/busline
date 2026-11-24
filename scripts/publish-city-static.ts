@@ -17,7 +17,7 @@ import { TransitTilePublisher } from './transit-tiles';
 import { TRANSIT_TILE_BASE, type TransitTileIndex } from '../src/utils/transitTiles';
 import { cityStorageFiles } from './city-storage-files';
 
-const CITY_OVERVIEW_RASTER_VERSION = 2;
+const CITY_OVERVIEW_RASTER_VERSION = 3;
 // GitHub Pages has a 1 GiB site limit.  The source branch intentionally keeps
 // readable JSON, but the static mirror must split and gzip sizeable legacy
 // snapshots or latest/history copies exhaust that limit before deployment.
@@ -262,7 +262,8 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   // Write indexes last.  A deployed reader therefore sees all immutable
   // snapshots and packs before an index can point at them.
   await copy('city-data/v1/transit.json', JSON.stringify({ schemaVersion: 1, base: TRANSIT_TILE_BASE, revision: commit, groups }));
-  await copy('city-data/v1/overview.json',JSON.stringify({schemaVersion:3,cities:overviews,tiles:{base:tileBase,pixelRatio:TILE_PIXEL_RATIO,revision:commit,minZoom:TILE_MIN_ZOOM,maxZoom:TILE_MAX_ZOOM,keys:overviewKeys}}));
+  const overviewRevision = createHash('sha1').update(`${commit}:raster:${CITY_OVERVIEW_RASTER_VERSION}`).digest('hex');
+  await copy('city-data/v1/overview.json',JSON.stringify({schemaVersion:3,cities:overviews,tiles:{base:tileBase,pixelRatio:TILE_PIXEL_RATIO,revision:overviewRevision,minZoom:TILE_MIN_ZOOM,maxZoom:TILE_MAX_ZOOM,keys:overviewKeys}}));
   await mkdir(join(output, 'city-data/v1'), { recursive: true });
   await writeFile(join(output, 'city-data/v1/publication.json'), JSON.stringify({ commit, cities, historySnapshots, bytes, publishedAt: new Date().toISOString() }));
   if(layersDir)await saveLayers(layersDir,newLayers);
