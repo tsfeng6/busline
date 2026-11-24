@@ -4,16 +4,19 @@ import { validTileIndex } from '../utils/cityOverview';
 const EMPTY_TILE = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 const OVERVIEW_OPACITY = .8;
 
-export function CityOverviewLayer({ map, enabled, detailReady }: { map: any; enabled: boolean; detailReady: boolean }) {
+export function CityOverviewLayer({ map, enabled, detailReady, subdued = false }: { map: any; enabled: boolean; detailReady: boolean; subdued?: boolean }) {
   const layerRef = useRef<any>(null);
   const opacity = useRef(OVERVIEW_OPACITY);
   const detail = useRef(detailReady);
+  const target = subdued ? .2 : OVERVIEW_OPACITY;
+  const overviewOpacity = useRef(target);
+  overviewOpacity.current = target;
   detail.current = detailReady;
   useEffect(() => {
     const layer = layerRef.current;
     if (!layer) return;
     if (!detailReady) {
-      opacity.current = OVERVIEW_OPACITY;
+      opacity.current = target;
       layer.setOpacity(opacity.current);
       return;
     }
@@ -29,7 +32,7 @@ export function CityOverviewLayer({ map, enabled, detailReady }: { map: any; ena
     };
     frame = requestAnimationFrame(fade);
     return () => cancelAnimationFrame(frame);
-  }, [detailReady, map, enabled]);
+  }, [detailReady, map, enabled, target]);
   useEffect(() => {
     const AMap = (window as any).AMap;
     if (!map || !enabled || !AMap?.TileLayer) return;
@@ -44,7 +47,7 @@ export function CityOverviewLayer({ map, enabled, detailReady }: { map: any; ena
       if (controller.signal.aborted || data.schemaVersion !== 3 || !validTileIndex(data.tiles)) return;
       const index = data.tiles;
       const keys = new Set(index.keys);
-      opacity.current = detail.current ? 0 : OVERVIEW_OPACITY;
+      opacity.current = detail.current ? 0 : overviewOpacity.current;
       layer = new AMap.TileLayer({
         getTileUrl(x: number, y: number, z: number) {
           const key = `${z}/${x}/${y}`;

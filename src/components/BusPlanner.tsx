@@ -7,7 +7,7 @@ import { loadGameCity, loadPublishedCities } from '../utils/publishedTransit';
 import { PLANNER_CORRIDOR_KM, plannerCityKey, plannerCorridorCities } from '../utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../utils/plannerStops';
 import { PlannerStationField, type PlannerStationInput } from './PlannerStationField';
-import { MAX_SAVED_BUS_LEGS, MAX_TRANSFER_RADIUS, paretoBusPlans, planSavedBus, transfers } from '../utils/savedBusPlanner';
+import { MAX_SAVED_BUS_LEGS, MAX_TRANSFER_RADIUS, paretoBusPlans, planSavedBus, recommendedBusPlans, transfers } from '../utils/savedBusPlanner';
 import { verifyWalking } from '../utils/plannerWalking';
 interface Props {
   onClose: () => void;
@@ -236,7 +236,9 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
         verifiedPoints.push(...result.points.slice(1));
       }
       check();
-      setResolved(verifiedPoints); setPlans(combined); setSelected(0); onDraw(combined[0]);
+      const recommendations = recommendedBusPlans(combined);
+      onDraw(recommendations[0]);
+      setResolved(verifiedPoints); setPlans(recommendations); setSelected(0);
       setStatus(transferCalls ? '部分路段使用备用规划。' : catalogFailed || unavailableCities.size
         ? '已找到方案，部分沿途线网暂时无法读取。' : '已找到基于 Busline 收录线网的方案。');
     } catch (e: any) { if (isCurrent()) { setError(e.message || '规划失败，请重试。'); setStatus(''); } }
@@ -251,7 +253,7 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
       <button type="button" className="shrink-0 font-bold text-m3-primary" onClick={stopPicking}>取消选站</button>
     </div>}
     <div hidden={Boolean(picking)} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-3">
-      <p className="text-[11px] text-slate-500 leading-relaxed">优先用 Busline 收录的公交线路，步行接驳由道路接口核验。方案比较换乘次数和步行距离，出发前请核实班次。</p>
+      <p className="text-[11px] text-slate-500 leading-relaxed">优先使用 Busline 收录线路。推荐方案综合步行、换乘和乘车距离，步行接驳由道路接口核验。</p>
       <form onSubmit={event => { event.preventDefault(); void search(); }} className="space-y-2">
         <PlannerStationField label="起点" value={origin} onChange={setOrigin} load={loadStations} onPick={() => pick('起点')} disabled={busy || disabled} fieldClassName={field} />
         <PlannerStationField label="终点" value={destination} onChange={setDestination} load={loadStations} onPick={() => pick('终点')} disabled={busy || disabled} fieldClassName={field} />
@@ -268,7 +270,7 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
       {error && <p role="alert" className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900 whitespace-pre-wrap leading-relaxed">{error}</p>}
       {resolved.length > 0 && <div className="text-[10px] text-slate-500">已定位：{resolved.map(point => `${point.city}·${point.name}`).join(' → ')}</div>}
       {plans.length > 0 && <>
-        <div className="flex flex-wrap gap-2">{plans.map((plan, index) => <button key={index} onClick={() => { setSelected(index); onDraw(plan); }} className={`min-w-20 flex-1 rounded-xl p-2 text-[11px] ${selected === index ? 'bg-m3-primary text-white' : 'bg-m3-surface-container text-slate-600'}`}>换乘 {transfers(plan)} 次<br />步行 {plannerDistance(plan.walking)}</button>)}</div>
+        <div className="flex flex-wrap gap-2">{plans.map((plan, index) => <button key={index} onClick={() => { onDraw(plan); setSelected(index); }} className={`min-w-20 flex-1 rounded-xl p-2 text-[11px] ${selected === index ? 'bg-m3-primary text-white' : 'bg-m3-surface-container text-slate-600'}`}>{index === 0 && <span className="block font-bold">推荐</span>}换乘 {transfers(plan)} 次<br />步行 {plannerDistance(plan.walking)}</button>)}</div>
         <p className="text-[10px] text-slate-500">公交 {plans[selected].buses} 段 · 全程约 {plannerDistance(plans[selected].distance)}。{plans[selected].steps.every(step => step.mode === 'WALK' || step.time > 0) ? `预计 ${plannerDuration(plans[selected].time)}，请核实班次和候车时间。` : '班次和候车时间待核实。'}</p>
         {plans[selected].steps.map((step, index) => <div key={index} className="rounded-2xl border border-m3-outline-variant/40 p-3 flex gap-2 text-xs leading-relaxed">{step.mode === 'WALK' ? <Footprints className="w-4 h-4 shrink-0 text-amber-700" /> : <Bus className="w-4 h-4 shrink-0 text-m3-primary" />}<span>{index + 1}. {step.instruction}</span></div>)}
       </>}

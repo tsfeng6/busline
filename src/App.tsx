@@ -1139,8 +1139,14 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(() => Boolean(getWechatRegistrationToken()));
   const [showBuslineAI, setShowBuslineAI] = useState(false);
   const [showBusPlanner, setShowBusPlanner] = useState(false);
+  const [plannerRouteVisible, setPlannerRouteVisible] = useState(false);
   const plannerOverlaysRef = useRef<any[]>([]);
   const plannerSearchVersionRef = useRef(0);
+  const clearBusPlan = () => {
+    if (plannerOverlaysRef.current.length) mapRef.current?.remove(plannerOverlaysRef.current);
+    plannerOverlaysRef.current = [];
+    setPlannerRouteVisible(false);
+  };
   const plannerStopPickerRef = useRef<((station: PlannerPoint) => void) | null>(null);
   const setPlannerStopPicker = useCallback((handler: ((station: PlannerPoint) => void) | null) => {
     plannerStopPickerRef.current = handler;
@@ -5934,8 +5940,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setSharedCityStatus('');
     roadLookupVersionRef.current++;
     dismissSearchSuggestions();
-    if (plannerOverlaysRef.current.length && mapRef.current) mapRef.current.remove(plannerOverlaysRef.current);
-    plannerOverlaysRef.current = [];
+    clearBusPlan();
     setShowTimeline(false);
     setTimelineAvailable(false);
     displayedLineNamesRef.current = [];
@@ -6500,10 +6505,16 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     const overlays: any[] = [];
     plan.steps.forEach(step => {
       if (step.path.length < 2) return;
-      overlays.push(new AMap.Polyline({ path: step.path, strokeColor: step.mode === 'WALK' ? '#B58A52' : '#52796F',
-        strokeWeight: step.mode === 'WALK' ? 4 : 6, strokeStyle: step.mode === 'WALK' ? 'dashed' : 'solid', strokeOpacity: 0.95, zIndex: 80, lineJoin: 'round', lineCap: 'round' }));
+      const walking = step.mode === 'WALK';
+      const options = { path: step.path, strokeStyle: walking ? 'dashed' : 'solid', strokeOpacity: 1,
+        lineJoin: 'round', lineCap: 'round', bubble: true };
+      overlays.push(
+        new AMap.Polyline({ ...options, strokeColor: '#775419', strokeWeight: walking ? 6 : 9, zIndex: 80 }),
+        new AMap.Polyline({ ...options, strokeColor: '#FFD43B', strokeWeight: walking ? 4 : 7, zIndex: 81 }),
+      );
     });
     plannerOverlaysRef.current = overlays;
+    setPlannerRouteVisible(Boolean(overlays.length));
     map.add(overlays);
     if (overlays.length) map.setFitView(overlays, false, [100, 50, 120, window.innerWidth >= 640 ? 440 : 50]);
   };
@@ -6814,7 +6825,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       </AnimatePresence>
 
       <AnimatePresence>
-        {showBusPlanner && <BusPlanner onClose={() => { setShowBusPlanner(false); if (plannerOverlaysRef.current.length) mapRef.current?.remove(plannerOverlaysRef.current); plannerOverlaysRef.current = []; }}
+        {showBusPlanner && <BusPlanner onClose={() => { setShowBusPlanner(false); clearBusPlan(); }}
           currentCity={currentCity} onMapPick={setPlannerStopPicker}
           disabled={isSearching || loading || showMinigameModal || isDrawingMode}
           onClear={() => { handleClear(); plannerSearchVersionRef.current = searchVersionRef.current; }} onDraw={drawBusPlan} />}
@@ -7014,7 +7025,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 <Route className="h-4.5 w-4.5" />
               </button>}
               <div className="pointer-events-auto shrink-0">
-                <button onClick={() => { setShowBuslineAI(prev => !prev); setShowBusPlanner(false); }} title="Busline AI" aria-label="打开 Busline AI"
+                <button onClick={() => { setShowBuslineAI(prev => !prev); setShowBusPlanner(false); clearBusPlan(); }} title="Busline AI" aria-label="打开 Busline AI"
                   className="backdrop-blur-md bg-m3-primary-container/95 text-m3-on-primary-container border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center hover:scale-105 transition-all duration-200 active:scale-95">
                   <Sparkles className="w-4.5 h-4.5" />
                 </button>
@@ -7044,11 +7055,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       <main className="relative flex-1">
         <div className="relative w-full h-full">
-          <CityOverviewLayer map={mapInstance} enabled={!showTimeline && !showMinigameModal} detailReady={viewportDetailReady} />
+          <CityOverviewLayer map={mapInstance} enabled={!showTimeline && !showMinigameModal} detailReady={viewportDetailReady} subdued={plannerRouteVisible} />
           <ViewportTransitLayer map={mapInstance}
             enabled={sharedCityDataEnabled && !showTimeline && !showMinigameModal}
             stationMode={stationMode} thick={lineThickness === 'thick'} stationLineStats={stationLineStats}
-            subdued={!!activeBusLine || coverageActive || timelineAvailable}
+            subdued={plannerRouteVisible || !!activeBusLine || coverageActive || timelineAvailable}
             blocked={viewportLineBlocked} selection={viewportSelectionRef} onStats={setViewportStats} onDetailReady={setViewportDetailReady} />
           <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
 

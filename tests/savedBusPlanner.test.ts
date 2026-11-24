@@ -6,7 +6,7 @@ import { distanceMeters, type Point, type PublishedCity } from '../src/utils/loc
 import type { CityDataset } from '../src/utils/cityDataset';
 import { plannerCorridorCities } from '../src/utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
-import { planSavedBus, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
+import { planSavedBus, recommendedBusPlans, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
 
 const point = (lng: number): Point => [lng, 40];
 const place = (lng: number): PlannerPoint => ({ city: '北京市', name: String(lng), location: point(lng) });
@@ -45,6 +45,19 @@ test('does not draw a straight-line shortcut when a walking connection is unavai
   assert.ok(plans.length);
   assert.ok(plans.every(plan => plan.steps.every(step => step.mode !== 'WALK'
     || step.path[0][0] !== 116.020 || step.path.at(-1)?.[0] !== 116.021)));
+});
+
+test('recommends a short ride with a verified walk over a zero-walk detour', async () => {
+  const origin = place(116), destination = place(116.1);
+  const lines = [
+    bus('绕行1路', 116, 116.5, 116.1),
+    bus('顺路2路', 116.002, 116.05, 116.1),
+  ];
+  const plans = await planSavedBus(lines, origin, destination, 500, verify, () => false);
+  const [recommended, detour] = recommendedBusPlans(plans);
+  assert.match(recommended.steps.find(step => step.mode === 'BUS')!.instruction, /^顺路2路/);
+  assert.ok(recommended.walking > 0);
+  assert.equal(detour, undefined);
 });
 
 const city = (name: string, province: string, bounds: PublishedCity['bounds']): PublishedCity => ({
