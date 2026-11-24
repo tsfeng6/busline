@@ -7,7 +7,7 @@ import { loadGameCity, loadPublishedCities } from '../utils/publishedTransit';
 import { PLANNER_CORRIDOR_KM, plannerCityKey, plannerCorridorCities } from '../utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../utils/plannerStops';
 import { PlannerStationField, type PlannerStationInput } from './PlannerStationField';
-import { MAX_SAVED_BUS_LEGS, MAX_TRANSFER_RADIUS, paretoBusPlans, planSavedBus, recommendedBusPlans, transfers } from '../utils/savedBusPlanner';
+import { MAX_LONG_BUS_LEGS, MAX_TRANSFER_RADIUS, paretoBusPlans, planSavedBus, recommendedBusPlans, savedBusLegLimit, transfers } from '../utils/savedBusPlanner';
 import { verifyWalking } from '../utils/plannerWalking';
 interface Props {
   onClose: () => void;
@@ -102,22 +102,25 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
     const catalogTask = loadPublishedCities().then(cities => ({ cities, failed: false }), () => ({ cities: [], failed: true }));
     const unavailableCities = new Set<string>();
     let catalogFailed = false;
-    let walkingCalls = 0;
-    let walkingDeadline = 0;
     const walkingCache = new Map<string, ReturnType<typeof verifyWalking>>();
-    const verify = (start: PlannerPoint['location'], end: PlannerPoint['location']) => {
-      const key = `${start.join(',')}>${end.join(',')}`;
-      const cached = walkingCache.get(key);
-      if (cached) return cached;
-      walkingDeadline ||= Date.now() + 30_000;
-      const remaining = walkingDeadline - Date.now();
-      if (!AMap.Walking || walkingCalls >= 32 || remaining <= 0) return Promise.resolve(null);
-      walkingCalls++;
-      const pending = verifyWalking(AMap, start, end, Math.min(8_000, remaining));
-      walkingCache.set(key, pending);
-      return pending;
-    };
-    const trySavedConnection = async (from: PlannerPoint, to: PlannerPoint) => {
+    const trySavedConnection = async (from: PlannerPoint, to: PlannerPoint, onCandidates: () => void) => {
+      const maxLegs = savedBusLegLimit(from, to);
+      const requestBudget = maxLegs * 4;
+      const timeBudget = maxLegs * 3750;
+      let walkingCalls = 0;
+      let walkingDeadline = 0;
+      const verify = (start: PlannerPoint['location'], end: PlannerPoint['location']) => {
+        const key = `${start.join(',')}>${end.join(',')}`;
+        const cached = walkingCache.get(key);
+        if (cached) return cached;
+        walkingDeadline ||= Date.now() + timeBudget;
+        const remaining = walkingDeadline - Date.now();
+        if (!AMap.Walking || walkingCalls >= requestBudget || remaining <= 0) return Promise.resolve(null);
+        walkingCalls++;
+        const pending = verifyWalking(AMap, start, end, Math.min(8_000, remaining));
+        walkingCache.set(key, pending);
+        return pending;
+      };
       setStatus('正在查找沿途已收录线网…');
       const { cities: catalog, failed } = await catalogTask;
       catalogFailed ||= failed;
@@ -140,7 +143,10 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
         }
         check();
         setStatus('正在比较换乘次数与步行距离…');
-        const results = await planSavedBus(networks.flatMap(data => data.lines), from, to, maxWalk * 1000, verify, () => !isCurrent());
+        const results = await planSavedBus(networks.flatMap(data => data.lines), from, to, maxWalk * 1000, verify, () => !isCurrent(), () => {
+          setStatus('正在核验步行接驳…');
+          onCandidates();
+        });
         if (results.length) return results;
       }
       return [];
@@ -221,15 +227,18 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
       for (let index = 0; index < points.length - 1; index++) {
         const from = points[index], to = points[index + 1];
         let savedPlans: BusPlan[] = [];
+        let hadCandidates = false;
         try {
-          savedPlans = await trySavedConnection(from, to);
+          savedPlans = await trySavedConnection(from, to, () => { hadCandidates = true; });
         } catch (error) {
           if (!enableAI) throw error;
         }
         check();
         if (!savedPlans.length && !enableAI) throw new Error(catalogFailed || unavailableCities.size
           ? '部分沿途线网暂时无法读取，现有数据未找到完整方案。请稍后重试或开启备用规划。'
-          : '已收录线网中暂未找到完整方案。可添加其他城市的公交换乘站，或开启备用规划。');
+          : hadCandidates
+            ? '已找到公交接续，但未能核验出符合总步行上限的完整方案。可检查步行上限，或开启备用规划。'
+            : '已收录线网中暂未找到符合换乘和步行限制的公交接续。可指定途经公交站，或开启备用规划。');
         const result = savedPlans.length ? { plans: savedPlans, points: [from, to] } : await tryConnection(from, to, 0);
         combined = merge(combined, result.plans);
         if (!combined.length) throw new Error('组合方案的步行总距离超过限制，请调整换乘点。');
@@ -259,7 +268,7 @@ export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, 
         <PlannerStationField label="终点" value={destination} onChange={setDestination} load={loadStations} onPick={() => pick('终点')} disabled={busy || disabled} fieldClassName={field} />
         <label className="flex items-center gap-2 text-xs font-bold text-m3-primary py-1"><input type="checkbox" checked={enableAI} disabled={busy} onChange={e => setEnableAI(e.target.checked)} className="accent-m3-primary" />收录线网无结果时，尝试高德与 AI 备用规划</label>
         <details><summary className="text-xs font-bold text-m3-primary cursor-pointer py-1">分段规划与步行设置</summary>
-          <p className="text-[10px] text-slate-500 my-2">自动搜索沿途城市线网。每段最多搭乘 {MAX_SAVED_BUS_LEGS} 趟公交，换乘站直线间距最多 {MAX_TRANSFER_RADIUS} 米。可指定途经站，每行填“城市|公交站名”。</p>
+          <p className="text-[10px] text-slate-500 my-2">自动搜索沿途城市线网。长距离规划最多搭乘 {MAX_LONG_BUS_LEGS} 趟公交，换乘站直线间距最多 {MAX_TRANSFER_RADIUS} 米。可指定途经站，每行填“城市|公交站名”。</p>
           <textarea aria-label="途经换乘点" rows={3} disabled={busy} value={via} onChange={e => setVia(e.target.value)} placeholder={'涿州市|具体公交换乘站名\n保定市|具体公交换乘站名'} className={field} />
           <label className="text-xs text-slate-600 flex items-center gap-2 mt-2">总步行上限<input aria-label="总步行上限（公里）" type="number" min={1} max={50} disabled={busy} value={maxWalk} onChange={e => setMaxWalk(Math.max(1, Math.min(50, Number(e.target.value) || 1)))} className="w-16 rounded-lg p-1 border border-m3-outline-variant" />公里</label>
         </details>

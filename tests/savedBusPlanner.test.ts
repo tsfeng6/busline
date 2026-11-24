@@ -6,7 +6,7 @@ import { distanceMeters, type Point, type PublishedCity } from '../src/utils/loc
 import type { CityDataset } from '../src/utils/cityDataset';
 import { plannerCorridorCities } from '../src/utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
-import { planSavedBus, recommendedBusPlans, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
+import { planSavedBus, recommendedBusPlans, savedBusCandidates, savedBusLegLimit, transfers } from '../src/utils/savedBusPlanner';
 
 const point = (lng: number): Point => [lng, 40];
 const place = (lng: number): PlannerPoint => ({ city: '北京市', name: String(lng), location: point(lng) });
@@ -92,6 +92,25 @@ test('a through bus crossing a province boundary does not count as a transfer', 
   assert.equal(plans.length, 1);
   assert.equal(plans[0].buses, 1);
   assert.equal(plans[0].walking, 0);
+});
+
+test('long trips can chain more than eight buses even inside one municipality', async () => {
+  const longRoute = Array.from({ length: 12 }, (_, index) =>
+    bus(`接驳${index + 1}路`, 113 + index * .25, 113 + (index + 1) * .25));
+  const origin = place(113), destination = place(116);
+  assert.equal(savedBusLegLimit(origin, place(113.25)), 8);
+  assert.equal(savedBusCandidates(longRoute, origin, destination, 100, new Map(), 8).length, 0);
+  const plans = await planSavedBus(longRoute, origin, destination, 100, verify, () => false);
+  assert.equal(plans[0].buses, 12);
+  assert.equal(plans[0].walking, 0);
+});
+
+test('indicates reachable bus candidates without returning an unverified plan', async () => {
+  let found = false;
+  const plans = await planSavedBus([bus('1路', 116.001, 116.04)], place(116), place(116.04), 200,
+    async () => null, () => false, () => { found = true; });
+  assert.equal(found, true);
+  assert.deepEqual(plans, []);
 });
 
 test('station suggestions are restricted to bus platforms and preserve separate same-name platforms', () => {

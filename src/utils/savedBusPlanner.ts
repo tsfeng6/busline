@@ -4,6 +4,7 @@ import { isLocalBusLine } from './busPlanner';
 import { distanceMeters, type Point } from './localTransit';
 
 export const MAX_SAVED_BUS_LEGS = 8;
+export const MAX_LONG_BUS_LEGS = 20;
 export const MAX_TRANSFER_RADIUS = 800;
 const gridSize = .01;
 const BUS_DISTANCE_WEIGHT = .22;
@@ -11,9 +12,10 @@ const TRANSFER_COST = 450;
 
 type Stop = { name: string; point: Point; key: string };
 type Ride = { route: number; line: BusLine; stops: Stop[]; from: number; to: number };
-type Label = { walk: number; busDistance: number; rides: Ride[] };
+type RideChain = { ride: Ride; previous?: RideChain };
+type Label = { walk: number; busDistance: number; chain?: RideChain };
 type Walk = { from: Stop; to: Stop };
-type Candidate = Label & { walks: Walk[] };
+type Candidate = { walk: number; busDistance: number; rides: Ride[]; walks: Walk[] };
 type WalkResults = Map<string, PlannerStep | null>;
 type TransferLink = { stop: Stop; distance: number };
 
@@ -38,6 +40,11 @@ export function paretoBusPlans(plans: BusPlan[]): BusPlan[] {
 }
 
 export function transfers(plan: BusPlan) { return Math.max(0, plan.buses - 1); }
+
+export function savedBusLegLimit(origin: PlannerPoint, destination: PlannerPoint): number {
+  const distance = distanceMeters(origin.location, destination.location);
+  return Math.min(MAX_LONG_BUS_LEGS, MAX_SAVED_BUS_LEGS + Math.ceil(Math.max(0, distance - 40_000) / 20_000));
+}
 
 export function busPlanScore(plan: BusPlan) {
   return plan.walking + transfers(plan) * TRANSFER_COST + Math.max(0, plan.distance - plan.walking) * BUS_DISTANCE_WEIGHT;
@@ -116,21 +123,29 @@ export function savedBusCandidates(
   lines: readonly BusLine[], origin: PlannerPoint, destination: PlannerPoint,
   walkingLimit: number, verified: WalkResults, maxLegs = MAX_SAVED_BUS_LEGS,
 ): Candidate[] {
-  return findCandidates(indexSavedNetwork(lines), origin, destination, walkingLimit, verified, maxLegs);
+  return [...findCandidates(indexSavedNetwork(lines), origin, destination, walkingLimit, verified, maxLegs)]
+    .filter((candidate): candidate is Candidate => candidate !== undefined);
 }
 
 // Each round scans only lines with a reachable boarding platform.
-function findCandidates(
+function* findCandidates(
   { platforms, routes, routesByPlatform, transfersFrom }: ReturnType<typeof indexSavedNetwork>,
   origin: PlannerPoint, destination: PlannerPoint, walkingLimit: number, verified: WalkResults,
   maxLegs = MAX_SAVED_BUS_LEGS, busWeight = 0,
-): Candidate[] {
+): Generator<Candidate | undefined> {
   const start = stopAt(origin.name, origin.location);
   const end = stopAt(destination.name, destination.location);
-  const walkCost = (from: Stop, to: Stop, directDistance?: number) => {
+  const verifiedByStart = new Map<string, WalkResults>();
+  for (const [key, result] of verified) {
+    const [from, to] = key.split('>');
+    const links = verifiedByStart.get(from) ?? new Map();
+    links.set(to, result);
+    verifiedByStart.set(from, links);
+  }
+  const walkCost = (from: Stop, to: Stop) => {
     if (from.key === to.key) return 0;
-    const result = verified.get(walkKey({ from, to }));
-    return result === null ? Infinity : result?.distance ?? directDistance ?? distanceMeters(from.point, to.point);
+    const result = verifiedByStart.get(from.key)?.get(to.key);
+    return result === null ? Infinity : result?.distance ?? distanceMeters(from.point, to.point);
   };
   const score = (label: Label) => label.walk + label.busDistance * busWeight;
   const keep = (labels: Map<string, Label>, stop: Stop, label: Label) => {
@@ -139,9 +154,8 @@ function findCandidates(
   };
 
   let boardable = new Map<string, Label>();
-  for (const stop of platforms.values()) keep(boardable, stop, { walk: walkCost(start, stop), busDistance: 0, rides: [] });
+  for (const stop of platforms.values()) keep(boardable, stop, { walk: walkCost(start, stop), busDistance: 0 });
   const bestBoarding = new Map([...boardable].map(([key, label]) => [key, score(label)]));
-  const candidates: Candidate[] = [];
   for (let leg = 0; leg < maxLegs && boardable.size; leg++) {
     const arrivals = new Map<string, Label>();
     const activeRoutes = new Set<number>();
@@ -157,7 +171,7 @@ function findCandidates(
         if (boarding) keep(arrivals, stop, {
           walk: boarding.label.walk,
           busDistance: boarding.label.busDistance + distances[index] - distances[boarding.index],
-          rides: [...boarding.label.rides, { route, line, stops, from: boarding.index, to: index }],
+          chain: { ride: { route, line, stops, from: boarding.index, to: index }, previous: boarding.label.chain },
         });
         const here = boardable.get(stop.key);
         if (here) {
@@ -176,26 +190,33 @@ function findCandidates(
       const finish = label.walk + walkCost(stop, end);
       if (finish <= walkingLimit && (!best || finish + label.busDistance * busWeight < score(best))) best = { ...label, walk: finish };
       if (leg + 1 === maxLegs) continue;
+      const verifiedLinks = verifiedByStart.get(key);
       for (const { stop: next, distance } of transfersFrom(stop)) {
-        const walk = label.walk + walkCost(stop, next, distance);
+        const result = verifiedLinks?.get(next.key);
+        if (result === null) continue;
+        const walk = label.walk + (result?.distance ?? distance);
         if (walk + label.busDistance * busWeight < (bestBoarding.get(next.key) ?? Infinity) - 1e-6) {
           keep(boardable, next, { ...label, walk });
         }
       }
     }
+    let candidate: Candidate | undefined;
     if (best) {
+      const rides: Ride[] = [];
+      for (let chain = best.chain; chain; chain = chain.previous) rides.push(chain.ride);
+      rides.reverse();
       const walks: Walk[] = [];
       let from = start;
-      for (const ride of best.rides) {
+      for (const ride of rides) {
         walks.push({ from, to: ride.stops[ride.from] });
         from = ride.stops[ride.to];
       }
       walks.push({ from, to: end });
-      candidates.push({ ...best, walks });
+      candidate = { walk: best.walk, busDistance: best.busDistance, rides, walks };
     }
     for (const [key, label] of boardable) bestBoarding.set(key, score(label));
+    yield candidate;
   }
-  return candidates;
 }
 
 function rideStep({ line, stops, from, to }: Ride): PlannerStep {
@@ -220,43 +241,62 @@ export async function planSavedBus(
   lines: readonly BusLine[], origin: PlannerPoint, destination: PlannerPoint, walkingLimit: number,
   verify: (from: PlannerPoint['location'], to: PlannerPoint['location']) => Promise<PlannerStep | null>,
   cancelled: () => boolean,
+  onCandidates?: () => void,
 ): Promise<BusPlan[]> {
   const verified: WalkResults = new Map();
   const plans: BusPlan[] = [];
   const accepted = new Set<string>();
   const network = indexSavedNetwork(lines);
+  const maxLegs = savedBusLegLimit(origin, destination);
+  const maxChecks = Math.max(24, maxLegs * 3);
   let checks = 0;
   // Straight-line distances only rank candidates. Every displayed walking leg
   // must be verified against the road network. Re-solve with measured weights.
   for (let pass = 0; pass < 4 && !cancelled(); pass++) {
-    const candidates = [BUS_DISTANCE_WEIGHT, 0].flatMap(weight =>
-      findCandidates(network, origin, destination, walkingLimit, verified, MAX_SAVED_BUS_LEGS, weight));
+    const candidates: Candidate[] = [];
+    let lastYield = Date.now();
+    for (const weight of [BUS_DISTANCE_WEIGHT, 0]) {
+      for (const candidate of findCandidates(network, origin, destination, walkingLimit, verified, maxLegs, weight)) {
+        if (candidate) candidates.push(candidate);
+        if (Date.now() - lastYield >= 32) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+          if (cancelled()) return [];
+          lastYield = Date.now();
+        }
+      }
+    }
+    if (!candidates.length) break;
+    onCandidates?.();
     const score = (candidate: Candidate) => candidate.walk + candidate.busDistance * BUS_DISTANCE_WEIGHT + (candidate.rides.length - 1) * TRANSFER_COST;
     candidates.sort((a, b) => score(a) - score(b));
     const before = checks;
     for (const candidate of candidates) {
       const key = candidate.rides.map(ride => `${ride.route}:${ride.from}>${ride.to}`).join('|');
       if (accepted.has(key)) continue;
-      const steps: PlannerStep[] = [];
+      const walkingSteps = new Map<number, PlannerStep>();
       let complete = true;
       for (let index = 0; index < candidate.walks.length; index++) {
         if (cancelled()) return [];
         const walk = candidate.walks[index];
         if (walk.from.key !== walk.to.key) {
           const key = walkKey(walk);
-          if (!verified.has(key) && checks < 24) {
+          if (!verified.has(key) && checks < maxChecks) {
             checks++;
             verified.set(key, await verify(walk.from.point, walk.to.point));
           }
           const result = verified.get(key);
           if (!result) { complete = false; break; }
-          steps.push({ ...result, instruction: `步行至${walk.to.name}` });
+          walkingSteps.set(index, { ...result, instruction: `步行至${walk.to.name}` });
         }
-        if (candidate.rides[index]) steps.push(rideStep(candidate.rides[index]));
       }
-      const walking = steps.reduce((sum, step) => sum + (step.mode === 'WALK' ? step.distance : 0), 0);
+      const walking = [...walkingSteps.values()].reduce((sum, step) => sum + step.distance, 0);
       if (complete && walking <= walkingLimit) {
         accepted.add(key);
+        const steps = candidate.walks.flatMap((_, index) => {
+          const walk = walkingSteps.get(index);
+          const ride = candidate.rides[index];
+          return [...(walk ? [walk] : []), ...(ride ? [rideStep(ride)] : [])];
+        });
         plans.push({
           steps, walking, buses: candidate.rides.length,
           distance: steps.reduce((sum, step) => sum + step.distance, 0),
@@ -264,7 +304,7 @@ export async function planSavedBus(
         });
       }
     }
-    if (checks === before || checks >= 24) break;
+    if (checks === before || checks >= maxChecks) break;
   }
   return paretoBusPlans(plans);
 }
