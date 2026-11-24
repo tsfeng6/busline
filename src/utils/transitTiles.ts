@@ -1,4 +1,4 @@
-import { mercatorY } from './cityOverview';
+import { CITY_DETAIL_ZOOM, mercatorY } from './cityOverview';
 
 export const TRANSIT_TILE_LEVELS = [13, 15] as const;
 export const TRANSIT_TILE_EXTENT = 4096;
@@ -102,8 +102,7 @@ export function tilesInBounds(bounds: TransitBounds, z: number, padding = 0): Tr
 }
 
 export function transitLevel(zoom: number): number | null {
-  // Start drawing the coarse vectors before reaching the interactive detail zoom.
-  if (zoom < 12) return null;
+  if (zoom < CITY_DETAIL_ZOOM) return null;
   return zoom < 15 ? 13 : 15;
 }
 

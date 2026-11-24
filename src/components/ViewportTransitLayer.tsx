@@ -1,7 +1,6 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { TransitTileCache } from '../utils/transitTileCache';
 import { transitTileTransport } from '../utils/transitTileTransport';
-import { CITY_DETAIL_ZOOM } from '../utils/cityOverview';
 import {
   TRANSIT_TILE_EXTENT as EXTENT, tileKey, tileLngLat, tileAncestor, tilesInBounds, transitLevel,
   transitTileSource, transitTileIndexed, validTransitTileIndex, type TileRoute, type TileStop, type TransitTileData, type TransitBounds, type TransitPoint, type TransitTile,
@@ -139,7 +138,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
           geometry.names.forEach(name => routes.add(name));
           context.stroke(geometry.path);
           context.restore();
-          if (zoom < CITY_DETAIL_ZOOM || settings.stationMode === 'none') continue;
+          if (settings.stationMode === 'none') continue;
           const dx = east.x - origin.x, dy = east.y - origin.y;
           const sx = south.x - origin.x, sy = south.y - origin.y;
           for (const stop of data.stops) {
