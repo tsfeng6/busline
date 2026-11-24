@@ -3,7 +3,7 @@ import type { BusPlan, PlannerPoint, PlannerStep } from './busPlanner';
 import { isLocalBusLine } from './busPlanner';
 import { distanceMeters, type Point } from './localTransit';
 
-export const MAX_SAVED_BUS_LEGS = 5;
+export const MAX_SAVED_BUS_LEGS = 8;
 export const MAX_TRANSFER_RADIUS = 800;
 const gridSize = .01;
 
@@ -34,18 +34,11 @@ export function paretoBusPlans(plans: BusPlan[]): BusPlan[] {
 
 export function transfers(plan: BusPlan) { return Math.max(0, plan.buses - 1); }
 
-/**
- * One round per boarding. Each line is scanned once in its saved direction
- * per round, keeping the cheapest reachable boarding before each stop.
- */
-export function savedBusCandidates(
-  lines: readonly BusLine[], origin: PlannerPoint, destination: PlannerPoint,
-  walkingLimit: number, verified: WalkResults, maxLegs = MAX_SAVED_BUS_LEGS,
-): Candidate[] {
-  const start = stopAt(origin.name, origin.location);
-  const end = stopAt(destination.name, destination.location);
+function indexSavedNetwork(lines: readonly BusLine[]) {
   const platforms = new Map<string, Stop>();
   const routes: { line: BusLine; stops: Stop[] }[] = [];
+  const routesByPlatform = new Map<string, number[]>();
+  const routeKeys = new Set<string>();
   for (const line of lines) {
     if (!isLocalBusLine(line.name) || !line.via_stops || line.via_stops.length < 2) continue;
     const stops = line.via_stops.flatMap(stop => {
@@ -54,7 +47,17 @@ export function savedBusCandidates(
       return stop?.name && point.every(Number.isFinite) ? [stopAt(stop.name, point)] : [];
     });
     if (stops.length !== line.via_stops.length) continue;
-    for (const stop of stops) platforms.set(stop.key, stop);
+    // The same service can appear in multiple city snapshots. Keep distinct
+    // directions and stopping patterns, even if the route name is shared.
+    const routeKey = JSON.stringify([line.name, stops.map(stop => [stop.key, stop.name])]);
+    if (routeKeys.has(routeKey)) continue;
+    routeKeys.add(routeKey);
+    for (const stop of stops) {
+      platforms.set(stop.key, stop);
+      const servingRoutes = routesByPlatform.get(stop.key) ?? [];
+      if (servingRoutes.at(-1) !== routes.length) servingRoutes.push(routes.length);
+      routesByPlatform.set(stop.key, servingRoutes);
+    }
     routes.push({ line, stops });
   }
   const grid = new Map<string, Stop[]>();
@@ -64,6 +67,24 @@ export function savedBusCandidates(
     cell.push(stop);
     grid.set(key, cell);
   }
+  return { platforms, routes, routesByPlatform, grid };
+}
+
+export function savedBusCandidates(
+  lines: readonly BusLine[], origin: PlannerPoint, destination: PlannerPoint,
+  walkingLimit: number, verified: WalkResults, maxLegs = MAX_SAVED_BUS_LEGS,
+): Candidate[] {
+  return findCandidates(indexSavedNetwork(lines), origin, destination, walkingLimit, verified, maxLegs);
+}
+
+// Each round scans only lines with a reachable boarding platform.
+function findCandidates(
+  { platforms, routes, routesByPlatform, grid }: ReturnType<typeof indexSavedNetwork>,
+  origin: PlannerPoint, destination: PlannerPoint, walkingLimit: number, verified: WalkResults,
+  maxLegs = MAX_SAVED_BUS_LEGS,
+): Candidate[] {
+  const start = stopAt(origin.name, origin.location);
+  const end = stopAt(destination.name, destination.location);
   const walkCost = (from: Stop, to: Stop) => {
     if (from.key === to.key) return 0;
     const result = verified.get(walkKey({ from, to }));
@@ -75,10 +96,16 @@ export function savedBusCandidates(
 
   let boardable = new Map<string, Label>();
   for (const stop of platforms.values()) keep(boardable, stop, { walk: walkCost(start, stop), rides: [] });
+  const bestBoarding = new Map([...boardable].map(([key, label]) => [key, label.walk]));
   const candidates: Candidate[] = [];
   for (let leg = 0; leg < maxLegs && boardable.size; leg++) {
     const arrivals = new Map<string, Label>();
-    for (const { line, stops } of routes) {
+    const activeRoutes = new Set<number>();
+    for (const platform of boardable.keys()) {
+      for (const route of routesByPlatform.get(platform) ?? []) activeRoutes.add(route);
+    }
+    for (const route of activeRoutes) {
+      const { line, stops } = routes[route];
       let boarding: { index: number; label: Label } | undefined;
       for (let index = 0; index < stops.length; index++) {
         const stop = stops[index];
@@ -103,7 +130,8 @@ export function savedBusCandidates(
         for (let dy = -1; dy <= 1; dy++) {
           for (const next of grid.get(gridKey(x + dx, y + dy)) ?? []) {
             if (distanceMeters(stop.point, next.point) > MAX_TRANSFER_RADIUS) continue;
-            keep(boardable, next, { walk: label.walk + walkCost(stop, next), rides: label.rides });
+            const walk = label.walk + walkCost(stop, next);
+            if (walk < (bestBoarding.get(next.key) ?? Infinity)) keep(boardable, next, { walk, rides: label.rides });
           }
         }
       }
@@ -118,6 +146,7 @@ export function savedBusCandidates(
       walks.push({ from, to: end });
       candidates.push({ ...best, walks });
     }
+    for (const [key, label] of boardable) bestBoarding.set(key, label.walk);
   }
   return candidates;
 }
@@ -147,11 +176,12 @@ export async function planSavedBus(
 ): Promise<BusPlan[]> {
   const verified: WalkResults = new Map();
   const plans: BusPlan[] = [];
+  const network = indexSavedNetwork(lines);
   let checks = 0;
   // Straight-line distances only rank candidates. Every displayed walking leg
   // must be verified against the road network. Re-solve with measured weights.
   for (let pass = 0; pass < 4 && !cancelled(); pass++) {
-    const candidates = savedBusCandidates(lines, origin, destination, walkingLimit, verified);
+    const candidates = findCandidates(network, origin, destination, walkingLimit, verified);
     const before = checks;
     for (const candidate of candidates) {
       const steps: PlannerStep[] = [];

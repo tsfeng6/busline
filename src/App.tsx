@@ -8,7 +8,7 @@ import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearch
 import { resolveAmapCredentials } from './utils/amapCredentials';
 import {MapActivityIndicator} from './components/MapActivityIndicator';
 import { CityOverviewLayer } from './components/CityOverviewLayer';
-import { ViewportTransitLayer, type ViewportTransitSelection, type ViewportRoute } from './components/ViewportTransitLayer';
+import { ViewportTransitLayer, type ViewportTransitSelection, type ViewportRoute, type ViewportStop } from './components/ViewportTransitLayer';
 import { GeometryDebugPanel } from './components/GeometryDebugPanel';
 import { CITY_DETAIL_ZOOM } from './utils/cityOverview';
 import { cityDataCache } from './utils/spatialLoader';
@@ -28,7 +28,7 @@ import { discoverStationLines, segmentGridKeys } from './utils/stationCoverage';
 import { joinLineSegments } from './utils/mapPerformance';
 import { getSuggestionKind, rankSearchSuggestions } from './utils/searchSuggestions';
 import { BusPlanner } from './components/BusPlanner';
-import type { BusPlan } from './utils/busPlanner';
+import { isLocalBusLine, type BusPlan, type PlannerPoint } from './utils/busPlanner';
 import { TimelineBar } from './components/TimelineBar';
 import { isLineOperating, updateTimelineVisibility, type TimelineOverlayEntry } from './utils/timeline';
 import { discoverCityStops, searchCityLine } from './utils/citySearch';
@@ -1141,6 +1141,31 @@ export default function App() {
   const [showBusPlanner, setShowBusPlanner] = useState(false);
   const plannerOverlaysRef = useRef<any[]>([]);
   const plannerSearchVersionRef = useRef(0);
+  const plannerStopPickerRef = useRef<((station: PlannerPoint) => void) | null>(null);
+  const setPlannerStopPicker = useCallback((handler: ((station: PlannerPoint) => void) | null) => {
+    plannerStopPickerRef.current = handler;
+    if (handler) mapPointVersionRef.current++;
+  }, []);
+  const selectPlannerStop = (station: PlannerPoint, lines: readonly string[]): boolean => {
+    const pick = plannerStopPickerRef.current;
+    if (!pick) return false;
+    if (station.city && station.name && lines.some(isLocalBusLine)) pick(station);
+    return true;
+  };
+  const pickPlannerMapStop = (point: Point, map: any): boolean => {
+    if (!plannerStopPickerRef.current) return false;
+    const pixel = map.lngLatToContainer(point);
+    let nearest = 11;
+    let selected: ViewportStop | undefined;
+    for (const stop of viewportSelectionRef.current?.stops() ?? []) {
+      if (!stop.city || !stop.lines.some(isLocalBusLine)) continue;
+      const target = map.lngLatToContainer(getLatLng(stop.location));
+      const distance = Math.hypot(pixel.x - target.x, pixel.y - target.y);
+      if (distance < nearest) { nearest = distance; selected = stop; }
+    }
+    if (selected) selectPlannerStop({ city: selected.city, name: selected.name, location: getLatLng(selected.location) }, selected.lines);
+    return true;
+  };
   const [showTimeline, setShowTimeline] = useState(false);
   const [timelineAvailable, setTimelineAvailable] = useState(false);
   const [timelineMinute, setTimelineMinute] = useState(() => new Date().getHours() * 60 + new Date().getMinutes());
@@ -2824,6 +2849,7 @@ export default function App() {
           activeBusLinePolylineRef.current = polyline;
           polyline.on('click', (e: any) => {
             const clickLngLat = [e.lnglat.getLng(), e.lnglat.getLat()];
+            if (pickPlannerMapStop(clickLngLat as Point, map)) return;
 
 
             if (!(window as any).AMap.GeometryUtil) return;
@@ -2981,6 +3007,7 @@ export default function App() {
           fillColor: getStopColor(count, '#3b82f6'),
           strokeColor: '#fff',
           strokeWeight: 1.5,
+          bubble: false,
           zIndex: 60,
           cursor: 'pointer',
           extData: { key: `${stop.location.lng},${stop.location.lat}`, type: 'busLineStop' }
@@ -2988,6 +3015,7 @@ export default function App() {
         marker.on('click', async () => {
           if (isMinigameActiveRef.current) return;
           const stopLatLng = getLatLng(stop.location);
+          if (selectPlannerStop({ city: lineCity, name: stop.name, location: stopLatLng }, [line.name])) return;
 
           setSelectionPos(stopLatLng);
           setTopCard('stop');
@@ -4953,6 +4981,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         }
         const version = ++mapPointVersionRef.current;
         const [lng, lat] = [e.lnglat.getLng(), e.lnglat.getLat()];
+        if (pickPlannerMapStop([lng, lat], map)) return;
         if (map.getZoom() >= CITY_DETAIL_ZOOM && pickViewportRef.current([lng, lat])) return;
         if (map.getZoom() < 14) return;
 
@@ -5481,6 +5510,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
           marker.on('click', () => {
             const stopPos: [number, number] = [poi.location.lng, poi.location.lat];
+            if (selectPlannerStop({ city: currentCity, name: poi.name, location: stopPos }, linesAr)) return;
 
             setSelectionPos(stopPos);
             setTopCard('stop');
@@ -5672,6 +5702,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
             marker.on('click', () => {
               const stopPos = getLatLng(poi.location);
+              if (selectPlannerStop({ city: currentCity, name: poi.name, location: stopPos }, linesArray)) return;
 
               setSelectionPos(stopPos);
               setSelectedSegmentLines(null);
@@ -6186,6 +6217,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         return;
       }
       const clickLngLat = [e.lnglat.lng, e.lnglat.lat] as [number, number];
+      if (pickPlannerMapStop(clickLngLat, map)) return;
 
       const currentZoom = map.getZoom();
       const zoomFactor = Math.max(1, Math.pow(2, 16 - currentZoom));
@@ -6402,6 +6434,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       const lnglat = event?.lnglat;
       if (!lnglat) return;
       const point: [number, number] = [lnglat.getLng(), lnglat.getLat()];
+      if (pickPlannerMapStop(point, map)) return;
       const names = [...new Set(routeIndex.query(point, 0.00018).flatMap(hit => [...hit.lines]))];
       if (!names.length) return;
       setSelectedStop(null);
@@ -6782,6 +6815,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
       <AnimatePresence>
         {showBusPlanner && <BusPlanner onClose={() => { setShowBusPlanner(false); if (plannerOverlaysRef.current.length) mapRef.current?.remove(plannerOverlaysRef.current); plannerOverlaysRef.current = []; }}
+          currentCity={currentCity} onMapPick={setPlannerStopPicker}
           disabled={isSearching || loading || showMinigameModal || isDrawingMode}
           onClear={() => { handleClear(); plannerSearchVersionRef.current = searchVersionRef.current; }} onDraw={drawBusPlan} />}
       </AnimatePresence>

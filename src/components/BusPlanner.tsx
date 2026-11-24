@@ -1,17 +1,27 @@
 import { getBuslineAIEndpoint, readBuslineAIResponse, describeBuslineAIError } from '../utils/buslineAIClient';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { X, Route, Loader2, Footprints, Bus, Search } from 'lucide-react';
 import { BusPlan, PlannerPoint, normalizeBusPlan, plannerDistance, plannerDuration } from '../utils/busPlanner';
-import { loadGameCity } from '../utils/publishedTransit';
+import { loadGameCity, loadPublishedCities } from '../utils/publishedTransit';
+import { PLANNER_CORRIDOR_KM, plannerCityKey, plannerCorridorCities } from '../utils/plannerCityCoverage';
+import { collectPlannerStations, matchPlannerStations } from '../utils/plannerStops';
+import { PlannerStationField, type PlannerStationInput } from './PlannerStationField';
 import { MAX_SAVED_BUS_LEGS, MAX_TRANSFER_RADIUS, paretoBusPlans, planSavedBus, transfers } from '../utils/savedBusPlanner';
 import { verifyWalking } from '../utils/plannerWalking';
-interface Props { onClose: () => void; disabled: boolean; onDraw: (plan: BusPlan) => void; onClear: () => void }
-export function BusPlanner({ onClose, disabled, onDraw, onClear }: Props) {
-  const [originCity, setOriginCity] = useState('北京市');
-  const [origin, setOrigin] = useState('北京西站');
-  const [destinationCity, setDestinationCity] = useState('石家庄市');
-  const [destination, setDestination] = useState('石家庄站');
+interface Props {
+  onClose: () => void;
+  disabled: boolean;
+  currentCity: string;
+  onMapPick: (handler: ((station: PlannerPoint) => void) | null) => void;
+  onDraw: (plan: BusPlan) => void;
+  onClear: () => void;
+}
+export function BusPlanner({ onClose, disabled, currentCity, onMapPick, onDraw, onClear }: Props) {
+  const initialCity = currentCity && currentCity !== '全国' ? currentCity : '北京市';
+  const [origin, setOrigin] = useState<PlannerStationInput>({ city: initialCity, name: '' });
+  const [destination, setDestination] = useState<PlannerStationInput>({ city: initialCity, name: '' });
+  const [picking, setPicking] = useState<'起点' | '终点' | null>(null);
   const [via, setVia] = useState('');
   const [maxWalk, setMaxWalk] = useState(10);
   const [busy, setBusy] = useState(false);
@@ -24,11 +34,48 @@ export function BusPlanner({ onClose, disabled, onDraw, onClear }: Props) {
   const [selected, setSelected] = useState(0);
   const [resolved, setResolved] = useState<PlannerPoint[]>([]);
   const sessionRef = useRef(0);
-  useEffect(() => () => { sessionRef.current++; aiAbortRef.current?.abort(); }, []);
+  const cityReads = useRef(new Map<string, ReturnType<typeof loadGameCity>>());
+  const stationData = useRef(new Map<string, Promise<ReturnType<typeof collectPlannerStations>>>());
+  const readCity = useCallback((city: string) => {
+    const key = plannerCityKey(city);
+    let pending = cityReads.current.get(key);
+    if (!pending) {
+      pending = loadGameCity(city.trim()).finally(() => { cityReads.current.delete(key); });
+      cityReads.current.set(key, pending);
+    }
+    return pending;
+  }, []);
+  const loadStations = useCallback((city: string) => {
+    const key = plannerCityKey(city);
+    let pending = stationData.current.get(key);
+    if (!pending) {
+      const task = readCity(city).then(collectPlannerStations).catch(error => {
+        if (stationData.current.get(key) === task) stationData.current.delete(key);
+        throw error;
+      });
+      pending = task;
+      stationData.current.set(key, task);
+      if (stationData.current.size > 6) {
+        const oldest = stationData.current.keys().next().value;
+        if (oldest !== undefined) stationData.current.delete(oldest);
+      }
+    }
+    return pending;
+  }, [readCity]);
+  const stopPicking = useCallback(() => { onMapPick(null); setPicking(null); }, [onMapPick]);
+  const pick = (label: '起点' | '终点') => {
+    setPicking(label);
+    onMapPick(station => {
+      (label === '起点' ? setOrigin : setDestination)({ city: station.city, name: station.name, station });
+      stopPicking();
+    });
+  };
+  useEffect(() => { if (disabled) stopPicking(); }, [disabled, stopPicking]);
+  useEffect(() => () => { onMapPick(null); sessionRef.current++; aiAbortRef.current?.abort(); }, [onMapPick]);
   const search = async () => {
-    if (busy || disabled || !origin.trim() || !destination.trim() || !originCity.trim() || !destinationCity.trim()) return;
+    if (busy || disabled || picking || !origin.name.trim() || !destination.name.trim() || !origin.city.trim() || !destination.city.trim()) return;
     const AMap = (window as any).AMap;
-    if (!AMap?.Walking || !AMap?.PlaceSearch) { setError('地图服务尚未就绪，请稍后重试。'); return; }
+    if (!AMap) { setError('地图服务尚未就绪，请稍后重试。'); return; }
     const session = ++sessionRef.current;
     const isCurrent = () => session === sessionRef.current;
     setBusy(true); setError(''); setPlans([]); setResolved([]); setAINotes([]); onClear();
@@ -40,43 +87,63 @@ export function BusPlanner({ onClose, disabled, onDraw, onClear }: Props) {
     }))).filter(plan => plan.walking <= maxWalk * 1000));
     const empty: BusPlan = { steps: [], time: 0, distance: 0, walking: 0, buses: 0 };
     const check = () => { if (!isCurrent()) throw new Error('规划已取消。'); };
-    const locate = async (request: { city: string; name: string }): Promise<PlannerPoint> => {
+    const locate = async (request: PlannerStationInput): Promise<PlannerPoint> => {
       check();
-      const key = `${request.city}|${request.name}`;
+      if (request.station) return request.station;
+      const key = `${plannerCityKey(request.city)}|${request.name.trim()}`;
       if (pointCache.has(key)) return pointCache.get(key)!;
-      setStatus(`正在定位：${request.city} · ${request.name}`);
-      const point = await new Promise<PlannerPoint>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error(`定位${request.name}超时`)), 12000);
-        new AMap.PlaceSearch({ city: request.city, citylimit: true, pageSize: 5, extensions: 'base' }).search(request.name, (state: string, result: any) => {
-          clearTimeout(timer);
-          const pois = result?.poiList?.pois || [];
-          const poi = pois.find((item: any) => item.name === request.name) || pois[0];
-          if (state !== 'complete' || !poi?.location) { reject(new Error(`无法定位${request.city}的“${request.name}”，请填写更具体地点。`)); return; }
-          resolve({ city: request.city, name: poi.name, location: [poi.location.lng, poi.location.lat] });
-        });
-      });
-      check(); pointCache.set(key, point); return point;
+      const matches = matchPlannerStations(await loadStations(request.city), request.name, true);
+      check();
+      if (!matches.length) throw new Error(`${request.city}没有收录“${request.name.trim()}”公交站，请检查站名和城市，或在地图上选站。`);
+      if (matches.length !== 1) throw new Error(`“${request.name.trim()}”有多个站点，请根据线路从提示中选择，或在地图上选站。`);
+      pointCache.set(key, matches[0]);
+      return matches[0];
     };
-    const savedCities = new Map<string, ReturnType<typeof loadGameCity>>();
+    const catalogTask = loadPublishedCities().then(cities => ({ cities, failed: false }), () => ({ cities: [], failed: true }));
+    const unavailableCities = new Set<string>();
+    let catalogFailed = false;
     let walkingCalls = 0;
     let walkingDeadline = 0;
+    const walkingCache = new Map<string, ReturnType<typeof verifyWalking>>();
+    const verify = (start: PlannerPoint['location'], end: PlannerPoint['location']) => {
+      const key = `${start.join(',')}>${end.join(',')}`;
+      const cached = walkingCache.get(key);
+      if (cached) return cached;
+      walkingDeadline ||= Date.now() + 30_000;
+      const remaining = walkingDeadline - Date.now();
+      if (!AMap.Walking || walkingCalls >= 32 || remaining <= 0) return Promise.resolve(null);
+      walkingCalls++;
+      const pending = verifyWalking(AMap, start, end, Math.min(8_000, remaining));
+      walkingCache.set(key, pending);
+      return pending;
+    };
     const trySavedConnection = async (from: PlannerPoint, to: PlannerPoint) => {
-      setStatus('正在读取已收录的公交线路…');
-      const cities = [...new Set([from.city, to.city].map(city => city.replace(/市$/, '')))];
-      const datasets = await Promise.all(cities.map(city => {
-        const pending = savedCities.get(city) ?? loadGameCity(city);
-        savedCities.set(city, pending);
-        return pending;
-      }));
-      check();
-      setStatus('正在比较换乘次数与步行距离…');
-      return planSavedBus(datasets.flatMap(data => data.lines), from, to, maxWalk * 1000, (start, end) => {
-        walkingDeadline ||= Date.now() + 30_000;
-        const remaining = walkingDeadline - Date.now();
-        if (walkingCalls >= 32 || remaining <= 0) return Promise.resolve(null);
-        walkingCalls++;
-        return verifyWalking(AMap, start, end, Math.min(8_000, remaining));
-      }, () => !isCurrent());
+      setStatus('正在查找沿途已收录线网…');
+      const { cities: catalog, failed } = await catalogTask;
+      catalogFailed ||= failed;
+      const attempted = new Set<string>();
+      const networks: Awaited<ReturnType<typeof readCity>>[] = [];
+      for (const radius of PLANNER_CORRIDOR_KM) {
+        check();
+        const cities = plannerCorridorCities(catalog, from, to, radius).filter(city => !attempted.has(plannerCityKey(city)));
+        if (!cities.length) continue;
+        for (let offset = 0; offset < cities.length; offset += 4) {
+          check();
+          setStatus(`正在读取沿途线网（${offset}/${cities.length}）…`);
+          const results = await Promise.allSettled(cities.slice(offset, offset + 4).map(readCity));
+          results.forEach((result, index) => {
+            const city = cities[offset + index];
+            attempted.add(plannerCityKey(city));
+            if (result.status === 'fulfilled') networks.push(result.value);
+            else unavailableCities.add(city);
+          });
+        }
+        check();
+        setStatus('正在比较换乘次数与步行距离…');
+        const results = await planSavedBus(networks.flatMap(data => data.lines), from, to, maxWalk * 1000, verify, () => !isCurrent());
+        if (results.length) return results;
+      }
+      return [];
     };
     const tryConnection = async (from: PlannerPoint, to: PlannerPoint, depth: number): Promise<{ plans: BusPlan[]; points: PlannerPoint[] }> => {
       check();
@@ -120,7 +187,9 @@ export function BusPlanner({ onClose, disabled, onDraw, onClear }: Props) {
       if (!candidates.length) throw new Error('Busline AI 未能提出有把握的中间接驳站，当前不能生成完整方案。');
       const points = [from];
       for (const candidate of candidates) {
-        const point = await locate(candidate);
+        const point = await locate(candidate).catch(() => null);
+        check();
+        if (!point) continue;
         if ([from, to, ...points].some(known => Math.abs(known.location[0] - point.location[0]) < 0.0001 && Math.abs(known.location[1] - point.location[1]) < 0.0001)) continue;
         points.push(point);
       }
@@ -140,13 +209,12 @@ export function BusPlanner({ onClose, disabled, onDraw, onClear }: Props) {
     try {
       const intermediate = via.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
         const split = line.indexOf('|');
-        if (split < 1 || !line.slice(split + 1).trim()) throw new Error('途经点格式应为“城市|地点”，每行一个。');
+        if (split < 1 || !line.slice(split + 1).trim()) throw new Error('途经点格式应为“城市|公交站名”，每行一个。');
         return { city: line.slice(0, split).trim(), name: line.slice(split + 1).trim() };
       });
       if (intermediate.length > 8) throw new Error('试验版最多支持8个手动途经点。');
-      const requests = [{ city: originCity.trim(), name: origin.trim() }, ...intermediate, { city: destinationCity.trim(), name: destination.trim() }];
-      const points: PlannerPoint[] = [];
-      for (const request of requests) points.push(await locate(request));
+      setStatus('正在确认公交站点…');
+      const points = await Promise.all([origin, ...intermediate, destination].map(locate));
       check(); setResolved(points);
       let combined = [empty];
       const verifiedPoints = [points[0]];
@@ -159,7 +227,9 @@ export function BusPlanner({ onClose, disabled, onDraw, onClear }: Props) {
           if (!enableAI) throw error;
         }
         check();
-        if (!savedPlans.length && !enableAI) throw new Error('已收录线网中暂未找到可核验步行接驳的方案。可添加途经城市或开启备用规划。');
+        if (!savedPlans.length && !enableAI) throw new Error(catalogFailed || unavailableCities.size
+          ? '部分沿途线网暂时无法读取，现有数据未找到完整方案。请稍后重试或开启备用规划。'
+          : '已收录线网中暂未找到完整方案。可添加其他城市的公交换乘站，或开启备用规划。');
         const result = savedPlans.length ? { plans: savedPlans, points: [from, to] } : await tryConnection(from, to, 0);
         combined = merge(combined, result.plans);
         if (!combined.length) throw new Error('组合方案的步行总距离超过限制，请调整换乘点。');
@@ -167,26 +237,31 @@ export function BusPlanner({ onClose, disabled, onDraw, onClear }: Props) {
       }
       check();
       setResolved(verifiedPoints); setPlans(combined); setSelected(0); onDraw(combined[0]);
-      setStatus(transferCalls ? '已找到方案，部分路段使用备用规划。' : '已找到基于 Busline 收录线网的方案。');
+      setStatus(transferCalls ? '部分路段使用备用规划。' : catalogFailed || unavailableCities.size
+        ? '已找到方案，部分沿途线网暂时无法读取。' : '已找到基于 Busline 收录线网的方案。');
     } catch (e: any) { if (isCurrent()) { setError(e.message || '规划失败，请重试。'); setStatus(''); } }
     finally { if (isCurrent()) setBusy(false); }
   };
   const field = 'w-full rounded-xl border border-m3-outline-variant/50 bg-m3-surface-container px-3 py-2 text-xs outline-none focus:border-m3-primary';
   return <motion.aside initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ type: 'spring', damping: 26, stiffness: 260 }}
-    aria-label="公交路线规划" className="fixed top-20 left-4 bottom-24 z-[75] w-[calc(100vw-32px)] sm:w-[400px] flex flex-col rounded-3xl bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/50 shadow-2xl pointer-events-auto overflow-hidden">
-    <div className="flex justify-between items-center px-4 py-3 border-b border-m3-outline-variant/30"><h2 className="text-sm font-black text-m3-primary flex items-center gap-2"><Route className="w-4 h-4" />公交规划 · 试验版</h2><button onClick={onClose} aria-label="关闭公交规划" className="p-2 rounded-full hover:bg-m3-primary/10"><X className="w-4 h-4" /></button></div>
-    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-3">
+    aria-label="公交路线规划" className={`fixed top-20 left-4 ${picking ? '' : 'bottom-24'} z-[75] w-[calc(100vw-32px)] sm:w-[400px] flex flex-col rounded-3xl bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/50 shadow-2xl pointer-events-auto overflow-hidden`}>
+    <div className="flex justify-between items-center px-4 py-3 border-b border-m3-outline-variant/30"><h2 className="text-sm font-black text-m3-primary flex items-center gap-2"><Route className="w-4 h-4" />公交规划 · 试验版</h2><button onClick={() => { stopPicking(); onClose(); }} aria-label="关闭公交规划" className="p-2 rounded-full hover:bg-m3-primary/10"><X className="w-4 h-4" /></button></div>
+    {picking && <div className="flex items-center justify-between gap-3 px-4 py-3 text-xs">
+      <p role="status">放大地图后点击公交站圆点，设为{picking}。</p>
+      <button type="button" className="shrink-0 font-bold text-m3-primary" onClick={stopPicking}>取消选站</button>
+    </div>}
+    <div hidden={Boolean(picking)} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-3">
       <p className="text-[11px] text-slate-500 leading-relaxed">优先用 Busline 收录的公交线路，步行接驳由道路接口核验。方案比较换乘次数和步行距离，出发前请核实班次。</p>
       <form onSubmit={event => { event.preventDefault(); void search(); }} className="space-y-2">
-        <div className="grid grid-cols-[100px_1fr] gap-2"><input aria-label="出发城市" disabled={busy} className={field} value={originCity} onChange={e => setOriginCity(e.target.value)} /><input aria-label="出发地点" disabled={busy} className={field} value={origin} onChange={e => setOrigin(e.target.value)} /></div>
-        <div className="grid grid-cols-[100px_1fr] gap-2"><input aria-label="到达城市" disabled={busy} className={field} value={destinationCity} onChange={e => setDestinationCity(e.target.value)} /><input aria-label="到达地点" disabled={busy} className={field} value={destination} onChange={e => setDestination(e.target.value)} /></div>
+        <PlannerStationField label="起点" value={origin} onChange={setOrigin} load={loadStations} onPick={() => pick('起点')} disabled={busy || disabled} fieldClassName={field} />
+        <PlannerStationField label="终点" value={destination} onChange={setDestination} load={loadStations} onPick={() => pick('终点')} disabled={busy || disabled} fieldClassName={field} />
         <label className="flex items-center gap-2 text-xs font-bold text-m3-primary py-1"><input type="checkbox" checked={enableAI} disabled={busy} onChange={e => setEnableAI(e.target.checked)} className="accent-m3-primary" />收录线网无结果时，尝试高德与 AI 备用规划</label>
         <details><summary className="text-xs font-bold text-m3-primary cursor-pointer py-1">分段规划与步行设置</summary>
-          <p className="text-[10px] text-slate-500 my-2">每段使用两端城市的线网，最多搭乘 {MAX_SAVED_BUS_LEGS} 段公交，换乘站直线间距最多 {MAX_TRANSFER_RADIUS} 米。跨城可添加途经点，每行“城市|地点”。</p>
+          <p className="text-[10px] text-slate-500 my-2">自动搜索沿途城市线网。每段最多搭乘 {MAX_SAVED_BUS_LEGS} 趟公交，换乘站直线间距最多 {MAX_TRANSFER_RADIUS} 米。可指定途经站，每行填“城市|公交站名”。</p>
           <textarea aria-label="途经换乘点" rows={3} disabled={busy} value={via} onChange={e => setVia(e.target.value)} placeholder={'涿州市|具体公交换乘站名\n保定市|具体公交换乘站名'} className={field} />
           <label className="text-xs text-slate-600 flex items-center gap-2 mt-2">总步行上限<input aria-label="总步行上限（公里）" type="number" min={1} max={50} disabled={busy} value={maxWalk} onChange={e => setMaxWalk(Math.max(1, Math.min(50, Number(e.target.value) || 1)))} className="w-16 rounded-lg p-1 border border-m3-outline-variant" />公里</label>
         </details>
-        <button type="submit" aria-label="开始公交规划" disabled={busy || disabled} className="w-full rounded-xl bg-m3-primary text-white py-2.5 flex justify-center disabled:opacity-40">{busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}</button>
+        <button type="submit" disabled={busy || disabled || !origin.name.trim() || !destination.name.trim() || !origin.city.trim() || !destination.city.trim()} className="w-full rounded-xl bg-m3-primary text-white py-2.5 flex items-center justify-center gap-2 text-xs font-bold disabled:opacity-40">{busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}开始公交规划</button>
       </form>
       {status && <p role="status" className="text-xs text-m3-primary">{status}</p>}
       {aiNotes.length > 0 && <details className="rounded-xl bg-m3-primary-container/40 p-3"><summary className="text-xs font-bold text-m3-primary cursor-pointer">Busline AI 接驳建议（待逐段验证）</summary>{aiNotes.map((note, index) => <p key={index} className="text-[11px] whitespace-pre-wrap leading-relaxed mt-2 text-slate-600">{note}</p>)}</details>}

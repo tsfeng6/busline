@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { BusLine } from '../src/types';
 import type { PlannerPoint, PlannerStep } from '../src/utils/busPlanner';
-import { distanceMeters, type Point } from '../src/utils/localTransit';
+import { distanceMeters, type Point, type PublishedCity } from '../src/utils/localTransit';
+import type { CityDataset } from '../src/utils/cityDataset';
+import { plannerCorridorCities } from '../src/utils/plannerCityCoverage';
+import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
 import { planSavedBus, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
 
 const point = (lng: number): Point => [lng, 40];
@@ -42,4 +45,56 @@ test('does not draw a straight-line shortcut when a walking connection is unavai
   assert.ok(plans.length);
   assert.ok(plans.every(plan => plan.steps.every(step => step.mode !== 'WALK'
     || step.path[0][0] !== 116.020 || step.path.at(-1)?.[0] !== 116.021)));
+});
+
+const city = (name: string, province: string, bounds: PublishedCity['bounds']): PublishedCity => ({
+  city: name, province, bounds, center: [bounds[0], bounds[1]], lineDirections: 1, capturedAt: '', countySeats: [],
+});
+const crossBorderOrigin = { ...place(116), city: '北京市' };
+const crossBorderDestination = { ...place(117), city: '天津市' };
+const catalog = [
+  city('北京', '北京', [115.8, 39.8, 116.1, 40.2]),
+  city('廊坊', '河北', [116.3, 39.9, 116.8, 40.1]),
+  city('保定', '河北', [116.4, 39.3, 116.8, 39.6]),
+  city('石家庄', '河北', [114.3, 38.0, 114.7, 38.4]),
+];
+
+test('includes a third city across provincial borders, expanding the corridor when needed', async () => {
+  assert.deepEqual(plannerCorridorCities(catalog, crossBorderOrigin, crossBorderDestination, 30), ['北京市', '天津市', '廊坊']);
+  assert.deepEqual(plannerCorridorCities(catalog, crossBorderOrigin, crossBorderDestination, 100), ['北京市', '天津市', '廊坊', '保定']);
+  const datasets: Record<string, BusLine[]> = {
+    北京市: [bus('通勤1路', 116, 116.4)],
+    廊坊: [bus('城际2路', 116.4, 116.8)],
+    天津市: [bus('3路', 116.8, 117)],
+  };
+  const lines = plannerCorridorCities(catalog, crossBorderOrigin, crossBorderDestination, 30).flatMap(name => datasets[name]);
+  const plans = await planSavedBus(lines, crossBorderOrigin, crossBorderDestination, 100, verify, () => false);
+  assert.equal(plans[0].walking, 0);
+  assert.equal(transfers(plans[0]), 2);
+});
+
+test('a through bus crossing a province boundary does not count as a transfer', async () => {
+  const direct = bus('跨省公交1路', 116, 116.4, 117);
+  const plans = await planSavedBus([direct, direct], crossBorderOrigin, crossBorderDestination, 100, verify, () => false);
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0].buses, 1);
+  assert.equal(plans[0].walking, 0);
+});
+
+test('station suggestions are restricted to bus platforms and preserve separate same-name platforms', () => {
+  const stations = collectPlannerStations({
+    city: '北京市',
+    lines: [
+      { ...bus('公交1路', 116, 116.02), via_stops: [
+        { name: '东门', location: point(116) }, { name: '东门南', location: point(116.02) },
+      ] },
+      { ...bus('公交2路', 116.001, 116.03), via_stops: [
+        { name: '东门', location: point(116.001) }, { name: '城东门', location: point(116.03) },
+      ] },
+      bus('地铁9号线', 117, 117.1),
+    ],
+  } as CityDataset);
+  assert.deepEqual(matchPlannerStations(stations, '东门公交站').map(station => station.name), ['东门', '东门', '东门南', '城东门']);
+  assert.deepEqual(matchPlannerStations(stations, '东门', true).map(station => station.location), [point(116), point(116.001)]);
+  assert.deepEqual(matchPlannerStations(stations, '117'), []);
 });
