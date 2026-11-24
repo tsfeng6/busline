@@ -1,6 +1,7 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { TransitTileCache } from '../utils/transitTileCache';
 import { transitTileTransport } from '../utils/transitTileTransport';
+import { CITY_DETAIL_ZOOM } from '../utils/cityOverview';
 import {
   TRANSIT_TILE_EXTENT as EXTENT, tileKey, tileLngLat, tileAncestor, tilesInBounds, transitLevel,
   transitTileSource, transitTileIndexed, validTransitTileIndex, type TileRoute, type TileStop, type TransitTileData, type TransitBounds, type TransitPoint, type TransitTile,
@@ -58,17 +59,18 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
       let frame = 0;
       let lastStats = '';
       let visibleStops: ViewportStop[] = [];
-      let moving = false;
 
       function bounds(): TransitBounds | undefined {
         const b = map.getBounds?.();
         const sw = b?.getSouthWest(), ne = b?.getNorthEast();
         if (sw && ne) return [sw.lng, sw.lat, ne.lng, ne.lat];
       }
-      function sources() {
+      function visibleCells() {
         const b = bounds(), z = transitLevel(map.getZoom());
-        if (!b || z === null) return [];
-        return tilesInBounds(b, z).flatMap(cell => {
+        return b && z !== null ? tilesInBounds(b, z).filter(indexed) : [];
+      }
+      function sources(cells = visibleCells()) {
+        return cells.flatMap(cell => {
           const source = transitTileSource(cell, indexed, key => cache.has(key));
           const data = source && cache.get(tileKey(source));
           return source && data ? [{ cell, source, data }] : [];
@@ -104,7 +106,9 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         context.lineJoin = 'round';
         const routes = new Set<string>(), stops = new Map<string, ViewportStop>();
         const stationPaths = new Map<string, Path2D>();
-        const tiles = sources();
+        const zoom = map.getZoom();
+        const cells = visibleCells();
+        const tiles = sources(cells);
         for (const { cell, source, data } of tiles) {
           const { origin, east, south } = tilePosition(source);
           const scale = Math.hypot(east.x - origin.x, east.y - origin.y) / EXTENT;
@@ -135,7 +139,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
           geometry.names.forEach(name => routes.add(name));
           context.stroke(geometry.path);
           context.restore();
-          if (settings.stationMode === 'none') continue;
+          if (zoom < CITY_DETAIL_ZOOM || settings.stationMode === 'none') continue;
           const dx = east.x - origin.x, dy = east.y - origin.y;
           const sx = south.x - origin.x, sy = south.y - origin.y;
           for (const stop of data.stops) {
@@ -152,7 +156,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
             stops.set(key, { ...stop, lines, location: { lng, lat }, key, isBusStop: true });
             const color = settings.stationMode === 'terminal' ? '#52525b'
               : settings.stationLineStats && lines.length ? lines.length <= 2 ? '#5e8271' : lines.length <= 6 ? '#c29b63' : '#b56666' : '#3576bc';
-            const radius = settings.stationMode === 'terminal' ? 8 : map.getZoom() >= 15 ? 6 : 4;
+            const radius = settings.stationMode === 'terminal' ? 8 : zoom >= 15 ? 6 : 4;
             const path = stationPaths.get(color) ?? new Path2D();
             path.moveTo(px + radius, py);
             path.arc(px, py, radius, 0, 2 * Math.PI);
@@ -163,9 +167,9 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
           context.fillStyle = color;
           context.fill(path);
         }
-        const b = bounds(), z = transitLevel(map.getZoom());
-        const expected = b && z !== null ? tilesInBounds(b, z).filter(indexed) : [];
-        settings.onDetailReady(!moving && expected.length > 0 && expected.every(tile => cache.has(tileKey(tile))));
+        // A cached parent already covers the child on screen. Keep the raster
+        // fallback hidden while the finer geometry loads.
+        settings.onDetailReady(cells.length > 0 && tiles.length === cells.length);
         visibleStops = [...stops.values()];
         const stats = `${routes.size}/${stops.size}`;
         if (lastStats !== stats) {
@@ -189,13 +193,10 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         clearTimeout(settled);
         clearTimeout(idle);
         clearTimeout(retry);
-        moving = true;
-        options.current.onDetailReady(false);
-        // Let the SDK transform the last frame while the viewport is moving.
+        // Keep the current coverage until the next paint evaluates the viewport.
         cache.pause();
       }
       function end() {
-        moving = false;
         schedulePaint();
         clearTimeout(settled);
         clearTimeout(idle);

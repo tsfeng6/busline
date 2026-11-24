@@ -35,7 +35,7 @@ test('a path crossing tiles retains matching clipped endpoints and full-resoluti
 });
 
 test('viewport levels and exact child readiness preserve the coarse parent during pan and zoom', () => {
-  assert.deepEqual([3, 12.99, 13, 14.8, 15, 20].map(transitLevel), [null, null, 13, 13, 15, 15]);
+  assert.deepEqual([3, 11.99, 12, 12.99, 13, 14.8, 15, 20].map(transitLevel), [null, null, 13, 13, 13, 13, 15, 15]);
   const child = { z: 15, x: 26950, y: 12430 };
   const parent = tileAncestor(child, 13);
   const index = new Set([tileKey(parent), tileKey(child)]), loaded = new Set([tileKey(parent)]);

@@ -102,7 +102,8 @@ export function tilesInBounds(bounds: TransitBounds, z: number, padding = 0): Tr
 }
 
 export function transitLevel(zoom: number): number | null {
-  if (zoom < 13) return null;
+  // Start drawing the coarse vectors before reaching the interactive detail zoom.
+  if (zoom < 12) return null;
   return zoom < 15 ? 13 : 15;
 }
 
