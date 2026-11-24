@@ -287,3 +287,26 @@ test('station suggestions are restricted to bus platforms and preserve separate 
   assert.deepEqual(matchPlannerStations(stations, '东门', true).map(station => station.location), [point(116), point(116.001)]);
   assert.deepEqual(matchPlannerStations(stations, '117'), []);
 });
+
+test('optimized searches choose different plans for transfers and walking', async () => {
+  const origin = place(116), destination = place(116.12);
+  const lines = [
+    bus('直达1路', 116.034, 116.11),
+    bus('接驳2路', 116, 116.057),
+    bus('接驳3路', 116.058, 116.12),
+  ];
+  const fewest = await planLongWalkingBus(lines, origin, destination, verify, () => false,
+    undefined, undefined, Infinity, '少换乘');
+  const least = await planLongWalkingBus(lines, origin, destination, verify, () => false,
+    undefined, undefined, Infinity, '少步行');
+  assert.equal(transfers(fewest[0]), 0);
+  assert.match(fewest[0].steps.find(step => step.mode === 'BUS')!.instruction, /^直达1路/);
+  const shortest = least.reduce((best, plan) => plan.walking < best.walking ? plan : best);
+  assert.equal(transfers(shortest), 1);
+  assert.ok(shortest.walking < fewest[0].walking);
+
+  const capped = await planLongWalkingBus(lines, origin, destination, verify, () => false,
+    undefined, undefined, 1000, '少换乘');
+  assert.ok(capped.length);
+  assert.ok(capped.every(plan => transfers(plan) === 1 && plan.walking <= 1000));
+});

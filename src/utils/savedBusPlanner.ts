@@ -4,6 +4,8 @@ import { isLocalBusLine } from './busPlanner';
 import { distanceMeters, type Point } from './localTransit';
 
 export const MAX_TRANSFER_RADIUS = 800;
+export type BusPlanPriority = '推荐' | '少换乘' | '少步行';
+
 export const LONG_WALK_WARNING = '自由通行距离较长';
 // AMap Walking verifies individual legs up to 100 km.
 const MAX_WALKING_REQUEST = 100_000;
@@ -222,7 +224,7 @@ type WalkingCell = { stops: Stop[]; remaining: number; unknown: number; highestS
 async function findLongConnectionCandidate(
   { platforms, routes }: ReturnType<typeof indexSavedNetwork>,
   start: Stop, end: Stop, range: number, upperBound: number, walkingLimit: number, busWeight: number,
-  verified: WalkResults, reverse: boolean, cancelled: () => boolean,
+  verified: WalkResults, reverse: boolean, cancelled: () => boolean, boardingPenalty: number, keepWalkingTradeoffs: boolean,
 ): Promise<SearchLabel | undefined> {
   const departures = new Map<string, { ride: Ride; distance: number }[]>();
   const cells = new Map<string, WalkingCell>();
@@ -240,6 +242,15 @@ async function findLongConnectionCandidate(
   const bestArrival = new Map<string, SearchLabel>();
   const bestOnboard = new Map<string, SearchLabel>();
   const boarded = new Set<string>();
+  const tradeoffs = new Map<string, SearchLabel[]>();
+  const keep = (key: string, label: SearchLabel) => {
+    const previous = tradeoffs.get(key) ?? [];
+    if (previous.some(other => other.score <= label.score && other.walking <= label.walking)) return false;
+    tradeoffs.set(key, [...previous.filter(other => other.score < label.score || other.walking < label.walking), label]);
+    return true;
+  };
+  const boardingState = (label: SearchLabel) => (label.ride ? 'arrive:' : 'board:') + label.stop.key;
+  const onboardState = (ride: Ride) => 'on:' + onboardKey(ride);
   const queue: SearchLabel[] = [];
   let best: SearchLabel | undefined;
   const checkedByStop = new Map<string, WalkResults>();
@@ -254,7 +265,7 @@ async function findLongConnectionCandidate(
     if (from.key === to.key) return 0;
     if (direct > range) return Infinity;
     const result = checkedByStop.get(from.key)?.get(to.key);
-    return result === null ? Infinity : result?.distance ?? direct;
+    return result === null || (result && result.distance > MAX_WALKING_REQUEST) ? Infinity : result?.distance ?? direct;
   };
   const estimate = (from: Stop, to: Stop) => reverse ? distanceMeters(to.point, from.point) : distanceMeters(from.point, to.point);
   const onboardKey = (ride: Ride) => `${ride.route}:${reverse ? ride.from : ride.to}`;
@@ -265,7 +276,11 @@ async function findLongConnectionCandidate(
     const labels = label.ride ? bestArrival : bestBoarding;
     const key = label.stop.key;
     const improvesStop = label.score < (labels.get(key)?.score ?? Infinity);
-    if (busWeight && label.ride) {
+    if (keepWalkingTradeoffs) {
+      const improvesArrival = keep(boardingState(label), label);
+      const improvesRide = label.ride && keep(onboardState(label.ride), label);
+      if (!improvesArrival && !improvesRide) return;
+    } else if (boardingPenalty && label.ride) {
       const onboard = onboardKey(label.ride);
       if (label.score >= (bestOnboard.get(onboard)?.score ?? Infinity)) return;
       bestOnboard.set(onboard, label);
@@ -318,7 +333,9 @@ async function findLongConnectionCandidate(
     const { stop, walking, score, ride } = label;
     if (score > upperBound || (best && score === upperBound)) break;
     const stopDepartures = departures.get(stop.key) ?? [];
-    if (busWeight && ride && bestOnboard.get(onboardKey(ride)) === label) {
+    if (boardingPenalty && ride && (keepWalkingTradeoffs
+      ? tradeoffs.get(onboardState(ride))?.includes(label)
+      : bestOnboard.get(onboardKey(ride)) === label)) {
       // Reaching a stop on foot at lower cost does not replace an onboard
       // arrival. Staying on the same bus does not pay another boarding cost.
       const continuation = stopDepartures.find(next => continues(ride, next.ride));
@@ -328,13 +345,17 @@ async function findLongConnectionCandidate(
           score: score + continuation.distance * busWeight, ride: next, previous: label });
       }
     }
-    if ((ride ? bestArrival : bestBoarding).get(stop.key) !== label) continue;
-    if (!boarded.has(stop.key)) {
-      boarded.add(stop.key);
-      cells.get(cellFor(stop.point))!.remaining--;
+    if (keepWalkingTradeoffs) {
+      if (!tradeoffs.get(boardingState(label))?.includes(label)) continue;
+    } else if ((ride ? bestArrival : bestBoarding).get(stop.key) !== label) continue;
+    if (keepWalkingTradeoffs || !boarded.has(stop.key)) {
+      if (!keepWalkingTradeoffs) {
+        boarded.add(stop.key);
+        cells.get(cellFor(stop.point))!.remaining--;
+      }
       for (const { ride: next, distance } of stopDepartures) {
-        if (busWeight && ride && continues(ride, next)) continue;
-        const boardingCost = busWeight ? TRANSFER_COST : 0;
+        if (boardingPenalty && ride && continues(ride, next)) continue;
+        const boardingCost = boardingPenalty;
         enqueue({ stop: next.stops[reverse ? next.from : next.to], walking, score: score + distance * busWeight + boardingCost, ride: next, previous: label });
       }
     }
@@ -356,7 +377,7 @@ async function findLongConnectionCandidate(
         if (!cell?.remaining) continue;
         // A settled cell, or one already reachable more cheaply through a bus
         // or another transfer, does not need every pair of stops compared.
-        if (!checked?.size) {
+        if (!keepWalkingTradeoffs && !checked?.size) {
           const west = x * cellSize, south = y * cellSize;
           const lngGap = Math.max(0, west - stop.point[0], stop.point[0] - west - cellSize);
           const latGap = Math.max(0, south - stop.point[1], stop.point[1] - south - cellSize);
@@ -366,7 +387,8 @@ async function findLongConnectionCandidate(
         let highestScore = 0;
         for (const next of cell.stops) {
           if (boarded.has(next.key)) continue;
-          const previousScore = Math.min(bestBoarding.get(next.key)?.score ?? Infinity, bestArrival.get(next.key)?.score ?? Infinity);
+          const previousScore = keepWalkingTradeoffs ? Infinity
+            : Math.min(bestBoarding.get(next.key)?.score ?? Infinity, bestArrival.get(next.key)?.score ?? Infinity);
           if (previousScore <= score) { highestScore = Math.max(highestScore, previousScore); continue; }
           const direct = estimate(stop, next);
           const walk = direct <= remaining ? walkingCost(stop, next, direct) : Infinity;
@@ -389,6 +411,7 @@ export async function planLongWalkingBus(
   onCandidates?: () => void,
   initialPlan?: BusPlan,
   walkingLimit = Infinity,
+  priority: BusPlanPriority = '推荐',
 ): Promise<BusPlan[]> {
   const start = stopAt(origin.name, origin.location), end = stopAt(destination.name, destination.location);
   const network = indexSavedNetwork(lines);
@@ -408,20 +431,28 @@ export async function planLongWalkingBus(
   }
   let best = baseline;
   const alternatives = baseline ? [baseline] : [];
-  let busWeight = BUS_DISTANCE_WEIGHT;
-  const scorePlan = (plan: BusPlan) => busWeight ? busPlanScore(plan) + TRANSFER_COST : plan.walking;
-  const ranges = [...new Set([3_000, 15_000, 50_000, MAX_WALKING_REQUEST].map(range => Math.min(range, walkingLimit)))];
+  let busWeight = priority === '推荐' ? BUS_DISTANCE_WEIGHT : 0;
+  // A simple path can board at most once per platform, with one final walk.
+  // The penalty makes one extra boarding cost more than every walk combined.
+  const transferPenalty = (network.platforms.size + 2) * MAX_WALKING_REQUEST;
+  const boardingPenalty = () => priority === '少换乘' ? transferPenalty : busWeight ? TRANSFER_COST : 0;
+  const scorePlan = (plan: BusPlan) =>
+    plan.walking + plan.buses * boardingPenalty() + (plan.distance - plan.walking) * busWeight;
+  const searchRanges = priority === '少换乘' ? [MAX_WALKING_REQUEST] : [3_000, 15_000, 50_000, MAX_WALKING_REQUEST];
+  const ranges = [...new Set(searchRanges.map(range => Math.min(range, walkingLimit)))];
   let stage = 0;
   let comparisons = 0;
   let compareUntil = best ? Date.now() + 4_000 : Infinity;
   search: while (!cancelled()) {
     const comparing = best !== undefined;
-    const finishComparison = () => comparing && Date.now() >= compareUntil;
+    const finishComparison = () => priority === '推荐' && comparing && Date.now() >= compareUntil;
     if (finishComparison()) break;
+    if (best && ((priority === '少步行' && best.walking === 0)
+      || (priority === '少换乘' && best.buses === 1 && !Number.isFinite(walkingLimit)))) break;
     // A walking leg cannot exceed the entire score of a better itinerary.
     // Also respect any hard limit while comparing verified alternatives.
     const range = best ? Math.min(MAX_WALKING_REQUEST, scorePlan(best), walkingLimit) : ranges[stage];
-    if (!range) {
+    if (range === undefined || (range === 0 && best?.walking === 0 && priority !== '少换乘')) {
       if (!best && busWeight && Number.isFinite(walkingLimit) && walkingLimit > 0) {
         busWeight = 0;
         stage = 0;
@@ -430,13 +461,15 @@ export async function planLongWalkingBus(
       break;
     }
     const path = await findLongConnectionCandidate(network, searchStart, searchEnd, range,
-      best ? scorePlan(best) : Infinity, walkingLimit, busWeight, verified, reverse, () => cancelled() || finishComparison());
+      best ? scorePlan(best) : Infinity, walkingLimit, busWeight, verified, reverse,
+      () => cancelled() || finishComparison(), boardingPenalty(), priority === '少换乘' && Number.isFinite(walkingLimit));
     if (cancelled()) return [];
     if (!path) {
       if (comparing) break;
       stage++;
       continue;
     }
+    if (best && priority !== '推荐' && path.score >= scorePlan(best)) break;
     onCandidates?.();
     const rides: Ride[] = [];
     for (let node: SearchLabel | undefined = path; node; node = node.previous) {
@@ -461,7 +494,7 @@ export async function planLongWalkingBus(
       const key = walkKey(piece);
       if (!verified.has(key)) verified.set(key, await verify(piece.from.point, piece.to.point));
       const result = verified.get(key);
-      if (!result) { complete = false; break; }
+      if (!result || result.distance > MAX_WALKING_REQUEST) { complete = false; break; }
       walking += result.distance;
       steps.push({ ...result, instruction: `步行至${piece.to.name}`, from: piece.from.point, to: piece.to.point });
     }
@@ -473,7 +506,7 @@ export async function planLongWalkingBus(
         best = plan;
       }
     }
-    if (comparing && ++comparisons >= 3) break;
+    if (priority === '推荐' && comparing && ++comparisons >= 3) break;
   }
   return best && !cancelled() ? paretoBusPlans(alternatives) : [];
 }
@@ -618,6 +651,7 @@ export async function planSavedBus(
   verify: (from: PlannerPoint['location'], to: PlannerPoint['location']) => Promise<PlannerStep | null>,
   cancelled: () => boolean,
   onCandidates?: () => void,
+  priority: BusPlanPriority = '推荐',
 ): Promise<BusPlan[]> {
   const verified: WalkResults = new Map();
   const plans: BusPlan[] = [];
@@ -630,7 +664,7 @@ export async function planSavedBus(
   while (!cancelled()) {
     const candidates: Candidate[] = [];
     let lastYield = Date.now();
-    for (const weight of [BUS_DISTANCE_WEIGHT, 0]) {
+    for (const weight of priority === '推荐' ? [BUS_DISTANCE_WEIGHT, 0] : [0]) {
       for (const candidate of findCandidates(network, origin, destination, walkingLimit, verified, weight)) {
         if (candidate) candidates.push(candidate);
         if (Date.now() - lastYield >= 32) {
@@ -643,7 +677,8 @@ export async function planSavedBus(
     if (!candidates.length) break;
     onCandidates?.();
     const score = (candidate: Candidate) => candidate.walk + candidate.busDistance * BUS_DISTANCE_WEIGHT + (candidate.rides.length - 1) * TRANSFER_COST;
-    candidates.sort((a, b) => score(a) - score(b));
+    candidates.sort((a, b) => priority === '少步行' ? a.walk - b.walk
+      : priority === '少换乘' ? a.rides.length - b.rides.length || a.walk - b.walk : score(a) - score(b));
     const before = checks;
     for (const candidate of candidates) {
       const key = candidate.rides.map(ride => `${ride.route}:${ride.from}>${ride.to}`).join('|');

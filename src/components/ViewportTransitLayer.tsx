@@ -1,6 +1,7 @@
 import { useEffect, useRef, type MutableRefObject } from 'react';
 import { TransitTileCache } from '../utils/transitTileCache';
 import { transitTileTransport } from '../utils/transitTileTransport';
+import { isLineOperating } from '../utils/timeline';
 import { transitStrokeWidth } from '../utils/cityOverview';
 import {
   TRANSIT_TILE_EXTENT as EXTENT, tileKey, tileLngLat, tileAncestor, tilesInBounds, transitLevel,
@@ -22,6 +23,8 @@ type Options = {
   stationLineStats: boolean;
   subdued: boolean;
   suspendNeighborPrefetch?: boolean;
+  timelineMinute?: number;
+  onTimelineStats?: (stats: { active: number; total: number }) => void;
   blocked: (name: string) => boolean;
   selection: MutableRefObject<ViewportTransitSelection | null>;
   onStats: (stats: { lines: number; stops: number }) => void;
@@ -34,6 +37,8 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
   const repaint = useRef<(() => void) | undefined>(undefined);
   const updateTileRequests = useRef<(() => void) | undefined>(undefined);
   useEffect(() => { repaint.current?.(); }, [style.stationMode, style.thick, style.subdued, style.blocked, style.stationLineStats]);
+  const timelineFrame = style.timelineMinute === undefined ? undefined : Math.floor(style.timelineMinute) * 2 + Number(!Number.isInteger(style.timelineMinute));
+  useEffect(() => { repaint.current?.(); }, [timelineFrame]);
   useEffect(() => { updateTileRequests.current?.(); }, [style.suspendNeighborPrefetch]);
 
   useEffect(() => {
@@ -57,7 +62,10 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
       const lowMemory = ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4) <= 4;
       const cache = new TransitTileCache(transport.load, schedulePaint, (lowMemory ? 12 : 28) * 1024 ** 2, lowMemory ? 3 : 5);
       const layer = new AMap.CustomLayer(canvas, { zIndex: 5, zooms: [2, 30] });
-      const routePaths = new WeakMap<TransitTileData, { blocked: Options['blocked']; path: Path2D; names: string[] }>();
+      let routePaths = new WeakMap<TransitTileData, { blocked: Options['blocked']; path: Path2D; names: string[] }>();
+      let timelinePaths = new WeakMap<TransitTileData, { blocked: Options['blocked']; groups: Map<string, { route: TileRoute; path: Path2D; directions: Set<string> }> }>();
+      let lastTimelineStats = '';
+      let paintingTimeline = false;
       let settled: ReturnType<typeof setTimeout>, idle: ReturnType<typeof setTimeout>, retry: ReturnType<typeof setTimeout>;
       let frame = 0;
       let lastStats = '';
@@ -108,6 +116,14 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         context.lineCap = 'round';
         context.lineJoin = 'round';
         const routes = new Set<string>(), stops = new Map<string, ViewportStop>();
+        const activeDirections = new Set<string>(), scheduledDirections = new Set<string>();
+        const timelineMinute = settings.timelineMinute;
+        if (paintingTimeline !== (timelineMinute !== undefined)) {
+          paintingTimeline = timelineMinute !== undefined;
+          // Use one geometry cache at a time on memory-constrained devices.
+          if (paintingTimeline) routePaths = new WeakMap();
+          else timelinePaths = new WeakMap();
+        }
         const stationPaths = new Map<string, Path2D>();
         const zoom = map.getZoom();
         const stationRadius = settings.stationMode === 'terminal' ? 9.5 : zoom >= 15 ? 7.5 : 5.5;
@@ -127,24 +143,47 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
           context.rect(x, y, size, size);
           context.clip();
           context.lineWidth = strokeWidth / scale;
-          let geometry = routePaths.get(data);
-          if (!geometry || geometry.blocked !== settings.blocked) {
-            const path = new Path2D(), names: string[] = [];
-            for (const route of data.routes) {
-              if (settings.blocked(route.name)) continue;
-              names.push(`${route.city}\0${route.name.split(/[（(]/)[0]}`);
-              for (const points of route.paths) {
-                path.moveTo(points[0], points[1]);
-                for (let i = 2; i < points.length; i += 2) path.lineTo(points[i], points[i + 1]);
+          if (timelineMinute !== undefined) {
+            let geometry = timelinePaths.get(data);
+            if (!geometry || geometry.blocked !== settings.blocked) {
+              const groups = new Map<string, { route: TileRoute; path: Path2D; directions: Set<string> }>();
+              for (const route of data.routes) {
+                if (settings.blocked(route.name) || isLineOperating(route, 0) === null) continue;
+                const key = `${route.stime}/${route.etime}`;
+                let group = groups.get(key);
+                if (!group) {
+                  group = { route, path: new Path2D(), directions: new Set() };
+                  groups.set(key, group);
+                }
+                group.directions.add(`${route.city}\0${route.id || route.name}`);
+                appendRoutePath(group.path, route);
               }
+              geometry = { groups, blocked: settings.blocked };
+              timelinePaths.set(data, geometry);
             }
-            geometry = { path, names, blocked: settings.blocked };
-            routePaths.set(data, geometry);
+            for (const { route, path, directions } of geometry.groups.values()) {
+              directions.forEach(direction => scheduledDirections.add(direction));
+              if (isLineOperating(route, timelineMinute) !== true) continue;
+              directions.forEach(direction => activeDirections.add(direction));
+              context.stroke(path);
+            }
+          } else {
+            let geometry = routePaths.get(data);
+            if (!geometry || geometry.blocked !== settings.blocked) {
+              const path = new Path2D(), names: string[] = [];
+              for (const route of data.routes) {
+                if (settings.blocked(route.name)) continue;
+                names.push(`${route.city}\0${route.name.split(/[（(]/)[0]}`);
+                appendRoutePath(path, route);
+              }
+              geometry = { path, names, blocked: settings.blocked };
+              routePaths.set(data, geometry);
+            }
+            geometry.names.forEach(name => routes.add(name));
+            context.stroke(geometry.path);
           }
-          geometry.names.forEach(name => routes.add(name));
-          context.stroke(geometry.path);
           context.restore();
-          if (settings.stationMode === 'none') continue;
+          if (timelineMinute !== undefined || settings.stationMode === 'none') continue;
           const dx = east.x - origin.x, dy = east.y - origin.y;
           const sx = south.x - origin.x, sy = south.y - origin.y;
           for (const stop of data.stops) {
@@ -175,6 +214,15 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         // fallback hidden while the finer geometry loads.
         settings.onDetailReady(cells.length > 0 && tiles.length === cells.length);
         visibleStops = [...stops.values()];
+        if (timelineMinute !== undefined) {
+          const stats = `${activeDirections.size}/${scheduledDirections.size}`;
+          if (lastTimelineStats !== stats) {
+            lastTimelineStats = stats;
+            settings.onTimelineStats?.({ active: activeDirections.size, total: scheduledDirections.size });
+          }
+          return;
+        }
+        lastTimelineStats = '';
         const stats = `${routes.size}/${stops.size}`;
         if (lastStats !== stats) {
           lastStats = stats;
@@ -234,6 +282,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
             const tolerance = 7 * EXTENT / Math.hypot(dx, dy);
             if (x < -tolerance || y < -tolerance || x > EXTENT + tolerance || y > EXTENT + tolerance) continue;
             for (const route of data.routes) {
+              if (options.current.timelineMinute !== undefined && isLineOperating(route, 0) === null) continue;
               if (!options.current.blocked(route.name) && route.paths.some(path => pathNear(path, x, y, tolerance))) {
                 matches.set(`${route.city}\0${route.id || route.name}`, {
                   city: route.city, id: route.id, name: route.name, stime: route.stime, etime: route.etime,
@@ -283,6 +332,13 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
   }, [map, enabled, selection]);
 
   return null;
+}
+
+function appendRoutePath(path: Path2D, route: TileRoute) {
+  for (const points of route.paths) {
+    path.moveTo(points[0], points[1]);
+    for (let index = 2; index < points.length; index += 2) path.lineTo(points[index], points[index + 1]);
+  }
 }
 
 function pathNear(path: Float32Array, x: number, y: number, tolerance: number) {

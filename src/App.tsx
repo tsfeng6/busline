@@ -1177,12 +1177,26 @@ export default function App() {
   const [timelineAvailable, setTimelineAvailable] = useState(false);
   const [timelineMinute, setTimelineMinute] = useState(() => new Date().getHours() * 60 + new Date().getMinutes());
   const [timelinePlaying, setTimelinePlaying] = useState(false);
+  const [timelineUsesTiles, setTimelineUsesTiles] = useState(false);
+  const [timelineTileStats, setTimelineTileStats] = useState({ active: 0, total: 0 });
+  const tiledTimeline = showTimeline && timelineUsesTiles;
   const [timelineLines, setTimelineLines] = useState<BusLine[]>([]);
   const timelineOverlaysRef = useRef<TimelineOverlayEntry[]>([]);
   const timelineMinuteRef = useRef(timelineMinute);
   timelineMinuteRef.current = timelineMinute;
   const displayedLineNamesRef = useRef<string[]>([]);
-  const timelineActiveCount = useMemo(() => timelineLines.filter(line => isLineOperating(line, timelineMinute) === true).length, [timelineLines, timelineMinute]);
+  const timelineSchedules = useMemo(() => {
+    const schedules = new Map<string, { line: BusLine; count: number }>();
+    for (const line of timelineLines) {
+      const key = JSON.stringify([line.stime, line.etime]);
+      const entry = schedules.get(key);
+      if (entry) entry.count++;
+      else schedules.set(key, { line, count: 1 });
+    }
+    return [...schedules.values()];
+  }, [timelineLines]);
+  const timelineActiveCount = timelineSchedules.reduce((count, schedule) =>
+    count + (isLineOperating(schedule.line, timelineMinute) === true ? schedule.count : 0), 0);
 
   const [aiSearchProgress, setAISearchProgress] = useState('');
   const [aiRegionContext, setAIRegionContext] = useState<AIRegionContext | null>(null);
@@ -3481,8 +3495,16 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   const openTimeline = async () => {
     if (showTimeline) { setShowTimeline(false); return; }
     clearPriorityCoverage();
-    const version = ++searchVersionRef.current;
+    const version = searchVersionRef.current;
     const map = mapRef.current;
+    if ((!timelineAvailable || !displayedLineNamesRef.current.length) && sharedCityDataEnabled && viewportSelectionRef.current) {
+      setTimelineUsesTiles(true);
+      setTimelineTileStats({ active: 0, total: 0 });
+      setTimelineLines([]);
+      setSelectedStop(null); setSelectedSegmentLines(null); setActiveBusLine(null); setStationConnectivityCard(null);
+      setShowTimeline(true);
+      return;
+    }
     let lines = displayedLineNamesRef.current.map(name => fetchedLinesCache.current.get(name)).filter((line): line is BusLine => !!line);
     if (!timelineAvailable || !lines.length) {
       setIsSearching(true);
@@ -3497,6 +3519,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     // Date-specific schedules cannot be placed on one daily axis.
     lines = lines.filter(line => isLineOperating(line, 0) !== null);
     if (version !== searchVersionRef.current || map !== mapRef.current || isMinigameActiveRef.current || !lines.length) return;
+    setTimelineUsesTiles(false);
     setTimelineLines(lines);
     setSelectedStop(null); setSelectedSegmentLines(null); setActiveBusLine(null); setStationConnectivityCard(null);
     setShowTimeline(true);
@@ -6416,7 +6439,6 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   useEffect(() => {
     if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
     const map = mapRef.current;
-    const AMap = (window as any).AMap;
     lineGroupRef.current?.hide();
     markerGroupRef.current?.hide();
     const oldClick = mapClickHandlerRef.current;
@@ -6429,13 +6451,32 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
   }, [showTimeline]);
 
   useEffect(() => {
-    if (!showTimeline || !mapRef.current || !(window as any).AMap) return;
-    const map = mapRef.current;
+    if (!showTimeline || !mapInstance || !(window as any).AMap) return;
+    const map = mapInstance;
     const AMap = (window as any).AMap;
-    const indexedRoutes = timelineLines
-      .filter(line => line.path?.length > 1)
-      .map(line => ({ name: line.name, path: line.path.map(getLatLng), displayPath: line.path.map(getLatLng) }));
+    if (tiledTimeline) {
+      const selectTileRoad = (event: any) => {
+        if (!event?.lnglat) return;
+        const point = getLatLng(event.lnglat);
+        const routes = viewportSelectionRef.current?.routesAt(point) ?? [];
+        if (!routes.some(route => isLineOperating(route, timelineMinuteRef.current) === true)) return;
+        selectedViewportRoutesRef.current = routes;
+        setSelectedStop(null);
+        setSelectionPos(point);
+        setTopCard('stop');
+        setSelectedSegmentName('当前路段');
+        setSelectedSegmentAddress(null);
+        setSelectedSegmentLines([...new Set(routes.map(route => route.name))]);
+      };
+      map.on('click', selectTileRoad);
+      return () => { map.off('click', selectTileRoad); };
+    }
+    const indexedRoutes = timelineLines.filter(line => line.path?.length > 1).map(line => {
+      const path = line.path.map(getLatLng);
+      return { name: line.name, path, displayPath: path };
+    });
     const routeIndex = new RouteRenderIndex(indexedRoutes);
+    const linesByName = new Map(timelineLines.map(line => [line.name, line]));
     const selectTimelineRoad = (event?: any) => {
       const lnglat = event?.lnglat;
       if (!lnglat) return;
@@ -6443,6 +6484,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       if (pickPlannerMapStop(point, map)) return;
       const names = [...new Set(routeIndex.query(point, 0.00018).flatMap(hit => [...hit.lines]))];
       if (!names.length) return;
+      selectedViewportRoutesRef.current = [];
       setSelectedStop(null);
       setActiveBusLine(null);
       setSelectionPos(point);
@@ -6451,53 +6493,93 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       setSelectedSegmentLines(names);
       setTopCard('stop');
     };
-    const entries: TimelineOverlayEntry[] = timelineLines.flatMap((line) => {
-      const path = (line.path || []).map(getLatLng);
-      if (path.length < 2) return [];
-      const overlay = lazyTimelineRoute(map, AMap, {
-        strokeColor: line.isUserSubmitted ? '#BA55D3' : '#52796F',
-        strokeWeight: lineThickness === 'thin' ? 3 : 6,
-        strokeOpacity: 0.9,
-        lineJoin: 'round',
-        lineCap: 'round',
-        isOutline: true,
-        outlineColor: '#ffffff',
-        borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
-        zIndex: 55,
-        bubble: true,
-      }, selectTimelineRoad);
-      overlay.setPaths([path]);
-      return [{ line, overlay, visible: true }];
-    });
-    timelineOverlaysRef.current = entries;
-    updateTimelineVisibility(entries, timelineMinuteRef.current);
-    return () => {
-      entries.forEach(entry => (entry.overlay as any).destroy());
-      if (timelineOverlaysRef.current === entries) timelineOverlaysRef.current = [];
+    const entries = new Map<string, TimelineOverlayEntry & { overlay: ReturnType<typeof lazyTimelineRoute> }>();
+    let frame = 0;
+    const updateViewport = () => {
+      if (frame) cancelAnimationFrame(frame);
+      const bounds = map.getBounds();
+      if (!bounds) return;
+      const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
+      const lngPad = (ne.lng - sw.lng) * .08, latPad = (ne.lat - sw.lat) * .08;
+      const paths = routeIndex.visiblePaths({
+        minLng: sw.lng - lngPad, maxLng: ne.lng + lngPad,
+        minLat: sw.lat - latPad, maxLat: ne.lat + latPad,
+      });
+      // One SDK object can draw every visible direction with the same hours
+      // and color. Keep individual paths in the road index for hit testing.
+      const groups = new Map<string, { line: BusLine; segments: [number, number][][] }>();
+      for (const [name, segments] of paths) {
+        const line = linesByName.get(name)!;
+        const key = JSON.stringify([line.stime, line.etime, !!line.isUserSubmitted]);
+        const group = groups.get(key);
+        if (group) segments.forEach(segment => group.segments.push(segment));
+        else groups.set(key, { line, segments });
+      }
+      for (const [name, entry] of entries) {
+        if (groups.has(name)) continue;
+        entry.overlay.destroy();
+        entries.delete(name);
+      }
+      const pending = groups.entries();
+      const addVisible = () => {
+        frame = 0;
+        const deadline = performance.now() + 8;
+        for (let next = pending.next(); !next.done; next = pending.next()) {
+          const [name, { line, segments }] = next.value;
+          let entry = entries.get(name);
+          if (!entry) {
+            const overlay = lazyTimelineRoute(map, AMap, {
+              strokeColor: line.isUserSubmitted ? '#BA55D3' : '#52796F',
+              strokeWeight: lineThickness === 'thin' ? 3 : 6,
+              strokeOpacity: 0.9, lineJoin: 'round', lineCap: 'round',
+              isOutline: true, outlineColor: '#ffffff',
+              borderWeight: lineThickness === 'thin' ? 0.5 : 1.5,
+              zIndex: 55, bubble: true,
+            }, selectTimelineRoad);
+            const visible = isLineOperating(line, timelineMinuteRef.current) === true;
+            if (!visible) overlay.hide();
+            entry = { line, overlay, visible };
+            entries.set(name, entry);
+          }
+          entry.overlay.setPaths(segments);
+          if (performance.now() >= deadline) {
+            frame = requestAnimationFrame(addVisible);
+            break;
+          }
+        }
+        timelineOverlaysRef.current = [...entries.values()];
+      };
+      frame = requestAnimationFrame(addVisible);
     };
-  }, [showTimeline, timelineLines, mapInstance, lineThickness]);
-
+    const events = ['moveend', 'zoomend', 'resize'];
+    events.forEach(event => map.on(event, updateViewport));
+    updateViewport();
+    return () => {
+      cancelAnimationFrame(frame);
+      events.forEach(event => map.off(event, updateViewport));
+      entries.forEach(entry => entry.overlay.destroy());
+      timelineOverlaysRef.current = [];
+    };
+  }, [showTimeline, tiledTimeline, timelineLines, mapInstance, lineThickness]);
 
   useEffect(() => {
-    if (showTimeline) updateTimelineVisibility(timelineOverlaysRef.current, timelineMinute);
-  }, [showTimeline, timelineMinute, timelineLines]);
+    if (showTimeline && !tiledTimeline) updateTimelineVisibility(timelineOverlaysRef.current, timelineMinute);
+  }, [showTimeline, tiledTimeline, timelineMinute]);
 
   useEffect(() => {
     if (!showTimeline || !timelinePlaying) return;
     const timer = window.setInterval(() => {
-      setTimelineMinute(minute => minute >= 1439 ? 0 : minute + 1 / 3);
+      setTimelineMinute(minute => minute >= 1439 ? 0 : (Math.round(minute * 3) + 1) / 3);
     }, 1000);
     return () => window.clearInterval(timer);
   }, [showTimeline, timelinePlaying]);
 
   useEffect(() => {
-    if (!showTimeline) setTimelinePlaying(false);
+    if (!showTimeline) {
+      setTimelinePlaying(false);
+      setTimelineLines(previous => previous.length ? [] : previous);
+    }
   }, [showTimeline]);
-
-  useEffect(() => {
-    if (!showTimeline) return;
-    timelineOverlaysRef.current.forEach(entry => (entry.overlay as any).setOptions({ strokeWeight: lineThickness === 'thin' ? 3 : 6 }));
-  }, [showTimeline, timelineLines, lineThickness]);
 
   const drawBusPlan = (plan: BusPlan) => {
     const map = mapRef.current, AMap = (window as any).AMap;
@@ -6521,7 +6603,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     plannerOverlaysRef.current = overlays;
     setPlannerRouteVisible(Boolean(overlays.length));
     map.add(overlays);
-    if (overlays.length) map.setFitView(overlays, false, [100, 50, 120, window.innerWidth >= 640 ? 440 : 50]);
+    if (overlays.length) map.setFitView(overlays, false, window.innerWidth >= 640 ? [100, 50, 120, 440] : [76, 28, 180, 28]);
   };
 
   const handleScreenshot = async () => {
@@ -6830,7 +6912,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       </AnimatePresence>
 
       <AnimatePresence>
-        {showBusPlanner && <BusPlanner onClose={() => { setShowBusPlanner(false); clearBusPlan(); }}
+        {showBusPlanner && <BusPlanner hidden={showTimeline} onClose={() => { setShowBusPlanner(false); clearBusPlan(); }}
           currentCity={currentCity} onMapPick={setPlannerStopPicker} onPreload={setPlannerPreloading}
           showDetails={isAdminVerified}
           disabled={isSearching || loading || showMinigameModal || isDrawingMode}
@@ -6902,13 +6984,15 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                 )}
               </div>
 
-              {!showMinigameModal && <button type="button" aria-label="公交路线规划" title="公交路线规划" aria-pressed={showBusPlanner}
+              {!showMinigameModal && <button type="button" aria-label="公交路线规划" title="公交路线规划" aria-pressed={showBusPlanner && !showTimeline}
                 onClick={() => {
                   dismissSearchSuggestions();
                   setIsMobileSearchOpen(false);
-                  setShowBusPlanner(!showBusPlanner);
+                  const openingPlanner = !showBusPlanner || showTimeline;
+                  setShowBusPlanner(openingPlanner);
+                  setShowTimeline(false);
                   setShowBuslineAI(false);
-                  if (showBusPlanner) clearBusPlan();
+                  if (!openingPlanner) clearBusPlan();
                 }}
                 className={`mr-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${showBusPlanner ? 'bg-m3-primary text-white' : 'bg-m3-primary-container/70 text-m3-primary hover:bg-m3-primary-container'}`}>
                 <Route className="h-4.5 w-4.5" />
@@ -7075,10 +7159,11 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         <div className="relative w-full h-full">
           <CityOverviewLayer map={mapInstance} enabled={!showTimeline && !showMinigameModal} detailReady={viewportDetailReady} subdued={plannerRouteVisible} />
           <ViewportTransitLayer map={mapInstance}
-            enabled={sharedCityDataEnabled && !showTimeline && !showMinigameModal}
-            suspendNeighborPrefetch={plannerPreloading}
+            enabled={sharedCityDataEnabled && (!showTimeline || tiledTimeline) && !showMinigameModal}
+            timelineMinute={tiledTimeline ? timelineMinute : undefined} onTimelineStats={setTimelineTileStats}
+            suspendNeighborPrefetch={plannerPreloading || tiledTimeline}
             stationMode={stationMode} thick={lineThickness === 'thick'} stationLineStats={stationLineStats}
-            subdued={plannerRouteVisible || !!activeBusLine || coverageActive || timelineAvailable}
+            subdued={!tiledTimeline && (plannerRouteVisible || !!activeBusLine || coverageActive || timelineAvailable)}
             blocked={viewportLineBlocked} selection={viewportSelectionRef} onStats={setViewportStats} onDetailReady={setViewportDetailReady} />
           <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
 
@@ -7370,7 +7455,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
 
         {showTimeline && <TimelineBar minute={timelineMinute} onChange={minute => { setTimelinePlaying(false); setTimelineMinute(minute); setSelectedSegmentLines(null); setSelectedStop(null); }} onClose={() => setShowTimeline(false)} onTogglePlayback={() => setTimelinePlaying(value => !value)} playing={timelinePlaying}
-          active={timelineActiveCount} total={timelineLines.length} />}
+          viewport={tiledTimeline} active={tiledTimeline ? timelineTileStats.active : timelineActiveCount} total={tiledTimeline ? timelineTileStats.total : timelineLines.length} />}
 
         {/* Custom Drawing Mode HUD Floating Toolbar Panel */}
         {isDrawingMode && (
