@@ -4,9 +4,9 @@ import type { BusLine } from '../src/types';
 import type { PlannerPoint, PlannerStep } from '../src/utils/busPlanner';
 import { distanceMeters, type Point, type PublishedCity } from '../src/utils/localTransit';
 import type { CityDataset } from '../src/utils/cityDataset';
-import { plannerCorridorCities } from '../src/utils/plannerCityCoverage';
+import { plannerCorridorCities, plannerCorridorWidths } from '../src/utils/plannerCityCoverage';
 import { collectPlannerStations, matchPlannerStations } from '../src/utils/plannerStops';
-import { planSavedBus, recommendedBusPlans, savedBusCandidates, savedBusLegLimit, transfers } from '../src/utils/savedBusPlanner';
+import { planSavedBus, recommendedBusPlans, savedBusCandidates, transfers } from '../src/utils/savedBusPlanner';
 
 const point = (lng: number): Point => [lng, 40];
 const place = (lng: number): PlannerPoint => ({ city: '北京市', name: String(lng), location: point(lng) });
@@ -98,11 +98,38 @@ test('long trips can chain more than eight buses even inside one municipality', 
   const longRoute = Array.from({ length: 12 }, (_, index) =>
     bus(`接驳${index + 1}路`, 113 + index * .25, 113 + (index + 1) * .25));
   const origin = place(113), destination = place(116);
-  assert.equal(savedBusLegLimit(origin, place(113.25)), 8);
-  assert.equal(savedBusCandidates(longRoute, origin, destination, 100, new Map(), 8).length, 0);
   const plans = await planSavedBus(longRoute, origin, destination, 100, verify, () => false);
   assert.equal(plans[0].buses, 12);
   assert.equal(plans[0].walking, 0);
+});
+
+test('a Beijing-to-Guangzhou length chain verifies all transfers past the former limits', async () => {
+  const origin: PlannerPoint = { city: '北京市', name: '起点', location: [116.4, 39.9] };
+  const destination: PlannerPoint = { city: '广州市', name: '终点', location: [113.3, 23.1] };
+  const count = 72;
+  const stop = (index: number): Point => [
+    origin.location[0] + (destination.location[0] - origin.location[0]) * index / count,
+    origin.location[1] + (destination.location[1] - origin.location[1]) * index / count,
+  ];
+  const lines: BusLine[] = Array.from({ length: count }, (_, index) => {
+    const name = `接驳${index + 1}路`;
+    const start = stop(index);
+    if (index) start[0] += .0005;
+    const path = [start, stop(index + 1)];
+    return { id: name, name, stops: [], path, via_stops: path.map((location, n) => ({ name: `${name}${n}`, location })) };
+  });
+  const widths = plannerCorridorWidths(origin, destination);
+  assert.deepEqual(widths.slice(0, 2), [30, 100]);
+  assert.ok(widths[2] > 200);
+  let checks = 0;
+  const plans = await planSavedBus(lines, origin, destination, 10_000,
+    (from, to) => { checks++; return verify(from, to); }, () => false);
+  assert.equal(plans[0].buses, count);
+  assert.equal(checks, count - 1);
+  assert.equal(plans[0].steps.filter(step => step.mode === 'WALK').length, count - 1);
+
+  const disconnected = lines.filter((_, index) => index !== count / 2);
+  assert.deepEqual(await planSavedBus(disconnected, origin, destination, 10_000, verify, () => false), []);
 });
 
 test('indicates reachable bus candidates without returning an unverified plan', async () => {

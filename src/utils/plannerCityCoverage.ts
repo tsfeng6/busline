@@ -1,7 +1,10 @@
 import type { PlannerPoint } from './busPlanner';
-import type { PublishedCity } from './localTransit';
+import { distanceMeters, type PublishedCity } from './localTransit';
 
-export const PLANNER_CORRIDOR_KM = [30, 100] as const;
+export function plannerCorridorWidths(from: PlannerPoint, to: PlannerPoint): number[] {
+  const wide = Math.ceil(distanceMeters(from.location, to.location) * .15 / 1000);
+  return wide > 100 ? [30, 100, wide] : [30, 100];
+}
 
 export const plannerCityKey = (name: string) => name.trim().replace(/市$/, '');
 
