@@ -30,9 +30,37 @@ export function normalizeBusPlan(plan: any, maxWalking: number): BusPlan | null 
   return { steps, walking: walkingTotal, time: Number(plan.time || 0), distance: Number(plan.distance || 0), buses: steps.filter(step => step.mode === 'BUS').length };
 }
 export function plannerDistance(meters: number): string { return meters >= 1000 ? `${(meters / 1000).toFixed(1)}公里` : `${Math.round(meters)}米`; }
-export function plannerDuration(seconds: number): string { const minutes = Math.ceil(seconds / 60); return `${Math.floor(minutes / 60)}小时${minutes % 60}分`; }
+export function estimatePlannerBusSeconds(distance: number, name: string, city = '', intervals = 0): number {
+  const service = name.split(/[（(]/, 1)[0];
+  const speed = /高速/.test(service) ? (/上海/.test(city) ? 50 : 44)
+    : /BRT|快速公交|奉浦快线/i.test(service) ? 25
+    : /中运量/.test(service) || (/上海/.test(city) && /^71路(?:区间)?$/.test(service)) ? 20
+    : /郊区|郊线/.test(service) || (intervals > 0 && distance / intervals >= 1200) ? 30
+    : /上海/.test(city) ? 18 : 20;
+  return distance * 3.6 / speed;
+}
 
-export type PlannerMapSelection = { kind: 'step'; indices: number[] } | { kind: 'transfer'; index: number };
+export function plannerMinimumDuration(plan: BusPlan): string {
+  const busSeconds = plan.steps.reduce((total, step) =>
+    total + (step.mode === 'BUS' ? step.time || estimatePlannerBusSeconds(step.distance, step.instruction.split(/[：:]/, 1)[0]) : 0), 0);
+  const minutes = Math.ceil((busSeconds + plan.walking * 3.6 / 4.5) / 60);
+  const hours = Math.floor(minutes / 60);
+  return `至少需要${hours ? `${hours}小时` : ''}${minutes % 60}分钟`;
+}
+
+export function plannerLineExcluded(name: string, keywords: readonly string[]): boolean {
+  if (!keywords.length) return false;
+  const normalized = name.normalize('NFKC').toLowerCase();
+  return keywords.some(keyword => keyword && normalized.includes(keyword.normalize('NFKC').toLowerCase()));
+}
+
+export type PlannerMapSelection = ({ kind: 'step'; indices: number[] } | { kind: 'transfer'; index: number }) & { fromDetails?: boolean };
+
+export function samePlannerMapSelection(a: PlannerMapSelection | null, b: PlannerMapSelection): boolean {
+  if (a?.kind === 'transfer' && b.kind === 'transfer') return a.index === b.index;
+  return a?.kind === 'step' && b.kind === 'step' && a.indices.length === b.indices.length
+    && a.indices.every((index, at) => index === b.indices[at]);
+}
 
 export type PlannerTransferChange = { stepIndex: number; label: string; stopName?: string };
 

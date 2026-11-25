@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { BusLine } from '../src/types';
 import type { PlannerPoint, PlannerStep } from '../src/utils/busPlanner';
-import { plannerBusSequence, plannerPlanText, plannerTransferMarkers, plannerTransferPoints } from '../src/utils/busPlanner';
+import { plannerBusSequence, plannerPlanText, plannerMinimumDuration, estimatePlannerBusSeconds, plannerLineExcluded, samePlannerMapSelection, plannerTransferMarkers, plannerTransferPoints } from '../src/utils/busPlanner';
 import { distanceMeters, type Point, type PublishedCity } from '../src/utils/localTransit';
 import type { CityDataset } from '../src/utils/cityDataset';
 import { plannerCorridorCities, plannerCorridorWidths, prioritizePlannerCities, preloadPlannerCities } from '../src/utils/plannerCityCoverage';
@@ -396,4 +396,27 @@ test('planner map hits ignore other roads and prioritize red markers over overla
   assert.deepEqual(hit([100.7, 30.05]), { kind: 'step', indices: [2] });
   assert.deepEqual(hit([100.2, 30.05]), { kind: 'transfer', index: 0 });
   assert.equal(hit([100.7, 30.16]), null);
+});
+
+
+test('time estimates combine reference bus speeds and walking, omitting zero hours', () => {
+  assert.equal(estimatePlannerBusSeconds(18000, '12路', '上海市'), 3600);
+  assert.equal(estimatePlannerBusSeconds(25000, '奉浦快线', '上海市'), 3600);
+  assert.equal(estimatePlannerBusSeconds(44000, '高速专线', '北京市'), 3600);
+  const step = { mode: 'BUS' as const, path: [], instruction: '12路', time: 1800, distance: 10000 };
+  assert.equal(plannerMinimumDuration({ steps: [step], walking: 750, distance: 10750, buses: 1, time: 0 }), '至少需要40分钟');
+  assert.equal(plannerMinimumDuration({ steps: [step, step], walking: 750, distance: 20750, buses: 2, time: 0 }), '至少需要1小时10分钟');
+});
+
+test('planner keyword exclusions leave alternate routes available', async () => {
+  const lines = [bus('ＢＲＴ1号线', 116, 116.04), bus('普通2路', 116, 116.04)];
+  const [plan] = await planSavedBus(lines.filter(line => !plannerLineExcluded(line.name, ['brt'])),
+    place(116), place(116.04), 0, estimateWalking, () => false);
+  assert.equal(plannerBusSequence(plan), '普通2路');
+});
+
+test('detail selection can clear the same map target without clearing different targets', () => {
+  assert.ok(samePlannerMapSelection({ kind: 'step', indices: [1], fromDetails: true }, { kind: 'step', indices: [1] }));
+  assert.ok(samePlannerMapSelection({ kind: 'transfer', index: 1 }, { kind: 'transfer', index: 1 }));
+  assert.equal(samePlannerMapSelection({ kind: 'step', indices: [1] }, { kind: 'transfer', index: 1 }), false);
 });

@@ -9,3 +9,12 @@ export function getGameTimeLimit(mode: 'line' | 'station' | 'city' | 'county', d
 export function formatGameTime(seconds: number): string {
   return `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
 }
+
+export function recordGameAnswer<T>(
+  pending: { current: T | null }, userAnswer: string, isCorrect: boolean, timedOut = false,
+) {
+  const question = pending.current;
+  if (!question) return null;
+  pending.current = null;
+  return { ...question, userAnswer, isCorrect, timedOut };
+}

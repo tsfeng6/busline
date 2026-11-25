@@ -55,7 +55,7 @@ import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Ey
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
-import { getGameTimeLimit, formatGameTime } from './utils/gameTimer';
+import { getGameTimeLimit, formatGameTime, recordGameAnswer } from './utils/gameTimer';
 import { establishGameSession, gameAccountEnabled, finishGameRun, getGameAccount, getGameLeaderboard, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
 import { GameModeVisual } from './components/GameModeVisual';
@@ -429,6 +429,7 @@ export default function App() {
   const gameTimeRemainingMsRef = useRef<number | null>(null);
   const gameDeadlineRef = useRef<number | null>(null);
   const gameTimedOutRef = useRef(false);
+  const gameScoreRef = useRef(0);
   const [gameHints, setGameHints] = useState({ remaining: 7, usedOnQuestion: 0 });
   const handleGameHint = () => {
     if (gameState !== 'playing' || gameLoading || gameFeedback || !gameQuestionData || gameTimedOutRef.current) return;
@@ -456,6 +457,7 @@ export default function App() {
     correctAnswer: string;
     userAnswer: string;
     isCorrect: boolean;
+    timedOut?: boolean;
     lineInfos?: any[];
     networkPaths?: Array<[number, number][]>;
     networkStops?: Array<{ name?: string; lngLat: [number, number] }>;
@@ -464,7 +466,7 @@ export default function App() {
     countyWindow?: {center: Point; radius:number};
   };
   const [gameHistory, setGameHistory] = useState<GameHistoryItem[]>([]);
-  const currentGameQuestionRef = useRef<Omit<GameHistoryItem, 'userAnswer' | 'isCorrect'> | null>(null);
+  const currentGameQuestionRef = useRef<Omit<GameHistoryItem, 'userAnswer' | 'isCorrect' | 'timedOut'> | null>(null);
   const [reviewIndex, setReviewIndex] = useState(0);
   const [reviewShowBasemap, setReviewShowBasemap] = useState(true);
   const [reviewShowStops, setReviewShowStops] = useState(true);
@@ -549,6 +551,9 @@ export default function App() {
   }, [gameAccessToken, refreshLadderBoards]);
   const finishGameOnTimeout = useCallback(() => {
     if (gameTimedOutRef.current) return;
+    const missed = recordGameAnswer(currentGameQuestionRef, '', false, true);
+    if (!missed && (gameMode === 'line' || gameMode === 'station')) return;
+    if (missed) setGameHistory(previous => [...previous, missed]);
     gameTimedOutRef.current = true;
     gameTimeRemainingMsRef.current = 0;
     gameDeadlineRef.current = null;
@@ -559,8 +564,8 @@ export default function App() {
     setGameFeedback(null);
     setConfirmQuitGame(false);
     setGameState('gameover');
-    settleGameLeaderboard(gameScore);
-  }, [gameScore, settleGameLeaderboard]);
+    settleGameLeaderboard(gameScoreRef.current);
+  }, [gameMode, settleGameLeaderboard]);
 
   // Use a deadline so background-tab throttling cannot extend the challenge.
   // Loading questions pauses the clock; each new question keeps the same budget.
@@ -772,6 +777,7 @@ export default function App() {
       setGameTimedOut(false);
       setGameTimeLeft(timeLimit);
       setGameState('playing');
+      gameScoreRef.current = 0;
       setGameScore(0);
       setGameHints({ remaining: 7, usedOnQuestion: 0 });
       setGameQuestionNum(1);
@@ -960,20 +966,13 @@ export default function App() {
       }
     }
 
-    const snapshot = currentGameQuestionRef.current;
-    if (snapshot) {
-      setGameHistory(prev => [
-        ...prev,
-        {
-          ...snapshot,
-          userAnswer: rawUser,
-          isCorrect
-        }
-      ]);
-    }
+    const recorded = recordGameAnswer(currentGameQuestionRef, rawUser, isCorrect);
+    if (!recorded) return;
+    setGameHistory(previous => [...previous, recorded]);
 
     if (isCorrect) {
-      const newScore = gameScore + 1;
+      const newScore = gameScoreRef.current + 1;
+      gameScoreRef.current = newScore;
       setGameScore(newScore);
 
       if (gameMode) {
@@ -1146,11 +1145,14 @@ export default function App() {
   const plannerOverlaysRef = useRef<any[]>([]);
   const plannerMapModeRef = useRef(false);
   const plannerMapHitRef = useRef<((point: Point) => PlannerMapSelection | null) | null>(null);
+  const plannerMapFocusRef = useRef<((selection: PlannerMapSelection | null) => void) | null>(null);
+  useEffect(() => { plannerMapFocusRef.current?.(plannerMapSelection); }, [plannerMapSelection]);
   const plannerSearchVersionRef = useRef(0);
   const clearBusPlan = () => {
     if (plannerOverlaysRef.current.length) mapRef.current?.remove(plannerOverlaysRef.current);
     plannerOverlaysRef.current = [];
     plannerMapHitRef.current = null;
+    plannerMapFocusRef.current = null;
     setPlannerRouteVisible(false);
     setPlannerMapSelection(null);
   };
@@ -6620,6 +6622,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
     setPlannerMapSelection(null);
     const overlays: any[] = [];
     const markers = plannerTransferMarkers(plan.steps);
+    const stepOverlays = new Map<number, { border: any; line: any }>();
+    const markerOverlays: any[] = [];
     let routeIndex: RouteRenderIndex | undefined;
     plannerMapHitRef.current = point => {
       const project = (coord: Point) => map.lngLatToContainer(coord);
@@ -6646,6 +6650,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         if (event?.lnglat) handlePlannerMapClick(getLatLng(event.lnglat), map, { kind: 'step', indices: [index] });
         else if (plannerMapModeRef.current && !plannerStopPickerRef.current) setPlannerMapSelection({ kind: 'step', indices: [index] });
       });
+      stepOverlays.set(index, { border, line });
       overlays.push(border, line);
     });
     markers.forEach(({ center }, index) => {
@@ -6657,8 +6662,28 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
         if (!plannerMapModeRef.current || pickPlannerMapStop(center, map)) return;
         setPlannerMapSelection({ kind: 'transfer', index });
       });
+      markerOverlays.push(marker);
       overlays.push(marker);
     });
+    plannerMapFocusRef.current = selection => {
+      const targets: any[] = [];
+      stepOverlays.forEach(({ border, line }, index) => {
+        const selected = selection?.kind === 'step' && selection.indices.includes(index);
+        border.setOptions({ strokeColor: selected ? '#9a3412' : '#775419', zIndex: selected ? 82 : 80 });
+        line.setOptions({ strokeColor: selected ? '#f97316' : '#FFD43B', zIndex: selected ? 83 : 81 });
+        if (selected) targets.push(line);
+      });
+      markerOverlays.forEach((marker, index) => {
+        const selected = selection?.kind === 'transfer' && selection.index === index;
+        marker.setOptions({ radius: selected ? 11 : 6, strokeColor: selected ? '#c2410c' : '#fff',
+          strokeWeight: selected ? 3 : 2, fillOpacity: selected ? .75 : 1, zIndex: selected ? 96 : 94 });
+        if (selected) targets.push(marker);
+      });
+      if (selection?.fromDetails && targets.length) {
+        const padding = window.innerWidth >= 640 ? [90, 80, 440, 36] : [64, Math.round(window.innerHeight * .52) + 12, 20, 20];
+        map.setFitView(targets, false, padding, 17);
+      }
+    };
     plannerOverlaysRef.current = overlays;
     setPlannerRouteVisible(Boolean(overlays.length));
     map.add(overlays);
@@ -6971,7 +6996,8 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
       </AnimatePresence>
 
       <AnimatePresence>
-        {showBusPlanner && <BusPlanner hidden={showTimeline} mapSelection={plannerMapSelection} onClose={() => { setShowBusPlanner(false); clearBusPlan(); }}
+        {showBusPlanner && <BusPlanner hidden={showTimeline} mapSelection={plannerMapSelection}
+          onDetailSelection={setPlannerMapSelection} onDiscard={clearBusPlan} onClose={() => { setShowBusPlanner(false); clearBusPlan(); }}
           currentCity={currentCity} onMapPick={setPlannerStopPicker} onPreload={setPlannerPreloading}
           showDetails={isAdminVerified}
           disabled={isSearching || loading || showMinigameModal || isDrawingMode}
@@ -8897,7 +8923,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                       <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-m3-surface-container-low border border-m3-outline-variant/20 text-xs">
                         <div className="flex flex-wrap items-center gap-3 min-w-0">
                           <span className="font-bold text-slate-600">
-                            你的答案：<strong className={item.isCorrect ? 'text-emerald-700' : 'text-red-600'}>{item.userAnswer || '（未填）'}</strong>
+                            你的答案：<strong className={item.isCorrect ? 'text-emerald-700' : 'text-red-600'}>{item.timedOut ? '超时未作答' : item.userAnswer || '（未填）'}</strong>
                           </span>
                           <span className="font-bold text-slate-700">
                             正确答案：<strong className="text-m3-primary">{item.correctAnswer}</strong>

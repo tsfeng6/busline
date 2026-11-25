@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import {regularGameRoute,eligibleGameLines,clipRouteToRadius,distanceMeters,nearbyLines,gpsToMap,claimDailyLocation,savedCountySeats,provinceForCity,radiusRing} from '../src/utils/localTransit';
 import {createOfflineQuestion,gameStage,nearbyStationChoices,shuffle} from '../src/utils/offlineGame';
-import {getGameTimeLimit} from '../src/utils/gameTimer';
+import {getGameTimeLimit, recordGameAnswer} from '../src/utils/gameTimer';
 import {CityDataCache} from '../src/utils/cityDataCache';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
 const center:[number,number]=[116,39];
@@ -174,4 +174,17 @@ test('published game catalog reads only same-origin static data and refreshes ca
  await exports.loadPublishedCities();assert.equal(reads,1);
  await exports.loadGameCity('北京市');await exports.loadGameCity('北京市');assert.equal(downloads,1);
  revision='b'.repeat(40);await exports.loadPublishedCities(true);assert.equal(reads,2);await exports.loadGameCity('北京市');assert.equal(downloads,2);
+});
+
+
+test('an unanswered timed-out question is reviewable as wrong and can only be recorded once', () => {
+  const snapshot = { questionNum: 1, correctAnswer: '1路', lineInfos: [{ name: '1路' }] };
+  const pending = { current: snapshot as typeof snapshot | null };
+  assert.deepEqual(recordGameAnswer(pending, '', false, true), {
+    ...snapshot, userAnswer: '', isCorrect: false, timedOut: true,
+  });
+  assert.equal(recordGameAnswer(pending, '1路', true), null);
+  pending.current = snapshot;
+  assert.equal(recordGameAnswer(pending, '1路', true)?.isCorrect, true);
+  assert.equal(recordGameAnswer(pending, '', false, true), null);
 });

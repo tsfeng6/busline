@@ -1,6 +1,6 @@
 import type { BusLine } from '../types';
 import type { BusPlan, PlannerPoint, PlannerStep } from './busPlanner';
-import { isLocalBusLine } from './busPlanner';
+import { estimatePlannerBusSeconds, isLocalBusLine } from './busPlanner';
 import { distanceMeters, type Point } from './localTransit';
 
 export const MAX_TRANSFER_RADIUS = 800;
@@ -672,7 +672,7 @@ function rideStep({ line, stops, from, to }: Ride): PlannerStep {
   }
   const path = nearest > first ? line.path.slice(first, nearest + 1) : stops.slice(from, to + 1).map(stop => stop.point);
   const distance = path.reduce((sum, point, index) => index ? sum + distanceMeters(path[index - 1], point) : sum, 0);
-  return { mode: 'BUS', instruction: `${line.name}：${stops[from].name} → ${stops[to].name}`, distance, time: 0, path, from: stops[from].point, to: stops[to].point, fromName: stops[from].name, toName: stops[to].name };
+  return { mode: 'BUS', instruction: `${line.name}：${stops[from].name} → ${stops[to].name}`, distance, time: estimatePlannerBusSeconds(distance, line.name, line.city, to - from), path, from: stops[from].point, to: stops[to].point, fromName: stops[from].name, toName: stops[to].name };
 }
 
 export async function planSavedBus(
