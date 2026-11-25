@@ -24,7 +24,7 @@ import { cityDatasetExpiresAt, normalizeCityDataset, type CityDataset } from './
 import { actionsCityUpdatesEnabled, cityUpdateJobs, loadSharedCity, invalidateSharedCityRead, gatewayBase, citySnapshotFresh, citySnapshotPreviewable, sharedCityDataEnabled } from './utils/sharedCityClient';
 import { lineBaseIdentity, matchesLineQuery, matchesReturnedLine } from './utils/lineIdentity';
 import { resolveSearchCity } from './utils/searchCity';
-import { discoverStationLines, segmentGridKeys } from './utils/stationCoverage';
+import { discoverStationLines, expandSavedStationCoverage, segmentGridKeys, type StationCoverageDepth } from './utils/stationCoverage';
 import { joinLineSegments } from './utils/mapPerformance';
 import { getSuggestionKind, rankSearchSuggestions } from './utils/searchSuggestions';
 import { BusPlanner } from './components/BusPlanner';
@@ -51,7 +51,7 @@ import {
   saveCitySearchToCache,
   saveLinesToCache,
 } from './utils/lineCache';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Minus, Plus, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
@@ -325,12 +325,8 @@ export default function App() {
   }, [selectedSegmentLines]);
   const [selectedStop, setSelectedStop] = useState<any | null>(null);
   const [stationConnectivityCard, setStationConnectivityCard] = useState<{
-    stop: any;
-    checkedLines: Set<string>;
-    transferEnabled: boolean;
-    atStation: number;
-    aiSummary?: string;
-    deepseekKey?: string;
+    stop: { name: string; city: string; location: Point };
+    depth: StationCoverageDepth;
   } | null>(null);
 
   // Minigame States & Logic
@@ -3101,35 +3097,28 @@ export default function App() {
 
   };
 
-  const drawPriorityRoute = (line: BusLine, AMap: any, transfer = false) => {
-    if (line.path.length < 2) return;
-    priorityCoverageRef.current?.addOverlay(new AMap.Polyline({
-      path: line.path.map(getLatLng), strokeColor: transfer ? '#7c3aed' : '#1768aa',
-      strokeWeight: lineThickness === 'thin' ? 3 : 5, strokeOpacity: .95,
-      lineJoin: 'round', lineCap: 'round', isOutline: true, outlineColor: '#fff',
-      borderWeight: 1, zIndex: 75, bubble: true,
-    }));
+  const drawPriorityRoutes = async (lines: BusLine[], AMap: any, depth: StationCoverageDepth, cancelled: () => boolean) => {
+    const drawable = lines.filter(line => line.path.length >= 2);
+    const color = ['#1768aa', '#7c3aed', '#a26215'][depth];
+    for (let offset = 0; offset < drawable.length && !cancelled(); offset += 80) {
+      const path = drawable.slice(offset, offset + 80).map(line => line.path);
+      priorityCoverageRef.current?.addOverlay(new AMap.Polyline({
+        path, strokeColor: color,
+        strokeWeight: lineThickness === 'thin' ? 3 : 5, strokeOpacity: .95,
+        lineJoin: 'round', lineCap: 'round', isOutline: true, outlineColor: '#fff',
+        borderWeight: 1, zIndex: 77 - depth, bubble: true,
+      }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
   };
 
-  const coverageLines = async (city: string, names: string[], cancelled: () => boolean, supplied?: CityDataset | null) => {
-    const published = supplied === undefined ? await cityDataCache.get(city).catch(() => null) : supplied;
+  const coverageLines = async (city: string, names: string[], cancelled: () => boolean) => {
+    const published = await cityDataCache.get(city).catch(() => null);
     if (cancelled()) return [];
     const found = new Map<string, BusLine>();
-    const unresolved = new Set<string>();
-    const matches = (line: BusLine, name: string) => line.name === name
-      || matchesReturnedLine(name, line);
     for (const name of names) {
-      const saved = published?.lines.filter(line => matches(line, name)) || [];
-      if (!saved.length) unresolved.add(name);
-      for (const line of saved) if (!viewportLineBlocked(line.name)) found.set(line.id || line.name, line);
-    }
-    const AMap = (window as any).AMap;
-    for (const name of unresolved) {
-      if (cancelled()) return [];
-      const result = await searchCityLine(AMap, city || '全国', lineBaseIdentity(name), cancelled, checkAmapQuotaError);
-      const candidates = result.lines.filter(line => matches(line, name));
-      for (const line of candidates) {
-        if (!viewportLineBlocked(line.name)) found.set(line.id || line.name, { ...line, city, path: line.path.map(getLatLng) });
+      for (const line of published?.lines ?? []) {
+        if (line.name === name || matchesReturnedLine(name, line)) found.set(line.id || line.name, line);
       }
     }
     return [...found.values()];
@@ -3150,16 +3139,20 @@ export default function App() {
       cities.set(city, lines);
     }
     if (!cities.size) cities.set(currentCity, names);
-    setCoverageActive(true);
+    let count = 0;
     setCoverageBusy(true);
     try {
       const entries = [...cities].filter(([, lines]) => lines.size);
       for (let i = 0; i < entries.length && !cancelled(); i += 3) {
         await Promise.all(entries.slice(i, i + 3).map(async ([city, lines]) => {
           const routes = await coverageLines(city, [...lines], cancelled);
-          if (!cancelled()) routes.forEach(route => drawPriorityRoute(route, AMap));
+          if (cancelled() || !routes.length) return;
+          count += routes.length;
+          setCoverageActive(true);
+          await drawPriorityRoutes(routes, AMap, 0, cancelled);
         }));
       }
+      if (!cancelled() && !count) setApiErrorNotification('已收录线网中暂无所选站点的线路。');
     } catch {
       if (!cancelled()) setApiErrorNotification('部分通达线路暂时无法读取，可稍后重试。');
     } finally {
@@ -3167,112 +3160,33 @@ export default function App() {
     }
   };
 
-  const executeStationConnectivity = async (
-    stop: any,
-    _checkedLines: Set<string>,
-    transferEnabled: boolean,
-    atStation: number
-  ) => {
-    if (!priorityCoverageRef.current || !(window as any).AMap) return;
-
-    const linesToQuery = stop.lines || [];
-    if (linesToQuery.length === 0) {
-      setConnectivityToast('该站点暂无线路信息');
-      setTimeout(() => setConnectivityToast(null), 3500);
-      return;
-    }
-
+  const executeStationConnectivity = async (stop: { name: string; city: string; location: Point }, depth: StationCoverageDepth) => {
+    const AMap = (window as any).AMap;
+    if (!priorityCoverageRef.current || !AMap) return;
     clearPriorityCoverage();
     const version = coverageVersionRef.current, search = searchVersionRef.current;
     const cancelled = () => version !== coverageVersionRef.current || search !== searchVersionRef.current || isMinigameActiveRef.current;
-    setCoverageActive(true);
     setCoverageBusy(true);
-    setConnectivityToast('正在初始化检索...');
+    setConnectivityToast('正在读取已收录线路…');
 
     try {
-      const AMap = (window as any).AMap;
-      const city = stop.city || currentCity;
-      const published = await cityDataCache.get(city).catch(() => null);
+      const catalog = await loadPublishedCities().catch(() => null);
       if (cancelled()) return;
-      const renderedLines = new Set<string>();
-      const transferStations = new Map<string, [number, number]>();
-      const directLinesInfo: { name: string; stops: string[] }[] = [];
-      const transferLinesInfo: { name: string; lastThree: string[] }[] = [];
-
-      const targetSourceClean = normalizeStopName(stop.name);
-      const searchAndProcessLine = async (lineName: string, isTransfer = false) => {
-        const infos = await coverageLines(city, [lineName], cancelled, published);
-        if (cancelled()) return;
-        for (const info of infos) {
-          const stops = info.via_stops || [];
-          const stopNames = stops.map(s => s.name);
-          if (!isTransfer) {
-            const normalized = stopNames.map(normalizeStopName);
-            let index = normalized.indexOf(targetSourceClean);
-            if (index === -1) index = normalized.findIndex(name => name && (name.includes(targetSourceClean) || targetSourceClean.includes(name)));
-            if (index === -1) continue;
-            const target = transferEnabled && stops[index + atStation];
-            if (target) transferStations.set(target.name, getLatLng(target.location));
-          }
-
-          const key = info.id || info.name;
-          if (renderedLines.has(key)) continue;
-          renderedLines.add(key);
-          drawPriorityRoute(info, AMap, isTransfer);
-          if (isTransfer) transferLinesInfo.push({ name: info.name, lastThree: stopNames.slice(-3).reverse() });
-          else directLinesInfo.push({ name: info.name, stops: stopNames });
-        }
-      };
-
-      // 1. Process source lines
-      setConnectivityToast(`正在检索本站线路 (${linesToQuery.length}条)...`);
-      for (const lName of linesToQuery) {
-        await searchAndProcessLine(lName, false);
-        if (cancelled()) return;
-      }
-
-      if (transferEnabled && transferStations.size > 0) {
-        setConnectivityToast(`发现 ${transferStations.size} 个换乘站点，正在检索增益线路...`);
-        for (const [name, location] of transferStations) {
-          const saved = published?.lines.filter(line => line.via_stops?.some(stop =>
-            normalizeStopName(stop.name) === normalizeStopName(name)
-            && Math.hypot(stop.location.lng - location[0], stop.location.lat - location[1]) < .0006)).map(line => line.name);
-          const details = saved?.length ? { lines: saved } : await fetchStopDetails(name, location, AMap, city);
-          if (cancelled()) return;
-          for (const line of details?.lines || []) {
-            await searchAndProcessLine(line, true);
-            if (cancelled()) return;
-          }
-        }
-      }
-
-      setConnectivityToast('正在生成 AI 总结...');
-      const prompt = `站点名称：${stop.name}
-本站公交线路及路径：
-${directLinesInfo.map(l => `- ${l.name}: ${l.stops.join(' -> ')}`).join('\n')}
-${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向：\n${transferLinesInfo.map(l => `- ${l.name} (最远三站: ${l.lastThree.join(', ')})`).join('\n')}` : ''}
-
-请简要总结该站点的通达情况。`;
-      try {
-        const response = await fetch('/api/ai/summary', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }),
+      const { count, unavailable } = await expandSavedStationCoverage(stop, depth, catalog ?? [],
+        city => cityDataCache.get(city), cancelled, async (lines, layer) => {
+          if (cancelled() || !lines.length) return;
+          setCoverageActive(true);
+          await drawPriorityRoutes(lines, AMap, layer, cancelled);
         });
-        const data = await response.json();
-        if (cancelled()) return;
-        if (data.summary) setStationConnectivityCard(prev => prev ? { ...prev, aiSummary: data.summary } : null);
-        else if (data.error) { setConnectivityToast(`AI 错误: ${data.details || data.error}`); return; }
-      } catch {
-        if (!cancelled()) setConnectivityToast('AI 总结请求失败');
-        return;
-      }
-      setConnectivityToast(null);
+      if (cancelled()) return;
+      setConnectivityToast(unavailable || !catalog ? '部分已收录线路暂时无法读取。'
+        : count ? null : '已收录线网中暂无该站的线路。');
     } catch {
       if (!cancelled()) setConnectivityToast('暂时无法读取通达线路，可稍后重试。');
     } finally {
       if (!cancelled()) setCoverageBusy(false);
     }
   };
-
 
   const fetchStopDetails = async (name: string, location: [number, number], AMap: any, city: string, publishedOnly = false): Promise<any> => {
     const getDistSq = (p1: [number, number], p2: [number, number]) => {
@@ -9562,15 +9476,17 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                         {selectedStop?.address || selectedSegmentAddress}
                       </p>
                     )}
-                    {selectedStop && selectedStop.lines && selectedStop.lines.length > 0 && selectedStop.isBusStop !== false && (
+                    {selectedStop && (selectedStop.location || selectionPos) && selectedStop.isBusStop !== false && (
                       <button 
                         type="button"
                         onClick={() => {
+                          const location = selectedStop.location ? getLatLng(selectedStop.location) : selectionPos;
+                          if (!location) return;
+                          clearPriorityCoverage();
+                          setConnectivityToast(null);
                           setStationConnectivityCard({
-                            stop: selectedStop,
-                            checkedLines: new Set(),
-                            transferEnabled: false,
-                            atStation: 0
+                            stop: { name: selectedStop.name, city: selectedStop.city || currentCity, location },
+                            depth: 0,
                           });
                         }}
                         className="text-[9.5px] md:text-[11px] font-bold text-m3-primary hover:bg-m3-primary-container hover:text-m3-on-primary-container bg-m3-surface-container-high px-3 py-1 rounded-full border border-m3-outline-variant/30 shadow-xs transition-all absolute right-11 top-3 md:relative md:top-auto md:right-auto cursor-pointer"
@@ -9701,61 +9617,18 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
                   </h3>
                 </div>
                 <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4 pr-1">
-                  {/* AI Summary Section */}
-                  <div className="p-3.5 rounded-2xl bg-m3-primary-container/20 border border-m3-primary/10">
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-1.5 h-4 bg-m3-primary rounded-full" />
-                      <span className="text-[11px] font-black text-m3-primary uppercase tracking-wider">通达度总结 Busline AI</span>
-                    </div>
-                    <div className="text-xs text-slate-600 leading-relaxed min-h-[60px] whitespace-pre-wrap">
-                      {stationConnectivityCard.aiSummary || (coverageBusy ? '正在思考中...' : '点击查询后生成 AI 总结...')}
-                    </div>
-                  </div>
-
-                  {/* Settings Section */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div 
-                      onClick={() => {
-                        const nextEnabled = !stationConnectivityCard.transferEnabled;
-                        setStationConnectivityCard({ 
-                          ...stationConnectivityCard, 
-                          transferEnabled: nextEnabled,
-                          atStation: nextEnabled ? 1 : 0
-                        });
-                      }}
-                      className={`flex items-center justify-between p-3 rounded-2xl border cursor-pointer transition-all ${stationConnectivityCard.transferEnabled ? 'bg-m3-primary/5 border-m3-primary/30' : 'bg-slate-50 border-slate-200'}`}
-                    >
-                      <span className="text-xs font-bold text-slate-700">启用换乘</span>
-                      <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${stationConnectivityCard.transferEnabled ? 'bg-m3-primary border-m3-primary' : 'bg-white border-slate-300'}`}>
-                        {stationConnectivityCard.transferEnabled && <Check className="w-3 h-3 text-white" />}
-                      </div>
-                    </div>
-
-                    <div className={`flex items-center gap-2 p-1.5 border rounded-2xl transition-all ${stationConnectivityCard.transferEnabled ? 'bg-slate-50 border-slate-200' : 'bg-slate-100/50 border-slate-100 opacity-60'}`}>
-                      <button 
-                        onClick={() => {
-                          if (!stationConnectivityCard.transferEnabled) return;
-                          setStationConnectivityCard({ ...stationConnectivityCard, atStation: Math.max(1, stationConnectivityCard.atStation - 1) });
-                        }}
-                        disabled={!stationConnectivityCard.transferEnabled}
-                        className="w-8 h-8 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <Minus className="w-3 h-3" />
-                      </button>
-                      <div className="flex-1 text-center">
-                        <span className="text-[10px] text-slate-400 block leading-none mb-0.5">第几站</span>
-                        <span className="text-xs font-black text-slate-800 leading-none">{stationConnectivityCard.atStation}</span>
-                      </div>
-                      <button 
-                        onClick={() => {
-                          if (!stationConnectivityCard.transferEnabled) return;
-                          setStationConnectivityCard({ ...stationConnectivityCard, atStation: Math.min(200, stationConnectivityCard.atStation + 1) });
-                        }}
-                        disabled={!stationConnectivityCard.transferEnabled}
-                        className="w-8 h-8 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <Plus className="w-3 h-3" />
-                      </button>
+                  <div className="space-y-2">
+                    <p className="text-xs font-bold text-slate-700">换乘次数</p>
+                    <div role="group" aria-label="换乘次数" className="flex gap-1 rounded-xl bg-m3-surface-container p-1">
+                      {([0, 1, 2] as const).map(depth => <button
+                        key={depth}
+                        type="button"
+                        aria-pressed={stationConnectivityCard.depth === depth}
+                        disabled={coverageBusy}
+                        onClick={() => setStationConnectivityCard({ ...stationConnectivityCard, depth })}
+                        className={`flex-1 rounded-lg py-2 text-xs font-bold disabled:opacity-50 ${stationConnectivityCard.depth === depth
+                          ? 'bg-m3-surface text-m3-primary shadow-sm' : 'text-slate-600 hover:bg-m3-surface/70'}`}
+                      >{depth} 次</button>)}
                     </div>
                   </div>
 
@@ -9767,14 +9640,7 @@ ${transferEnabled ? `\n换乘（第${atStation}站）后的增益线路及方向
 
                   <button
                     type="button"
-                    onClick={() => {
-                      executeStationConnectivity(
-                        stationConnectivityCard.stop,
-                        new Set(), // Pass empty set as it's ignored
-                        stationConnectivityCard.transferEnabled,
-                        stationConnectivityCard.atStation
-                      );
-                    }}
+                    onClick={() => void executeStationConnectivity(stationConnectivityCard.stop, stationConnectivityCard.depth)}
                     disabled={coverageBusy || isSearching}
                     className="w-full py-3.5 px-6 rounded-2xl bg-slate-800 text-white font-black text-xs shadow-xl hover:bg-slate-900 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
                   >

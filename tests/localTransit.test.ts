@@ -6,6 +6,7 @@ import {regularGameRoute,eligibleGameLines,clipRouteToRadius,distanceMeters,near
 import {createOfflineQuestion,gameStage,nearbyStationChoices,shuffle} from '../src/utils/offlineGame';
 import {getGameTimeLimit, recordGameAnswer} from '../src/utils/gameTimer';
 import {CityDataCache} from '../src/utils/cityDataCache';
+import {expandSavedStationCoverage} from '../src/utils/stationCoverage';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
 const center:[number,number]=[116,39];
 const data=()=>normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',filtered:false,retrievalComplete:true,capturedAt:new Date().toISOString(),
@@ -123,7 +124,7 @@ test('box and station connectivity draw complete priority routes without changin
   const source = fs.readFileSync('src/App.tsx', 'utf8');
   const ast = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const declarations = new Map<string, ts.VariableDeclaration>();
-  const names = ['drawPriorityRoute', 'showStopConnectivity', 'executeStationConnectivity'];
+  const names = ['drawPriorityRoutes', 'showStopConnectivity', 'executeStationConnectivity'];
   const visit = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && names.includes(node.name.getText(ast))) declarations.set(node.name.getText(ast), node);
     ts.forEachChild(node, visit);
@@ -142,10 +143,12 @@ test('box and station connectivity draw complete priority routes without changin
     coverageVersionRef: { current: 0 }, searchVersionRef: { current: 0 }, isMinigameActiveRef: { current: false },
     boxSelectedStops: [{ city: '保定市', lines: ['1路'] }, { city: '廊坊市', lines: ['1路'] }],
     clearPriorityCoverage() { scope.coverageVersionRef.current++; },
-    cityDataCache: { get: async () => data() },
+    cityDataCache: { get: async (city: string) => { cities.push(city); return { ...data(), lines: [line] }; } },
+    loadPublishedCities: async () => [],
+    expandSavedStationCoverage,
     coverageLines: async (city: string) => { cities.push(city); return [line]; },
-    normalizeStopName: (name: string) => name, getLatLng: (point: unknown) => point, setTimeout,
-    fetch: async () => ({ json: async () => ({ summary: 'summary' }) }),
+    setTimeout,
+    fetch: () => { throw new Error('connectivity should not fetch AI summaries or live data'); },
   };
   const proxy = new Proxy(scope, {
     has: (target, key) => key in target || (typeof key === 'string' && key.startsWith('set')),
@@ -153,11 +156,11 @@ test('box and station connectivity draw complete priority routes without changin
   });
   const run = Function('scope', `with(scope){${code};return {showStopConnectivity,executeStationConnectivity};}`)(proxy);
   await run.showStopConnectivity(['1路']);
-  await run.executeStationConnectivity({ city: '北京市', name: '海淀区政府', lines: ['1路'] }, new Set(), false, 0);
+  await run.executeStationConnectivity({ city: '北京市', name: '海淀区政府', location: center }, 0);
   assert.deepEqual(cities, ['保定市', '廊坊市', '北京市']);
   assert.equal(drawn.length, 3);
   assert.ok(drawn.every(overlay => overlay.zIndex >= 75));
-  for (const overlay of drawn) assert.deepEqual(overlay.path, line.path);
+  for (const overlay of drawn) assert.deepEqual(overlay.path, [line.path]);
   assert.equal(camera, 0);
 });
 
@@ -187,4 +190,35 @@ test('an unanswered timed-out question is reviewable as wrong and can only be re
   pending.current = snapshot;
   assert.equal(recordGameAnswer(pending, '1路', true)?.isCorrect, true);
   assert.equal(recordGameAnswer(pending, '', false, true), null);
+});
+
+
+test('saved station coverage follows every stop up to the requested transfer layer across cities', async () => {
+  const route = (name: string, stops: [string, number][]) => ({
+    ...data().lines[0], id: name, name,
+    path: stops.map(([, lng]): [number, number] => [lng, 39]),
+    via_stops: stops.map(([name, lng]) => ({ name, location: { lng, lat: 39 } })),
+  });
+  const direct = route('直达', [['起点', 116], ['甲站', 116.01], ['乙站', 116.02]]);
+  const cities = {
+    北京市: { ...data(), lines: [direct, route('甲站接驳', [['甲站', 116.01], ['丙站', 116.03]])] },
+    廊坊市: { ...data(), city: '廊坊市', lines: [
+      direct,
+      route('乙站接驳', [['乙站公交站', 116.02], ['丁站', 116.04]]),
+      route('二次换乘', [['丁站', 116.04], ['戊站', 116.05]]),
+      route('三次换乘', [['戊站', 116.05], ['己站', 116.06]]),
+      route('同名远站', [['起点', 116.1], ['其他站', 116.11]]),
+    ] },
+  };
+  const catalog = [{ city: '廊坊市', bounds: [116.01, 38.99, 116.12, 39.01] as [number, number, number, number] }];
+  const expected = [['直达'], ['甲站接驳', '乙站接驳'], ['二次换乘']];
+  for (const depth of [0, 1, 2] as const) {
+    const layers: string[][] = [], reads: string[] = [];
+    const result = await expandSavedStationCoverage({ city: '北京市', name: '起点公交站', location: center }, depth, catalog,
+      async city => { reads.push(city); return cities[city as keyof typeof cities] ?? null; },
+      () => false, async lines => { layers.push(lines.map(line => line.name)); });
+    assert.deepEqual(layers, expected.slice(0, depth + 1));
+    assert.deepEqual(reads, depth ? ['北京市', '廊坊市'] : ['北京市']);
+    assert.equal(result.unavailable, false);
+  }
 });
