@@ -61,7 +61,8 @@ export async function createRankedQuestion(
         }, async bytes => brotliDecompressSync(bytes, { maxOutputLength: CITY_BVPK_BLOCK_LIMIT }),
         async bytes => createHash('sha256').update(bytes).digest('hex')), { partConcurrency: 3 }));
       if (mode === 'line' || mode === 'station') {
-        const polygons = rules.range === 'all-city' ? [] : await loadContestDistricts(scope, fetcher);
+        const polygons = rules.range === 'all-city' || rules.range === 'unusual'
+          ? [] : await loadContestDistricts(scope, fetcher);
         return createLocalContestQuestion(mode, data, rules, polygons, previous, random);
       }
       const question = createOfflineQuestion(mode, difficulty, data,

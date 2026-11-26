@@ -266,6 +266,12 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   assert.ok(rankedDrawing(question, 'line').arrows?.length);
   assert.ok(rankedDrawing(question, 'line').basemap);
 
+  const unusual = { ...line('观光环线', [[116.7,39.8],[116.9,39.9]]), via_stops: [] };
+  const unrestrictedData = { ...data, lines: [unusual, ...data.lines] };
+  const unrestricted = createLocalContestQuestion('line', unrestrictedData, contestRules('line', ['unusual', 'nearby']), [], '', random);
+  assert.equal(unrestricted.correctAnswer, '观光环线');
+  assert.ok(rankedDrawing(unrestricted, 'line').arrows?.length);
+
   const station = createLocalContestQuestion('station', data, contestRules('station', ['cycle','no-stops','no-base']), districts, '', random);
   const drawing = rankedDrawing(station, 'station', true);
   assert.equal(station.correctAnswer, '中心站');

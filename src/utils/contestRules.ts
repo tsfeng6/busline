@@ -18,7 +18,7 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
     { label: '考题范围', tags: [
       ...(mode === 'line' ? [{ id: 'special', label: '加入市区非常规线路', factor: 1.5 }] : []),
       { id: 'all-city', label: '扩大至全市', factor: 3 },
-      ...(mode === 'line' ? [{ id: 'unusual', label: '加入古怪线路', factor: 6 }] : []),
+      ...(mode === 'line' ? [{ id: 'unusual', label: '加入古怪线路（全市所有线路）', factor: 6 }] : []),
     ] },
     { label: '底图', tags: [{ id: 'no-base', label: '无底图', factor: 5 }] },
     { label: '站点', tags: [{ id: 'no-stops', label: '无站点', factor: 2 }] },

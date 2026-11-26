@@ -72,21 +72,25 @@ export function createLocalContestQuestion(
     }
     return included;
   };
-  const citywide = rules.range === 'all-city';
+  const unrestricted = rules.range === 'unusual';
+  const citywide = rules.range === 'all-city' || unrestricted;
   const entries = data.lines.filter(line => line.path?.length >= 2).map(line => ({ line, stops: routeStops(line) }));
   const eligible = entries.filter(({ line }) => mode === 'station' || rules.range === 'urban' ? regular(line.name)
-    : rules.range === 'unusual' || !strange(line.name));
+    : unrestricted || !strange(line.name));
   const context = rules.showBasemap ? entries.map(({ line }) => line.path) : undefined;
   const shared = { targetCity: data.city, promptText: '', showBasemap: rules.showBasemap, showStops: rules.showStops,
     isFillIn: rules.fill, contextPaths: context };
   if (mode === 'line') {
-    const pool = eligible.filter(entry => entry.stops.length >= 2 && (citywide || entry.stops.every(stop => urban(stop.lngLat))));
+    const pool = eligible.filter(entry => unrestricted ||
+      (entry.stops.length >= 2 && (citywide || entry.stops.every(stop => urban(stop.lngLat)))));
     const picked = shuffle(pool.filter(entry => routeName(entry.line.name) !== previous), random)[0] ?? pool[0];
     if (!picked || (!rules.fill && new Set(pool.map(entry => routeName(entry.line.name))).size < 2)) throw Error('所选标签下暂无足够的计分线路。');
     const answer = routeName(picked.line.name);
-    const target = picked.stops[Math.floor(picked.stops.length / 2)].lngLat;
+    const middleStop = picked.stops[Math.floor(picked.stops.length / 2)];
+    const target = middleStop?.lngLat ?? picked.line.path[Math.floor(picked.line.path.length / 2)];
     const names = rules.fill ? [] : rules.nearby
-      ? pool.map(entry => ({ entry, distance: entry.stops.reduce((best, stop) => Math.min(best, distanceMeters(stop.lngLat, target)), Infinity) }))
+      ? pool.map(entry => ({ entry, distance: (entry.stops.length ? entry.stops.map(stop => stop.lngLat) : entry.line.path)
+          .reduce((best, point) => Math.min(best, distanceMeters(point, target)), Infinity) }))
         .sort((a, b) => a.distance - b.distance).map(({ entry }) => entry)
       : shuffle(pool, random);
     return { ...shared, correctAnswer: answer, options: rules.fill ? [] : options(answer, names.map(entry => routeName(entry.line.name)), random),
