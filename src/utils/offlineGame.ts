@@ -6,7 +6,7 @@ export type GameMode='line'|'station'|'city'|'county';
 export type GameDifficulty='easy'|'medium'|'hard'|'hell';
 export type GameStage={showBasemap:boolean;showStops:boolean;isFillIn:boolean;confusing?:boolean};
 export type OfflineQuestion={targetCity:string;correctAnswer:string;promptText:string;options:string[];isFillIn:boolean;
- lineInfos?:BusLine[];networkImage?:string;networkPaths?:Point[][];contextPaths?:Point[][];networkStops?:{name:string;lngLat:Point}[];targetPoint?:{name:string;lngLat:Point};fallbackCenter?:Point;countyWindow?:{center:Point;radius:number};showBasemap?:boolean;showStops?:boolean};
+ lineInfos?:BusLine[];networkImage?:string;sourceRevision?:string;networkPaths?:Point[][];contextPaths?:Point[][];networkStops?:{name:string;lngLat:Point}[];targetPoint?:{name:string;lngLat:Point};fallbackCenter?:Point;countyWindow?:{center:Point;radius:number};showBasemap?:boolean;showStops?:boolean};
 export function shuffle<T>(array:T[],random= Math.random){const copy=[...array];for(let i=copy.length-1;i>0;i--){const j=Math.floor(random()*(i+1));[copy[i],copy[j]]=[copy[j],copy[i]];}return copy;}
 const stopName=(name:string)=>name.replace(/[（(].*?[）)]/g,'').replace(/公交站$/,'').trim();
 function compact(path:Point[]):Point[]{

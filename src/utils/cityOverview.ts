@@ -1,3 +1,4 @@
+import { provinceForCity, type PublishedCity } from './localTransit';
 export const CITY_DETAIL_ZOOM = 13;
 const DEFAULT_DETAIL_STROKE_PX = 3.75;
 const DISTANT_OVERVIEW_STROKE_PX = .875;
@@ -62,4 +63,11 @@ export function validTileIndex(value:any):value is OverviewTileIndex{
   if(typeof key!=='string'||!/^\d+\/\d+\/\d+$/.test(key))return false;
   const [z,x,y]=key.split('/').map(Number);return z>=2&&z<=13&&x>=0&&y>=0&&x<2**z&&y<2**z;
  });
+}
+
+export function normalizeQuizCatalog(input: unknown[]): PublishedCity[] {
+ return input.filter(validCityOverview).map(city=>({...city,
+  province:city.province||provinceForCity(city.city),
+  countySeats:(Array.isArray(city.countySeats)?city.countySeats:[]).filter(seat=>typeof seat.name==='string'&&seat.source==='government-stop'&&Array.isArray(seat.center)&&seat.center.length===2&&seat.center.every(Number.isFinite)).map(seat=>({...seat,city:city.city})),
+ }));
 }

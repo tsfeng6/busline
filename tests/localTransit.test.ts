@@ -9,6 +9,7 @@ import {CityDataCache} from '../src/utils/cityDataCache';
 import {expandSavedStationCoverage} from '../src/utils/stationCoverage';
 import {contestRules, contestPrompts} from '../src/utils/contestRules';
 import {drawContestQuestion} from '../src/utils/contestDrawing';
+import {sealLocalQuestion, openLocalQuestion, type SealedQuestion} from '../src/utils/localQuestionCipher';
 import {createSimulationQuestion} from '../src/utils/simulationQuestion';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
 const center:[number,number]=[116,39];
@@ -102,13 +103,14 @@ test('actual game generation never invokes provider search services and accepts 
   gameProvince: '北京市', gameCountyProvince: '北京市', gameSessionIdRef: ref(0), gameRunRef: ref(null),
   loadPublishedCities: async () => [{city: snapshot.city, province: '北京市', countySeats: [seat]}],
   loadGameCity: async (city: string) => { assert.equal(city, snapshot.city); return snapshot; },
+  loadGameCityImage: async () => 'fixture-image', sealLocalQuestion, rankedPendingRef: ref(false),
   getRankedPuzzle: () => { throw Error('模拟不应请求竞赛服务'); },
   getRankedPack: () => { throw Error('模拟不应请求竞赛题包'); }, stopRankedPreload() {},
   roadViewportCleanupRef: ref(null), activeRawMarkersRef: ref([]), roadStopMarkersRef: ref([]),
   allMapStopsRef: ref(new Map()), roadStopsDataRef: ref(new Map()), lineGroupRef: ref(null), markerGroupRef: ref(null),
   clearStopMarkerGroup() {}, setCountyGameMask() {},
   createSimulationQuestion, drawContestQuestion, contestPrompts,
-  gameTimeRemainingMsRef: ref(180000), questionShownAtRef: ref<number | null>(null), currentGameQuestionRef: ref(null),
+  gameTimeRemainingMsRef: ref(180000), questionShownAtRef: ref<number | null>(null), currentGameQuestionRef: ref<SealedQuestion | null>(null),
   setSimulationDrawing: (value: typeof drawing) => { drawing = value; }, setGameQuestionData: (value: unknown) => { question = value; },
   isMinigameActiveRef: ref(true), restoreMapAfterMinigame() {}, setGameDataError: (message: string) => { throw Error(message); },
  };
@@ -120,9 +122,11 @@ test('actual game generation never invokes provider search services and accepts 
   await run(mode,'北京市',12);
   assert.ok(question?.isFillIn);
   assert.deepEqual(question.options, []);
-  assert.ok(drawing?.path);
+  assert.ok(mode === 'city' ? drawing?.raster : drawing?.path);
+  assert.equal(question.correctAnswer, undefined);
+  assert.ok((await openLocalQuestion<{correctAnswer:string}>(scope.currentGameQuestionRef.current!)).correctAnswer);
   assert.equal(drawing?.county, mode === 'county');
-  assert.equal(drawing?.basemap, '');
+  assert.equal(drawing?.basemap ?? '', '');
   assert.equal(typeof scope.questionShownAtRef.current,'number');
   if (mode === 'line') {
    assert.equal(scope.gameTimeRemainingMsRef.current, 5000);
@@ -130,6 +134,15 @@ test('actual game generation never invokes provider search services and accepts 
   }
  }
  await assert.rejects(run('line','未收录城市',1), /已有线路图/);
+});
+
+test('unanswered local quiz data is authenticated ciphertext', async () => {
+ const sealed = await sealLocalQuestion({ correctAnswer: '第一题答案' });
+ assert.equal(new TextDecoder().decode(sealed.ciphertext).includes('第一题答案'), false);
+ const changed = sealed.ciphertext.slice(0);
+ new Uint8Array(changed)[0] ^= 1;
+ await assert.rejects(openLocalQuestion({ ...sealed, ciphertext: changed }));
+ assert.deepEqual(await openLocalQuestion(sealed), { correctAnswer: '第一题答案' });
 });
 
 test('daily location effect waits for onboarding and runs only once across openings on the same day',()=>{
@@ -198,12 +211,12 @@ test('box and station connectivity draw complete priority routes without changin
 });
 
 test('published game catalog reads only same-origin static data and refreshes cached cities after a publication',async()=>{
- const {validCityOverview}=await import('../src/utils/cityOverview');
- const source=fs.readFileSync('src/utils/publishedTransit.ts','utf8').replace('import.meta.env.BASE_URL',"'/'"),code=ts.transpile(source,{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS});
+ const {normalizeQuizCatalog}=await import('../src/utils/cityOverview');
+ const source=fs.readFileSync('src/utils/publishedTransit.ts','utf8').replaceAll('import.meta.env.BASE_URL',"'/'"),code=ts.transpile(source,{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS});
  let reads=0,downloads=0,revision='a'.repeat(40);const snapshot=data(),exports:any={};
  const city={city:snapshot.city,center,bounds:[115,38,117,40],thumbnail:'thumbnails/北京-geo-v3.png',lineDirections:3,capturedAt:snapshot.capturedAt,countySeats:savedCountySeats(snapshot)};
  const cityDataCache=new CityDataCache(async()=>{throw Error('Game reads use the bounded loader');});
- const require=(name:string)=>name==='./cityOverview'?{validCityOverview}:name==='./localTransit'?{provinceForCity}:name==='./sharedCityClient'?{loadSharedCityForGame:async(city:string)=>{assert.equal(city,snapshot.city);downloads++;return snapshot;}}:{cityDataCache};
+ const require=(name:string)=>name==='./cityOverview'?{normalizeQuizCatalog}:name==='./localTransit'?{provinceForCity}:name==='./sharedCityClient'?{loadSharedCityForGame:async(city:string)=>{assert.equal(city,snapshot.city);downloads++;return snapshot;}}:{cityDataCache};
  const globalThis={fetch:async(url:string)=>{assert.ok(url.startsWith('/city-data/v1/overview.json'));assert.ok(!url.includes('amap'));reads++;return {ok:true,json:async()=>({cities:[city],tiles:{revision}})};}};
  Function('exports','require','globalThis','AbortSignal',code)(exports,require,globalThis,AbortSignal);
  const catalog=await exports.loadPublishedCities();assert.equal(catalog[0].province,'北京市');assert.equal(catalog[0].countySeats[0].source,'government-stop');

@@ -327,13 +327,22 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
       try { rules = contestRules(input.game, input.tags ?? []); }
       catch (error) { throw fail(400, (error as Error).message); }
       const difficulty = rules.perQuestion ? 'easy' : 'hard';
-      const run = await action('start', { game: input.game, difficulty, scope, rules });
-      return reply({ run }, 201);
+      const browserQuestions = input.browserQuestions === true;
+      const run = await action('start', { game: input.game, difficulty, scope, rules: { ...rules, browserQuestions } });
+      return reply({ run: { ...run, browserQuestions } }, 201);
     }
     const current = await action('read');
-    const prepare = async (previous: string, useCityThumbnail = false) => {
+    const unlock = (saved: { encrypted?: boolean; correctAnswer: string; isFillIn: boolean }, number: number) =>
+      saved.encrypted ? openQuestion(saved.correctAnswer, serviceKey, runId, number).question : saved;
+    const prepare = async (previous: string, useCityThumbnail = false, number?: number) => {
       try {
-        const question = await createRankedQuestion(appOrigin, transport, current.game, current.scope, previous, current.rules, useCityThumbnail);
+        const question = await createRankedQuestion(appOrigin, transport, current.game, current.scope, previous, current.rules, useCityThumbnail,
+          current.rules.browserQuestions && number !== undefined ? { run: runId, number } : undefined);
+        if (current.rules.browserQuestions) {
+          return { question: { targetCity: question.targetCity, correctAnswer: question.correctAnswer,
+            isFillIn: question.isFillIn, options: [], promptText: '', sourceRevision: question.sourceRevision },
+            drawing: { path: '', stops: [], terminals: [], county: false } };
+        }
         const drawing = drawContestQuestion(question, current.game, current.rules.cycle);
         const { contextPaths, networkImage, ...review } = question;
         return { question: review, drawing };
@@ -347,7 +356,12 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
       const key = runId + ':' + number;
       let pending = preparingRankedPacks.get(key);
       if (!pending) {
-        pending = prepare(current.question?.correctAnswer ?? current.previousAnswer, true)
+        const previous = current.question
+          ? unlock(current.question, current.number).correctAnswer
+          : current.rules.browserQuestions && current.previousAnswer
+            ? openQuestion(current.previousAnswer, serviceKey, runId, current.number).question.correctAnswer
+            : current.previousAnswer;
+        pending = prepare(previous, true, number)
           .then(prepared => sealQuestion(prepared, serviceKey, runId, number))
           .finally(() => preparingRankedPacks.delete(key));
         preparingRankedPacks.set(key, pending);
@@ -356,18 +370,19 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     }
     if (rankedPath[2] === 'answer') {
       if (!uuid.test(input.id || '') || typeof input.answer !== 'string' || input.answer.length > 150) throw fail(400, '答案格式无效。');
-      const question = current.id === input.id ? current.question : null;
+      const question = current.id === input.id && current.question ? unlock(current.question, current.number) : null;
       const correct = !!question && isGameAnswerCorrect(input.answer, question.correctAnswer, question.isFillIn, current.game);
       const result = await action('answer', { id: input.id, answer: input.answer.trim(), timeout: input.timeout === true, correct });
-      return reply(result);
+      return reply(result.question?.encrypted ? { ...result, question: unlock(result.question, result.number) } : result);
     }
     if (rankedPath[2] === 'hint') {
       if (input.id !== current.id || !current.question || !Number.isInteger(input.step) || input.step < 1 || input.step > current.rules.hintLimit) throw fail(400, '提示不可用。');
-      if (input.step > current.hintsOnQuestion && isGameHintComplete(current.question.correctAnswer, current.hintsOnQuestion)) throw fail(409, '本题提示已全部揭示。');
+      if (input.step > current.hintsOnQuestion && isGameHintComplete(unlock(current.question, current.number).correctAnswer, current.hintsOnQuestion)) throw fail(409, '本题提示已全部揭示。');
       const next = await action('hint', { id: input.id, step: input.step });
-      return reply({ text: getGameHint(next.question.correctAnswer, next.hintsOnQuestion),
+      const answer = unlock(next.question, current.number).correctAnswer;
+      return reply({ text: getGameHint(answer, next.hintsOnQuestion),
         remaining: current.rules.hintLimit - next.hints, used: next.hintsOnQuestion,
-        complete: isGameHintComplete(next.question.correctAnswer, next.hintsOnQuestion) });
+        complete: isGameHintComplete(answer, next.hintsOnQuestion) });
     }
     const number = input.number;
     if (current.finished || !Number.isSafeInteger(number) || number !== current.number + (current.question ? 0 : 1)) throw fail(409, '题目顺序无效。');
@@ -381,10 +396,18 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
           throw fail(400, '竞赛题包无效，请重新出题。');
         }
       } else {
+        if (current.rules.browserQuestions) throw fail(400, '缺少竞赛校验题包。');
         // Previously opened clients may still use the original request.
         prepared = await prepare(current.previousAnswer);
       }
-      issued = await action('issue', { number, ...prepared });
+      if (current.rules.browserQuestions && input.sourceRevision !== prepared.question.sourceRevision) {
+        throw fail(409, '线路数据刚更新，请刷新后重新开始竞赛。');
+      }
+      issued = await action('issue', current.rules.browserQuestions ? {
+        number, drawing: prepared.drawing,
+        // Keep the verifier sealed in the database. The RPC carries it forward for retries and next-question exclusion.
+        question: { correctAnswer: input.ticket, encrypted: true, options: [], isFillIn: prepared.question.isFillIn },
+      } : { number, ...prepared });
     }
     const question = issued.question;
     const promptText = contestPrompts[current.game as GameName];

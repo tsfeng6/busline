@@ -3,7 +3,7 @@ import type {BusLine} from '../types';
 import {PROVINCE_CITIES} from '../data/provinceCities';
 export type Point=[number,number];
 export type CountySeat={name:string;city:string;center:Point;source:'government-stop'};
-export type PublishedCity={city:string;province:string;center:Point;bounds:[number,number,number,number];countySeats:CountySeat[];lineDirections:number;capturedAt:string};
+export type PublishedCity={city:string;province:string;center:Point;bounds:[number,number,number,number];countySeats:CountySeat[];thumbnail?:string;lineDirections:number;capturedAt:string};
 const canonical=(name:string)=>name.replace(/市$/,'');
 export const routeName=(name:string)=>name.replace(/[（(].*$/,'').replace(/#\d+$/,'').trim();
 export function provinceForCity(city:string){return Object.entries(PROVINCE_CITIES).find(([,cities])=>cities.some(name=>canonical(name)===canonical(city)))?.[0]||'';}

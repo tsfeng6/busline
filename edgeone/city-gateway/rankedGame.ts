@@ -2,15 +2,17 @@ import { brotliDecompressSync } from 'node:zlib';
 import { createHash, randomInt } from 'node:crypto';
 import { CITY_BVPK_BLOCK_LIMIT, cityBvpkPartPath, readCityBvpkPart, resolveCityStorage } from '../../src/utils/cityBvpk';
 import { cityDataKey, normalizeCityDataset } from '../../src/utils/cityDataset';
-import { validCityOverview } from '../../src/utils/cityOverview';
+import { normalizeQuizCatalog, validCityOverview } from '../../src/utils/cityOverview';
 import type { PublishedCity } from '../../src/utils/localTransit';
 import { shuffle, type GameMode, type OfflineQuestion } from '../../src/utils/offlineGame';
 import { createCityContestQuestion, createLocalContestQuestion, createNetworkContestQuestion, contestDistrictPolygons } from '../../src/utils/contestQuestions';
+import { createSimulationQuestion, rankedQuestionRandom } from '../../src/utils/simulationQuestion';
 import type { ContestRules } from '../../src/utils/contestRules';
 
 export async function createRankedQuestion(
   appOrigin: string, fetcher: typeof fetch, mode: GameMode,
   scope: string, previous: string, rules: ContestRules, useCityThumbnail = false,
+  local?: { run: string; number: number },
 ): Promise<OfflineQuestion> {
   const app = new URL(appOrigin);
   const deadline = Date.now() + 32000;
@@ -26,6 +28,36 @@ export async function createRankedQuestion(
   };
   const index = await (await read('overview.json')).json();
   if (!Array.isArray(index.cities)) throw Error('题库目录无效。');
+  const loadCity = async (city: string) => {
+    const folder = `${encodeURIComponent(cityDataKey(city))}/`;
+    const manifest = await (await read(folder + 'latest.json')).json();
+    return normalizeCityDataset(await resolveCityStorage(manifest,
+      async part => (await read(folder + part)).json(),
+      descriptor => readCityBvpkPart(descriptor, async () => {
+        const response = await read(folder + cityBvpkPartPath(descriptor));
+        if (!response.body) throw Error('题库分片为空。');
+        const buffer = new Uint8Array(descriptor.bytes);
+        const reader = response.body.getReader();
+        let size = 0;
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (size + value.length > buffer.length) throw Error('题库分片长度无效。');
+            buffer.set(value, size);
+            size += value.length;
+          }
+        } finally { await reader.cancel(); }
+        return buffer.subarray(0, size);
+      }, async bytes => brotliDecompressSync(bytes, { maxOutputLength: CITY_BVPK_BLOCK_LIMIT }),
+      async bytes => createHash('sha256').update(bytes).digest('hex')), { partConcurrency: 3 }));
+  };
+  if (local) {
+    const catalog = normalizeQuizCatalog(index.cities);
+    // The browser draws the question. For the city mode only its selection is needed for verification.
+    return createSimulationQuestion(mode, scope, scope, rules, previous, catalog, loadCity,
+      AbortSignal.timeout(32000), rankedQuestionRandom(local.run, local.number), async () => '');
+  }
   const catalog = index.cities.filter(validCityOverview) as (PublishedCity & { thumbnail: string })[];
   const random = () => randomInt(0, 2 ** 32) / 2 ** 32;
   const seats = mode === 'county' ? catalog.filter(item => item.province === scope).flatMap(item => item.countySeats ?? []) : [];
@@ -46,28 +78,7 @@ export async function createRankedQuestion(
         return { ...createCityContestQuestion(candidate.city, rules, catalog.map(city => city.city), random),
           networkImage: png.toString('base64') };
       }
-      const folder = `${encodeURIComponent(cityDataKey(candidate.city))}/`;
-      const manifest = await (await read(folder + 'latest.json')).json();
-      const data = normalizeCityDataset(await resolveCityStorage(manifest,
-        async part => (await read(folder + part)).json(),
-        descriptor => readCityBvpkPart(descriptor, async () => {
-          const response = await read(folder + cityBvpkPartPath(descriptor));
-          if (!response.body) throw Error('题库分片为空。');
-          const buffer = new Uint8Array(descriptor.bytes);
-          const reader = response.body.getReader();
-          let size = 0;
-          try {
-            for (;;) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (size + value.length > buffer.length) throw Error('题库分片长度无效。');
-              buffer.set(value, size);
-              size += value.length;
-            }
-          } finally { await reader.cancel(); }
-          return buffer.subarray(0, size);
-        }, async bytes => brotliDecompressSync(bytes, { maxOutputLength: CITY_BVPK_BLOCK_LIMIT }),
-        async bytes => createHash('sha256').update(bytes).digest('hex')), { partConcurrency: 3 }));
+      const data = await loadCity(candidate.city);
       if (mode === 'line' || mode === 'station') {
         const polygons = rules.range === 'all-city' || rules.range === 'unusual'
           ? [] : contestDistrictPolygons(scope);

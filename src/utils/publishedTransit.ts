@@ -1,5 +1,5 @@
-import {validCityOverview} from './cityOverview';
-import {provinceForCity,type PublishedCity} from './localTransit';
+import {normalizeQuizCatalog} from './cityOverview';
+import type {PublishedCity} from './localTransit';
 import {cityDataCache} from './spatialLoader';
 import type {CityDataset} from './cityDataset';
 import {loadSharedCityForGame} from './sharedCityClient';
@@ -13,9 +13,22 @@ export function loadPublishedCities(refresh=false):Promise<PublishedCity[]>{
   const data=await response.json();
   if(!Array.isArray(data.cities))throw Error('城市目录格式无效。');
   const nextRevision=String(data.tiles?.revision||'');if(revision&&nextRevision!==revision)cityDataCache.invalidate();revision=nextRevision;catalogAt=Date.now();
-  return data.cities.filter(validCityOverview).map((city:any)=>({...city,province:city.province||provinceForCity(city.city),countySeats:Array.isArray(city.countySeats)?city.countySeats.filter((seat:any)=>typeof seat.name==='string'&&seat.source==='government-stop'&&Array.isArray(seat.center)&&seat.center.length===2&&seat.center.every(Number.isFinite)).map((seat:any)=>({...seat,city:city.city})):[]}));
+  return normalizeQuizCatalog(data.cities);
  })().catch(error=>{catalogTask=undefined;throw error;});
  return catalogTask;
+}
+export async function loadGameCityImage(city: PublishedCity, signal: AbortSignal) {
+ if (!city.thumbnail?.endsWith('.png')) throw Error('暂时无法读取城市线网题图。');
+ const response = await fetch(`${import.meta.env.BASE_URL}city-data/v1/${city.thumbnail}`, { signal });
+ if (!response.ok) throw Error('暂时无法读取城市线网题图。');
+ const blob = await response.blob();
+ if (blob.type !== 'image/png' || blob.size > 2 * 1024 * 1024) throw Error('城市线网题图格式无效。');
+ return await new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result).split(',')[1]);
+  reader.onerror = () => reject(Error('暂时无法读取城市线网题图。'));
+  reader.readAsDataURL(blob);
+ });
 }
 export async function loadGameCity(city:string,onPart?:(completed:number,total:number)=>void):Promise<CityDataset>{
  const cached=cityDataCache.peek(city);if(cached)return cached;

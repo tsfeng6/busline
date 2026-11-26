@@ -255,6 +255,33 @@ test('ranked gateway exposes only the drawing until the server grades the answer
  const late = await latePack.json();
  assert.equal((await post(prefix + '/question', {number:11, ticket})).status, 400);
  assert.equal((await post(prefix + '/question', {number:11, ticket:late.ticket})).status, 200);
+ // The new client receives only timer metadata and independently builds its local question.
+ const { createSimulationQuestion, rankedQuestionRandom } = await import('../src/utils/simulationQuestion');
+ const { normalizeQuizCatalog } = await import('../src/utils/cityOverview');
+ const catalog = normalizeQuizCatalog([{city:'北京市', bounds:[115,38,117,41], thumbnail:'thumbnails/北京.png'}]);
+ const { contestRules } = await import('../src/utils/contestRules');
+ const local = await createSimulationQuestion('city', '', '', contestRules('city', ['fill']), '', catalog,
+    async () => { throw Error('不应加载全量城市数据'); }, new AbortController().signal, rankedQuestionRandom(run, 1), async () => 'test-image');
+ Object.assign(state, { number:0, question:null, previousAnswer:'' });
+ const started = await post('/ranked-game-runs', { game:'city', tags:['fill'], browserQuestions:true });
+ assert.equal((await started.json()).run.browserQuestions, true);
+ const localPacked = await post(prefix + '/pack', {number:1});
+ assert.equal(localPacked.status, 200);
+ const verifier = (await localPacked.json()).ticket;
+ assert.equal((await post(prefix + '/question', {number:1, ticket:verifier, sourceRevision:'stale'})).status, 409);
+ const timed = await post(prefix + '/question', {number:1, ticket:verifier, sourceRevision:local.sourceRevision});
+ assert.equal(timed.status, 200);
+ const metadata = await timed.text();
+ assert.doesNotMatch(metadata, /correctAnswer|targetCity|北京市|test-image/);
+ assert.equal(state.question.correctAnswer, verifier);
+ assert.equal(state.question.encrypted, true);
+ assert.equal((await post(prefix + '/pack', {number:2})).status, 200);
+ const verified = await post(prefix + '/answer', { id:questionId, answer:local.correctAnswer, score:999 });
+ const verifiedBody = await verified.json();
+ assert.equal(verifiedBody.correct, true);
+ assert.equal(verifiedBody.question.correctAnswer, local.correctAnswer);
+ Object.assign(state, { number:1, question:null, previousAnswer:verifier });
+ assert.equal((await post(prefix + '/pack', {number:2})).status, 200);
  assert.equal((await post('/game-runs/' + run + '/finish', {score:999})).status, 410);
 });
 
