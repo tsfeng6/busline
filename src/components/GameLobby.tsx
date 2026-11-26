@@ -6,7 +6,7 @@ import { getContestLeaderboard, type LeaderboardEntry } from '../utils/gameAccou
 import { hasContestDistricts } from '../utils/contestQuestions';
 import type { PublishedCity } from '../utils/localTransit';
 import type { GameMode } from '../utils/offlineGame';
-import { ContestCardNetwork } from './ContestCardNetwork';
+import { ContestCardOutline } from './ContestCardOutline';
 import { ContestNetworkMap } from './ContestNetworkMap';
 import { GameLadderPanel } from './GameLadderPanel';
 import { GameModeVisual } from './GameModeVisual';
@@ -41,6 +41,7 @@ type LobbyProps = {
   error: string;
   accountName?: string;
   accountLoading: boolean;
+  boardRevision: number;
   accountEnabled: boolean;
   onAccount: () => void;
   onStart: () => void;
@@ -151,7 +152,7 @@ export function GameLobby(props: LobbyProps) {
   const region = contestRegions.find(item => item.id === props.regionId);
   const regionContests = region?.contests.map(id => contestsById.get(id)!) ?? [];
   const boardFor = (id: string) => props.accountEnabled ? boards[id] ?? loadingBoard : unavailableBoard;
-  const { accountEnabled, accountName, accountLoading } = props;
+  const { accountEnabled, accountName, accountLoading, boardRevision } = props;
 
   useEffect(() => {
     if (!competitive || !accountEnabled || accountLoading) return;
@@ -164,7 +165,7 @@ export function GameLobby(props: LobbyProps) {
       );
     }
     return () => { active = false; };
-  }, [competitive, accountEnabled, accountName, accountLoading, refresh]);
+  }, [competitive, accountEnabled, accountName, accountLoading, boardRevision, refresh]);
 
   const showRegion = (next: (typeof contestRegions)[number]) => {
     const existing = next.contests.some(id => id === props.contest.id);
@@ -240,7 +241,7 @@ export function GameLobby(props: LobbyProps) {
             {contestRegions.map(item => <motion.article key={item.id}
               layoutId={reduceMotion ? undefined : `region-${item.id}`} style={{ borderRadius: 24 }}
               className="contest-card contest-preview group relative grid min-h-48 grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3 p-3 sm:min-h-56 sm:gap-5 sm:p-4">
-              <ContestCardNetwork region={item.id} />
+              <ContestCardOutline region={item.id} />
               <div className="relative col-start-2 flex min-w-0 flex-col py-1 pr-1 text-white">
                 <h3 className="mb-3 text-right text-2xl font-black tracking-tight sm:mb-5 sm:text-4xl">{item.title}</h3>
                 <div className={`grid gap-x-3 gap-y-2 ${item.contests.length > 1 ? 'min-[365px]:grid-cols-2' : ''}`}>

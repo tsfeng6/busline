@@ -308,6 +308,52 @@ test('S1 county standings use the Hebei contest scope', async () => {
  assert.deepEqual(calls, [{p_game:'county', p_scope:'河北省'}]);
 });
 
+test('local contest results save the best score for the authenticated player', async () => {
+ const {store} = fixture();
+ const id = '00000000-0000-0000-0000-000000000001';
+ const accountEnv = {...env, SUPABASE_URL:'https://project.supabase.co', SUPABASE_ANON_KEY:'test-key', SUPABASE_SECRET_KEY:'sb_secret_test'};
+ let suspended = false, best: number | undefined;
+ const upstream: typeof fetch = async (input, init) => {
+   const url = new URL(String(input));
+   if (url.pathname.endsWith('/current_game_profile')) return Response.json([{id, display_name:'测试用户'}]);
+   assert.equal(new Headers(init?.headers).get('apikey'), 'sb_secret_test');
+   if (url.pathname.endsWith('/game_contest_suspensions')) {
+     assert.equal(url.searchParams.get('user_id'), 'eq.' + id);
+     return Response.json(suspended ? [{user_id:id}] : []);
+   }
+   assert.equal(url.pathname, '/rest/v1/game_contest_entries');
+   const entry = JSON.parse(String(init?.body));
+   if (init?.method === 'POST') {
+     assert.equal(entry.user_id, id);
+     assert.equal(entry.scope, '北京市');
+     if (best !== undefined) return Response.json([]);
+     best = entry.score;
+     return Response.json([{score:best}]);
+   }
+   assert.equal(init?.method, 'PATCH');
+   assert.equal(url.searchParams.get('user_id'), 'eq.' + id);
+   assert.equal(url.searchParams.get('score'), 'lt.' + entry.score);
+   if (entry.score > best!) best = entry.score;
+   return new Response(null, {status:204});
+ };
+ const submit = (correctCount: number, cookie = 'busline_game_session=session') =>
+   handleEdgeOneGateway(new Request('https://gateway.example/contest-results', {
+     method:'POST', headers:{Cookie:cookie},
+     body:JSON.stringify({game:'line',scope:'北京市',tags:['all-city'],correctCount,score:999999}),
+   }), accountEnv, store, upstream);
+ assert.equal((await submit(4, '')).status, 401);
+ assert.equal((await submit(-1)).status, 400);
+ assert.deepEqual(await (await submit(4)).json(), {saved:true});
+ assert.equal(best, 3);
+ assert.equal((await submit(2)).status, 200);
+ assert.equal(best, 3);
+ assert.equal((await submit(5)).status, 200);
+ assert.equal(best, 3.75);
+ suspended = true;
+ assert.equal((await submit(8)).status, 403);
+ assert.equal(best, 3.75);
+});
+
 test('contest labels are exclusive and only valid for their mode', async () => {
   const { contestRules } = await import('../src/utils/contestRules');
   assert.equal(contestRules('line', []).multiplier, .25);
@@ -346,6 +392,19 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   const unrestricted = createLocalContestQuestion('line', unrestrictedData, contestRules('line', ['unusual', 'nearby']), [], '', random);
   assert.equal(unrestricted.correctAnswer, '观光环线');
   assert.ok(drawContestQuestion(unrestricted, 'line').arrows?.length);
+
+  const core = [[116.1,39.8],[116.2,39.8]] as [number, number][];
+  const outskirts = [[116.8,39.8],[116.9,39.8]] as [number, number][];
+  const rail = ['地铁1号线', '市郊铁路S2线', '机场联络线', '磁悬浮', 'G123'].map(name => line(name, core));
+  const mixed = { ...data, lines: [
+    ...rail, line('假日5路', core), line('快速直达专线187路', core), line('X107路', outskirts), line('兴33路', core),
+  ] };
+  const guess = (tag: string) => createLocalContestQuestion('line', mixed, contestRules('line', [tag,'fill']), districts, '', random);
+  assert.equal(guess('special').correctAnswer, '兴33路');
+  assert.equal(guess('all-city').correctAnswer, 'X107路');
+  assert.equal(guess('unusual').correctAnswer, '假日5路');
+  assert.equal(guess('unusual').contextPaths?.length, mixed.lines.length - rail.length);
+
 
   const station = createLocalContestQuestion('station', data, contestRules('station', ['cycle','no-stops','no-base']), districts, '', random);
   const drawing = drawContestQuestion(station, 'station', true);

@@ -57,13 +57,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { formatGameTime } from './utils/gameTimer';
-import { establishGameSession, gameAccountEnabled, answerRankedPuzzle, getRankedPack, getRankedPuzzle, hintRankedPuzzle, getGameAccount, startGameRun, type GameAccount, type GameRun } from './utils/gameAccount';
+import { establishGameSession, gameAccountEnabled, getGameAccount, submitContestResult, type GameAccount } from './utils/gameAccount';
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
 import { GameLobby, type ContestRegionId } from './components/GameLobby';
 import { RankedGameDrawing } from './components/RankedGameDrawing';
 import { contests, contestTagGroups, contestRules, contestPrompts, type ContestRules } from './utils/contestRules';
-import { openLocalQuestion, sealLocalQuestion, type SealedQuestion } from './utils/localQuestionCipher';
-import { createSimulationQuestion, rankedQuestionRandom } from './utils/simulationQuestion';
+import { createSimulationQuestion } from './utils/simulationQuestion';
 import { drawContestQuestion } from './utils/contestDrawing';
 import { createNetworkContestQuestion } from './utils/contestQuestions';
 
@@ -452,71 +451,16 @@ export default function App() {
   const [gameHints, setGameHints] = useState({ remaining: 7, usedOnQuestion: 0 });
   const gameRulesRef = useRef<ContestRules | null>(null);
   const questionAbortRef = useRef<AbortController | null>(null);
-  const nextRankedPackRef = useRef<{
-    run: string; number: number; controller: AbortController; pending: Promise<string | null>;
-  } | null>(null);
-  const stopRankedPreload = () => {
-    nextRankedPackRef.current?.controller.abort();
-    nextRankedPackRef.current = null;
-  };
-  const [simulationDrawing, setSimulationDrawing] = useState<RankedPuzzle['drawing'] | null>(null);
-  const [rankedPuzzle, setRankedPuzzle] = useState<RankedPuzzle | null>(null);
-  const [rankedHint, setRankedHint] = useState<{ text: string; complete: boolean } | null>(null);
-  const [rankedWaiting, setRankedWaiting] = useState(false);
+  const [localGameDrawing, setLocalGameDrawing] = useState<RankedPuzzle['drawing'] | null>(null);
+  const [gameHint, setGameHint] = useState<{ text: string; complete: boolean } | null>(null);
   const [adminQuizAnswer, setAdminQuizAnswer] = useState('');
-  const localAnswerPendingRef = useRef(false);
-  const rankedPuzzleRef = useRef<RankedPuzzle | null>(null);
-  const rankedDeadlineRef = useRef<number | null>(null);
-  const rankedPendingRef = useRef(false);
-  const rankedRetryAt = useRef(0);
-  const rankedAnswerRef = useRef<(answer: string, timeout?: boolean) => Promise<void>>(async () => {});
-  const clearRankedPuzzle = () => {
-    rankedPuzzleRef.current = null;
-    rankedDeadlineRef.current = null;
-    rankedPendingRef.current = false;
-    rankedRetryAt.current = 0;
-    setRankedPuzzle(null);
-    setRankedHint(null);
-    setRankedWaiting(false);
-  };
   const handleGameHint = () => {
-    const ranked = rankedPuzzleRef.current;
-    const run = gameRunRef.current;
-    if (ranked && run && !run.browserQuestions) {
-      if (rankedPendingRef.current || gameHints.remaining <= 0 || rankedHint?.complete || gameFeedback) return;
-      rankedPendingRef.current = true;
-      setRankedWaiting(true);
-      setGameDataError('');
-      void hintRankedPuzzle(run.id, ranked.id, gameHints.usedOnQuestion + 1, gameAccessToken).then(result => {
-        if (rankedPuzzleRef.current?.id !== ranked.id) return;
-        setRankedHint({ text: result.text, complete: result.complete });
-        setGameHints({ remaining: result.remaining, usedOnQuestion: result.used });
-      }).catch(error => {
-        if (rankedPuzzleRef.current?.id === ranked.id) setGameDataError(error.message);
-      }).finally(() => {
-        if (rankedPuzzleRef.current?.id !== ranked.id) return;
-        rankedPendingRef.current = false;
-        setRankedWaiting(false);
-      });
-      return;
-    }
-    const sealed = currentGameQuestionRef.current;
-    if (!sealed || gameState !== 'playing' || gameLoading || gameFeedback || rankedPendingRef.current
-      || gameHints.remaining <= 0 || rankedHint?.complete || gameTimedOutRef.current) return;
-    rankedPendingRef.current = true;
-    setRankedWaiting(true);
-    void openLocalQuestion<UnansweredQuestion>(sealed).then(({ correctAnswer }) => {
-      if (currentGameQuestionRef.current !== sealed) return;
-      const used = gameHints.usedOnQuestion + 1;
-      setRankedHint({ text: getGameHint(correctAnswer, used), complete: isGameHintComplete(correctAnswer, used) });
-      setGameHints({ remaining: gameHints.remaining - 1, usedOnQuestion: used });
-    }).catch(() => {
-      if (currentGameQuestionRef.current === sealed) setGameDataError('暂时无法读取提示。');
-    }).finally(() => {
-      if (currentGameQuestionRef.current !== sealed) return;
-      rankedPendingRef.current = false;
-      setRankedWaiting(false);
-    });
+    const question = currentGameQuestionRef.current;
+    if (!question || gameState !== 'playing' || gameLoading || gameFeedback
+      || gameHints.remaining <= 0 || gameHint?.complete || gameTimedOutRef.current) return;
+    const used = gameHints.usedOnQuestion + 1;
+    setGameHint({ text: getGameHint(question.correctAnswer, used), complete: isGameHintComplete(question.correctAnswer, used) });
+    setGameHints({ remaining: gameHints.remaining - 1, usedOnQuestion: used });
   };
   const [gameQuestionNum, setGameQuestionNum] = useState(1);
   const [gameQuestionData, setGameQuestionData] = useState<{
@@ -545,7 +489,7 @@ export default function App() {
   };
   const [gameHistory, setGameHistory] = useState<GameHistoryItem[]>([]);
   type UnansweredQuestion = Omit<GameHistoryItem, 'userAnswer' | 'isCorrect' | 'timedOut'>;
-  const currentGameQuestionRef = useRef<SealedQuestion | null>(null);
+  const currentGameQuestionRef = useRef<UnansweredQuestion | null>(null);
   const [reviewIndex, setReviewIndex] = useState(0);
   const [reviewShowBasemap, setReviewShowBasemap] = useState(true);
   const [reviewShowStops, setReviewShowStops] = useState(true);
@@ -554,26 +498,41 @@ export default function App() {
   const [reviewHoveredStop, setReviewHoveredStop] = useState<string | null>(null);
   const prevMapModeBeforeGameRef = useRef<'normal' | 'satellite' | 'blank' | null>(null);
   const gameSessionIdRef = useRef(0);
-  const gameRunRef = useRef<GameRun | null>(null);
+  const activeContestRef = useRef<{
+    game: GameHistoryItem['mode']; scope: string; tags: string[]; correctCount: number; submitting: boolean; saved: boolean;
+  } | null>(null);
+  const [contestSubmissionFailed, setContestSubmissionFailed] = useState(false);
+  const [contestBoardRevision, setContestBoardRevision] = useState(0);
   const isMinigameActiveRef = useRef(false);
+  const saveContestResult = useCallback(() => {
+    const contest = activeContestRef.current;
+    if (!contest || contest.submitting || contest.saved) return;
+    contest.submitting = true;
+    setContestSubmissionFailed(false);
+    setGameAuthMessage('正在记录排行榜成绩…');
+    void submitContestResult(contest.game, contest.scope, contest.tags, contest.correctCount, gameAccessToken)
+      .then(() => {
+        contest.saved = true;
+        setContestBoardRevision(revision => revision + 1);
+        if (activeContestRef.current === contest) setGameAuthMessage('成绩已记录到排行榜。');
+      }, (error: Error) => {
+        if (activeContestRef.current !== contest) return;
+        setGameAuthMessage(error.message);
+        setContestSubmissionFailed(true);
+      }).finally(() => { contest.submitting = false; });
+  }, [gameAccessToken]);
+
+  useEffect(() => {
+    if (gameState === 'gameover') saveContestResult();
+  }, [gameState, saveContestResult]);
+
   const finishGameOnTimeout = useCallback(() => {
     if (gameTimedOutRef.current) return;
-    if (gameRunRef.current) {
-      void rankedAnswerRef.current('', true);
-      return;
-    }
-    const sealed = currentGameQuestionRef.current;
-    if (!sealed || localAnswerPendingRef.current) return;
+    const question = currentGameQuestionRef.current;
+    if (!question) return;
     currentGameQuestionRef.current = null;
     recordQuestionTime(Date.now(), gameDeadlineRef.current);
-    const session = gameSessionIdRef.current + 1;
-    void openLocalQuestion<UnansweredQuestion>(sealed).then(question => {
-      if (gameSessionIdRef.current === session) {
-        setGameHistory(previous => [...previous, { ...question, userAnswer: '', isCorrect: false, timedOut: true }]);
-      }
-    }).catch(() => {
-      if (gameSessionIdRef.current === session) setGameDataError('暂时无法读取超时题目的复盘信息。');
-    });
+    setGameHistory(previous => [...previous, { ...question, userAnswer: '', isCorrect: false, timedOut: true }]);
     gameTimedOutRef.current = true;
     gameTimeRemainingMsRef.current = 0;
     gameDeadlineRef.current = null;
@@ -595,7 +554,7 @@ export default function App() {
     gameDeadlineRef.current = deadline;
     const tick = () => {
       if (questionShownAtRef.current === null) return;
-      const remaining = Math.max(0, (rankedDeadlineRef.current ?? deadline) - Date.now());
+      const remaining = Math.max(0, deadline - Date.now());
       setGameTimeLeft(Math.ceil(remaining / 1000));
       if (remaining === 0) finishGameOnTimeout();
     };
@@ -649,14 +608,12 @@ export default function App() {
 
   const returnToMinigameMenu = () => {
     questionAbortRef.current?.abort();
-    stopRankedPreload();
     currentGameQuestionRef.current = null;
-    localAnswerPendingRef.current = false;
     setAdminQuizAnswer('');
-    setSimulationDrawing(null);
+    setLocalGameDrawing(null);
     gameSessionIdRef.current++;
-    gameRunRef.current = null;
-    clearRankedPuzzle();
+    activeContestRef.current = null;
+    setGameHint(null);
     isMinigameActiveRef.current = false;
     setConfirmQuitGame(false);
     setGameState('menu');
@@ -709,75 +666,53 @@ export default function App() {
     const tags = competitive ? contestTags : simulationTags;
     const rules = contestRules(mode, tags);
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
-    const launchId = ++gameSessionIdRef.current;
-    stopRankedPreload();
-    gameRunRef.current = null;
-    setGameDataError('');
-    setGameAuthMessage('');
-
-    const launch = (run: GameRun | null, message = '') => {
-      if (gameSessionIdRef.current !== launchId) return;
-      gameRunRef.current = run;
-      clearRankedPuzzle();
-      setGameAuthMessage(message);
-      setGameLaunchAnimation(true);
-      window.setTimeout(() => setGameLaunchAnimation(false), 1150);
-      isMinigameActiveRef.current = true;
-      if (!prevMapModeBeforeGameRef.current) prevMapModeBeforeGameRef.current = mapMode;
-      clearMapStateForMinigame();
-      setGameMode(mode);
-      gameRulesRef.current = rules;
-      setSimulationDrawing(null);
-      if (!run) setGameCity(city);
-      const timeLimit = rules.timeLimit;
-      gameTimeRemainingMsRef.current = timeLimit * 1000;
-      gameDeadlineRef.current = null;
-      gameTimedOutRef.current = false;
-      setGameTimedOut(false);
-      setGameTimeLeft(timeLimit);
-      setGameState('playing');
-      gameScoreRef.current = 0;
-      questionShownAtRef.current = null;
-      setGameElapsedMs(0);
-      setPlayedContestTags(contestTagGroups(mode).flatMap(group => group.tags.filter(tag => tags.includes(tag.id))));
-      setGameScore(0);
-      setGameHints({ remaining: rules.hintLimit, usedOnQuestion: 0 });
-      setGameQuestionNum(1);
-      setGameFeedback(null);
-      setGameUserInput('');
-      setGameQuestionData(null);
-      setGameHistory([]);
-      currentGameQuestionRef.current = null;
-      localAnswerPendingRef.current = false;
-      setReviewIndex(0);
-      setReviewAutoPlay(false);
-      setReviewHoveredStop(null);
-      setMapMode('blank');
-      void generateQuestion(mode, city, 1, undefined, activeProv);
-    };
-
-    if (!competitive) {
-      launch(null, '本局成绩仅保存在本机。');
-      return;
-    }
-    if (!gameAccountEnabled || !gameAccount || !gameAccessToken) {
+    if (competitive && (!gameAccountEnabled || !gameAccount || !gameAccessToken)) {
       setSettingsTab('profile');
       setShowSettings(true);
       return;
     }
-    setGameLoading(true);
-    const scope = mode === 'county' ? activeProv : mode === 'city' ? '全国' : city;
-    void startGameRun({ game: mode, scope }, gameAccessToken, tags)
-      .then(({ run }) => launch(run), (error: any) => {
-        if (gameSessionIdRef.current !== launchId) return;
-        if (error?.status === 401) {
-          setGameAccount(null);
-          setGameAccessToken('');
-        }
-        setGameLoading(false);
-        setGameState('menu');
-        setGameDataError(error.message || '暂时无法开始竞赛，请稍后重试。');
-      });
+    gameSessionIdRef.current++;
+    activeContestRef.current = competitive ? {
+      game: mode, scope: mode === 'county' ? activeProv : mode === 'city' ? '全国' : city,
+      tags: rules.tags, correctCount: 0, submitting: false, saved: false,
+    } : null;
+    setGameDataError('');
+    setGameHint(null);
+    setContestSubmissionFailed(false);
+    setGameAuthMessage(competitive ? '' : '本局成绩仅保存在本机。');
+    setGameLaunchAnimation(true);
+    window.setTimeout(() => setGameLaunchAnimation(false), 1150);
+    isMinigameActiveRef.current = true;
+    if (!prevMapModeBeforeGameRef.current) prevMapModeBeforeGameRef.current = mapMode;
+    clearMapStateForMinigame();
+    setGameMode(mode);
+    gameRulesRef.current = rules;
+    setLocalGameDrawing(null);
+    if (!competitive) setGameCity(city);
+    const timeLimit = rules.timeLimit;
+    gameTimeRemainingMsRef.current = timeLimit * 1000;
+    gameDeadlineRef.current = null;
+    gameTimedOutRef.current = false;
+    setGameTimedOut(false);
+    setGameTimeLeft(timeLimit);
+    setGameState('playing');
+    gameScoreRef.current = 0;
+    questionShownAtRef.current = null;
+    setGameElapsedMs(0);
+    setPlayedContestTags(contestTagGroups(mode).flatMap(group => group.tags.filter(tag => tags.includes(tag.id))));
+    setGameScore(0);
+    setGameHints({ remaining: rules.hintLimit, usedOnQuestion: 0 });
+    setGameQuestionNum(1);
+    setGameFeedback(null);
+    setGameUserInput('');
+    setGameQuestionData(null);
+    setGameHistory([]);
+    currentGameQuestionRef.current = null;
+    setReviewIndex(0);
+    setReviewAutoPlay(false);
+    setReviewHoveredStop(null);
+    setMapMode('blank');
+    void generateQuestion(mode, city, 1, undefined, activeProv);
   };
 
   const generateQuestion = async (
@@ -791,10 +726,8 @@ export default function App() {
     questionAbortRef.current = controller;
     const sessionId = ++gameSessionIdRef.current;
     setGameHints(prev => ({ ...prev, usedOnQuestion: 0 }));
-    setRankedHint(null);
+    setGameHint(null);
     setAdminQuizAnswer('');
-    rankedPendingRef.current = false;
-    setRankedWaiting(false);
     setConfirmQuitGame(false);setGameLoading(true);
     setActiveBusLine(null);setSelectedStop(null);setSelectedSegmentLines(null);setStationConnectivityCard(null);setSelectionPos(null);
     roadViewportCleanupRef.current?.();roadViewportCleanupRef.current=null;
@@ -802,154 +735,36 @@ export default function App() {
     lineGroupRef.current?.clearOverlays();if(markerGroupRef.current)clearStopMarkerGroup(markerGroupRef.current);
     setCountyGameMask();
     try {
-      const run = gameRunRef.current;
-      const loadLocal = async () => {
-        const catalog = await loadPublishedCities();
-        controller.signal.throwIfAborted();
-        const province = run?.scope ?? provinceOverride ?? (mode === 'county' ? gameCountyProvince : gameProvince);
-        const question = await createSimulationQuestion(mode, run?.scope ?? city, province, rules, prevAnswer ?? '', catalog,
-          loadGameCity, controller.signal, run ? rankedQuestionRandom(run.id, qNum) : Math.random,
-          mode === 'city' ? item => loadGameCityImage(item, controller.signal) : undefined);
-        const { contextPaths, networkImage, sourceRevision, options, isFillIn, ...review } = question;
-        const sealed = await sealLocalQuestion<UnansweredQuestion>({ ...review, questionNum: qNum, mode, province });
-        controller.signal.throwIfAborted();
-        return { sealed, sourceRevision, drawing: drawContestQuestion(question, mode, rules.cycle), options, isFillIn };
-      };
-      if (run) {
-        clearRankedPuzzle();
-        const loadTicket = async () => {
-          const next = nextRankedPackRef.current;
-          const prefetched = next?.run === run.id && next.number === qNum ? await next.pending : null;
-          if (prefetched) return prefetched;
-          controller.signal.throwIfAborted();
-          try {
-            return (await getRankedPack(run.id, qNum, gameAccessToken, controller.signal)).ticket;
-          } catch (error: any) {
-            if (error?.status !== 404 || run.browserQuestions) throw error;
-            return null;
-          }
-        };
-        const [ticket, browserQuestion] = await Promise.all([loadTicket(), run.browserQuestions ? loadLocal() : undefined]);
-        if (gameSessionIdRef.current !== sessionId) return;
-        const registered = await getRankedPuzzle(run.id, qNum, gameAccessToken, ticket ?? undefined, browserQuestion?.sourceRevision);
-        const puzzle = browserQuestion ? { ...registered, drawing: browserQuestion.drawing,
-          options: browserQuestion.options ?? [], isFillIn: browserQuestion.isFillIn } : registered;
-        if (gameSessionIdRef.current !== sessionId) return;
-        rankedPuzzleRef.current = puzzle;
-        currentGameQuestionRef.current = browserQuestion?.sealed ?? null;
-        questionShownAtRef.current = Date.now();
-        rankedDeadlineRef.current = questionShownAtRef.current + puzzle.remainingMs;
-        gameTimeRemainingMsRef.current = puzzle.remainingMs;
-        setGameTimeLeft(Math.ceil(puzzle.remainingMs / 1000));
-        setGameHints(previous => ({ remaining: run.browserQuestions ? previous.remaining : puzzle.hints, usedOnQuestion: 0 }));
-        setRankedPuzzle(puzzle);
-        setMapMode('blank');
-        setGameQuestionData({ options: puzzle.options, isFillIn: puzzle.isFillIn, promptText: puzzle.promptText });
-        stopRankedPreload();
-        if (ticket) {
-          const nextController = new AbortController();
-          const pending = getRankedPack(run.id, qNum + 1, gameAccessToken, nextController.signal)
-            .then(pack => pack.ticket, () => null);
-          nextRankedPackRef.current = { run: run.id, number: qNum + 1, controller: nextController, pending };
-        }
-        return;
-      }
-      const question = await loadLocal();
+      const contest = activeContestRef.current;
+      const catalog = await loadPublishedCities();
+      controller.signal.throwIfAborted();
+      const province = mode === 'county' ? contest?.scope ?? provinceOverride ?? gameCountyProvince : gameProvince;
+      const question = await createSimulationQuestion(mode, contest?.scope ?? city, province, rules, prevAnswer ?? '', catalog,
+        loadGameCity, controller.signal, Math.random,
+        mode === 'city' ? item => loadGameCityImage(item, controller.signal) : undefined);
       if (gameSessionIdRef.current !== sessionId) return;
-      setSimulationDrawing(question.drawing);
-      currentGameQuestionRef.current = question.sealed;
+      const { contextPaths, networkImage, sourceRevision, options, isFillIn, ...review } = question;
+      setLocalGameDrawing(drawContestQuestion(question, mode, rules.cycle));
+      currentGameQuestionRef.current = { ...review, questionNum: qNum, mode, province };
       if (rules.perQuestion) gameTimeRemainingMsRef.current = rules.timeLimit * 1000;
       setGameTimeLeft(Math.ceil((gameTimeRemainingMsRef.current ?? 0) / 1000));
       questionShownAtRef.current = Date.now();
-      setGameQuestionData({ options: question.options, isFillIn: question.isFillIn, promptText: contestPrompts[mode] });
+      setGameQuestionData({ options, isFillIn, promptText: contestPrompts[mode] });
     } catch(error:any) {
-      if(gameSessionIdRef.current===sessionId){controller.abort();stopRankedPreload();gameRunRef.current=null;setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
+      if(gameSessionIdRef.current===sessionId){controller.abort();activeContestRef.current=null;setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
     } finally {if(gameSessionIdRef.current===sessionId)setGameLoading(false);}
   };
 
-  rankedAnswerRef.current = async (answer, timeout = false) => {
-    const run = gameRunRef.current;
-    const puzzle = rankedPuzzleRef.current;
-    if (!run || !puzzle || rankedPendingRef.current || (timeout && Date.now() < rankedRetryAt.current)) return;
-    rankedPendingRef.current = true;
-    setRankedWaiting(true);
-    setGameDataError('');
-    const session = gameSessionIdRef.current;
-    const submittedAt = Date.now();
-    const deadline = rankedDeadlineRef.current;
-    try {
-      const sealed = currentGameQuestionRef.current;
-      const [result, localReview] = await Promise.all([
-        answerRankedPuzzle(run.id, puzzle.id, answer.trim().slice(0, 150), timeout, gameAccessToken, puzzle.answerTicket),
-        sealed ? openLocalQuestion<UnansweredQuestion>(sealed).catch(() => undefined) : undefined,
-      ]);
-      if (gameSessionIdRef.current !== session) return;
-      if ('pendingMs' in result) {
-        rankedDeadlineRef.current = Date.now() + result.pendingMs;
-        return;
-      }
-      const review = localReview ?? result.question;
-      currentGameQuestionRef.current = null;
-      recordQuestionTime(submittedAt, deadline);
-      rankedPuzzleRef.current = null;
-      rankedDeadlineRef.current = null;
-      gameScoreRef.current = result.score;
-      setGameScore(result.score);
-      setGameHistory(previous => [...previous, {
-        ...review, correctAnswer: result.question.correctAnswer, questionNum: result.number, mode: run.game,
-        province: run.game === 'county' ? run.scope : undefined,
-        userAnswer: result.answer, isCorrect: result.correct, timedOut: result.timedOut,
-      }]);
-      if (result.finished) {
-        stopRankedPreload();
-        setGameTimedOut(result.timedOut);
-        gameTimedOutRef.current = result.timedOut;
-        setGameState('gameover');
-        clearRankedPuzzle();
-      } else {
-        setGameFeedback({ correct: true, msg: '回答正确！即将进入下一题...' });
-        window.setTimeout(() => {
-          if (gameSessionIdRef.current !== session) return;
-          setGameFeedback(null);
-          setGameUserInput('');
-          setGameQuestionNum(result.number + 1);
-          void generateQuestion(run.game, gameCity, result.number + 1, result.question.correctAnswer);
-        }, 450);
-      }
-    } catch (error: any) {
-      if (gameSessionIdRef.current !== session) return;
-      rankedRetryAt.current = Date.now() + 2500;
-      setGameDataError(error.message || '计分暂时无法完成，请重试。');
-    } finally {
-      if (gameSessionIdRef.current === session) {
-        rankedPendingRef.current = false;
-        setRankedWaiting(false);
-      }
-    }
-  };
-
-  const handleMinigameSubmit = async (answer: string) => {
+  const handleMinigameSubmit = (answer: string) => {
     if (!gameQuestionData || gameState !== 'playing' || gameLoading || gameFeedback !== null || gameTimedOutRef.current) return;
-    if (gameRunRef.current) { void rankedAnswerRef.current(answer); return; }
     const submittedAt = Date.now();
     if (gameDeadlineRef.current !== null && submittedAt >= gameDeadlineRef.current) {
       finishGameOnTimeout();
       return;
     }
-    const sealed = currentGameQuestionRef.current;
-    if (!sealed || localAnswerPendingRef.current) return;
+    const question = currentGameQuestionRef.current;
+    if (!question) return;
     const submittedSessionId = gameSessionIdRef.current;
-    localAnswerPendingRef.current = true;
-    let question: UnansweredQuestion;
-    try {
-      question = await openLocalQuestion<UnansweredQuestion>(sealed);
-    } catch {
-      if (gameSessionIdRef.current === submittedSessionId) setGameDataError('暂时无法判定本题。');
-      return;
-    } finally {
-      if (gameSessionIdRef.current === submittedSessionId) localAnswerPendingRef.current = false;
-    }
-    if (gameSessionIdRef.current !== submittedSessionId || currentGameQuestionRef.current !== sealed) return;
     currentGameQuestionRef.current = null;
     const rawUser = answer.trim();
     const rawCorrect = question.correctAnswer.trim();
@@ -964,7 +779,8 @@ export default function App() {
       gameScoreRef.current = newScore;
       setGameScore(newScore);
 
-      setBestRecords(previous => {
+      if (activeContestRef.current) activeContestRef.current.correctCount++;
+      else setBestRecords(previous => {
         if (newScore <= (previous[simulationKey] ?? 0)) return previous;
         const updated = { ...previous, [simulationKey]: newScore };
         try { localStorage.setItem('busline_simulation_tag_records', JSON.stringify(updated)); } catch {}
@@ -979,7 +795,7 @@ export default function App() {
         const nextNum = gameQuestionNum + 1;
         setGameQuestionNum(nextNum);
         generateQuestion(gameMode!, gameCity, nextNum, rawCorrect);
-      }, 900);
+      }, 450);
     } else {
       setGameFeedback({ correct: false, msg: `回答错误！正确答案是：${rawCorrect}` });
       setTimeout(() => {
@@ -8991,11 +8807,11 @@ export default function App() {
       startMinigame(simulationMode, gameCity);
     }
   };
-  const gameDrawing = rankedPuzzle?.drawing ?? simulationDrawing;
+  const gameDrawing = localGameDrawing;
   const gameHintLimit = gameRulesRef.current?.hintLimit ?? 7;
   return <div className="relative h-dvh w-full overflow-hidden bg-m3-surface-container-low">
     <div ref={containerRef} aria-hidden={gameState === 'menu' || (isAnswering && !!gameDrawing)} className="relative isolate h-full w-full bg-white" id="amap-container" />
-    {isAnswering && gameDrawing && <RankedGameDrawing key={rankedPuzzle?.id ?? gameQuestionNum} drawing={gameDrawing} />}
+    {isAnswering && gameDrawing && <RankedGameDrawing key={gameQuestionNum} drawing={gameDrawing} />}
     {gameState === 'menu' && <GameLobby
       division={gameDivision} onDivision={next => { setGameDivision(next); setGameDataError(''); }}
       regionId={contestRegion} onRegion={setContestRegion}
@@ -9010,6 +8826,7 @@ export default function App() {
       catalog={gameCatalog} catalogLoading={gameCatalogLoading} catalogAvailable={!!gameCatalog.length}
       error={gameDataError || ((gameDivision === 'simulation' || contest.game === 'county') ? gameCatalogError : '')}
       accountName={gameAccount?.displayName} accountLoading={gameAuthLoading} accountEnabled={gameAccountEnabled}
+      boardRevision={contestBoardRevision}
       onAccount={() => { setSettingsTab('profile'); setShowSettings(true); }}
       onStart={launchSelectedGame} reviewCount={gameHistory.length} onReview={startMinigameReview}
     />}
@@ -9115,16 +8932,14 @@ export default function App() {
                     <span className="truncate">{gameQuestionData.promptText}</span>
                   </div>
 
-                  {isAdminVerified && !rankedPuzzle && (
+                  {isAdminVerified && !activeContestRef.current && (
                     <div role="status" className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs">
                       <Shield className="w-4 h-4 text-emerald-700 shrink-0" />
                       <span className="font-black">管理员测试答案</span>
                       {adminQuizAnswer ? <strong className="font-black break-all">{adminQuizAnswer}</strong> :
                         <button type="button" onClick={() => {
-                          const sealed = currentGameQuestionRef.current;
-                          if (sealed) void openLocalQuestion<UnansweredQuestion>(sealed).then(({ correctAnswer }) => {
-                            if (currentGameQuestionRef.current === sealed) setAdminQuizAnswer(correctAnswer);
-                          }).catch(() => {});
+                          const question = currentGameQuestionRef.current;
+                          if (question) setAdminQuizAnswer(question.correctAnswer);
                         }}>显示答案</button>}
                     </div>
                   )}
@@ -9134,12 +8949,12 @@ export default function App() {
                     <motion.button
                       type="button"
                       onClick={handleGameHint}
-                      disabled={gameLoading || gameFeedback !== null || gameHints.remaining === 0 || rankedWaiting || rankedHint?.complete}
+                      disabled={gameLoading || gameFeedback !== null || gameHints.remaining === 0 || gameHint?.complete}
                       whileTap={{ scale: 0.94 }}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-xs font-bold transition-colors hover:bg-m3-primary/20 disabled:opacity-45 disabled:cursor-not-allowed"
                     >
                       <Sparkles className="w-3.5 h-3.5" />
-                      {gameHints.remaining === 0 ? '提示已用完' : rankedHint?.complete ? '本题已全部揭示' : '提示'}
+                      {gameHints.remaining === 0 ? '提示已用完' : gameHint?.complete ? '本题已全部揭示' : '提示'}
                       <span className="tabular-nums">{gameHints.remaining}/{gameHintLimit}</span>
                     </motion.button>
                   </div>}
@@ -9155,22 +8970,20 @@ export default function App() {
                         aria-live="polite"
                         className="px-3 py-2.5 rounded-2xl bg-m3-primary-container/50 border border-m3-outline-variant/40"
                       >
-                        <div className="text-[10px] font-bold text-m3-primary mb-1">答案提示 · {Array.from(rankedHint?.text ?? '').length} 个字符</div>
+                        <div className="text-[10px] font-bold text-m3-primary mb-1">答案提示 · {Array.from(gameHint?.text ?? '').length} 个字符</div>
                         <motion.p
                           key={gameHints.usedOnQuestion}
                           initial={{ opacity: 0, y: 3 }}
                           animate={{ opacity: 1, y: 0 }}
                           className="text-sm font-black tracking-widest text-m3-on-primary-container break-all"
                         >
-                          {rankedHint?.text}
+                          {gameHint?.text}
                         </motion.p>
                       </motion.div>
                     )}
                   </AnimatePresence>
 
-                  {!rankedPuzzle && gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
                   {gameDataError && <p role="alert" className="text-xs text-red-700">{gameDataError}</p>}
-                  {rankedWaiting && <p role="status" className="flex items-center gap-1.5 text-xs font-semibold text-m3-primary"><Loader2 aria-hidden="true" size={14} className="animate-spin" />正在判题…</p>}
                   {gameFeedback && (
                     <div className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold text-center ${gameFeedback.correct ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
                       {gameFeedback.msg}
@@ -9184,7 +8997,7 @@ export default function App() {
                           key={idx}
                           type="button"
                           title={opt}
-                          disabled={gameFeedback !== null || rankedWaiting}
+                          disabled={gameFeedback !== null}
                           onClick={() => handleMinigameSubmit(opt)}
                           className="px-3 py-2 rounded-xl border border-m3-outline-variant/30 bg-m3-surface-container-low hover:bg-m3-primary-container/30 hover:border-m3-primary text-slate-800 font-bold text-xs transition-all shadow-xs text-left truncate flex items-center gap-2"
                         >
@@ -9221,7 +9034,7 @@ export default function App() {
                       />
                       <button
                         type="button"
-                        disabled={gameFeedback !== null || rankedWaiting || !gameUserInput.trim()}
+                        disabled={gameFeedback !== null || !gameUserInput.trim()}
                         onClick={() => handleMinigameSubmit(gameUserInput)}
                         className="px-5 py-2 rounded-xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-sm hover:opacity-95 transition-all disabled:opacity-50 shrink-0"
                       >
@@ -9292,6 +9105,8 @@ export default function App() {
 
                   {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式已启用</p>}
                   {gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
+                  {contestSubmissionFailed && <button type="button" onClick={saveContestResult}
+                    className="rounded-xl bg-m3-primary-container px-3 py-2 text-xs font-bold text-m3-primary">重试提交成绩</button>}
                   <div className="flex gap-2.5 w-full pt-2">
                     {gameHistory.length > 0 && (
                       <button

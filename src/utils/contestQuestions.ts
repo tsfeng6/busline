@@ -1,7 +1,7 @@
 import type { BusLine } from '../types';
 import type { CityDataset } from './cityDataset';
 import type { ContestRules } from './contestRules';
-import { distanceMeters, radiusRing, routeName, type CountySeat, type Point } from './localTransit';
+import { distanceMeters, radiusRing, regularGameRoute, routeName, type CountySeat, type Point } from './localTransit';
 import { createOfflineQuestion, shuffle, type OfflineQuestion } from './offlineGame';
 
 // GCJ-02 district polygons from the DataV administrative atlas, limited to the
@@ -25,7 +25,11 @@ function contains(ring: Ring, [lng, lat]: Point) {
 }
 
 const regular = (name: string) => /^\d+路?(?:内环|外环)?$/.test(routeName(name).normalize('NFKC'));
-const strange = (name: string) => !/\d/.test(routeName(name)) || /旅游|观光|定制|通勤|机场|假日|专乘/.test(routeName(name));
+function isRailRoute(name: string) {
+  const label = routeName(name).normalize('NFKC').replace(/\s/g, '');
+  if (/(?:接驳|公交|摆渡|替代|巴士)/.test(label)) return false;
+  return /地铁|轨道交通|磁悬浮|轻轨|有轨电车|铁路|高铁|城际(?:列车|动车)|市域(?:快线|机场线|[A-Z]?\d+线|.*联络线)|^(?:机场联络线|金山线|怀密线|通密线|城市副中心线)$|^S\d+线|^\d+号线|^(?:G|D|C|K|T|Z)\d{2,5}(?:\/\d+)?$/i.test(label);
+}
 const routeStops = (line: BusLine) => (line.via_stops ?? []).flatMap(stop => {
   const point: Point = [stop.location?.lng, stop.location?.lat];
   const name = stop.name?.replace(/(?:公交车站|公交站)$/, '').trim();
@@ -90,15 +94,16 @@ export function createLocalContestQuestion(
   };
   const unrestricted = rules.range === 'unusual';
   const citywide = rules.range === 'all-city' || unrestricted;
-  const entries = data.lines.filter(line => line.path?.length >= 2).map(line => ({ line, stops: routeStops(line) }));
+  const entries = data.lines.filter(line => line.path?.length >= 2 && !isRailRoute(line.name))
+    .map(line => ({ line, stops: routeStops(line) }));
   const eligible = entries.filter(({ line }) => mode === 'station' || rules.range === 'urban' ? regular(line.name)
-    : unrestricted || !strange(line.name));
+    : unrestricted || regularGameRoute(line.name.normalize('NFKC')));
   const context = rules.showBasemap ? entries.map(({ line }) => line.path) : undefined;
   const shared = { targetCity: data.city, promptText: '', showBasemap: rules.showBasemap, showStops: rules.showStops,
     isFillIn: rules.fill, contextPaths: context };
   if (mode === 'line') {
-    const pool = eligible.filter(entry => unrestricted ||
-      (entry.stops.length >= 2 && (citywide || entry.stops.every(stop => urban(stop.lngLat)))));
+    const pool = citywide ? eligible : eligible.filter(entry =>
+      (entry.stops.length >= 2 ? entry.stops.map(stop => stop.lngLat) : entry.line.path).every(urban));
     const picked = shuffle(pool.filter(entry => routeName(entry.line.name) !== previous), random)[0] ?? pool[0];
     if (!picked || (!rules.fill && new Set(pool.map(entry => routeName(entry.line.name))).size < 2)) throw Error('所选标签下暂无足够的线路。');
     const answer = routeName(picked.line.name);

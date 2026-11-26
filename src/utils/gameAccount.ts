@@ -1,7 +1,5 @@
-import type { RankedPuzzle, RankedResult } from './rankedGame';
-export type GameLeaderboardKey = { game: 'line' | 'station' | 'city' | 'county'; difficulty: 'easy' | 'hell' | 'hard'; scope?: string };
+import type { GameMode } from './offlineGame';
 export type GameAccount = { id: string; phone?: string; displayName: string; avatarUrl?: string };
-export type GameRun = { id: string; game: GameLeaderboardKey['game']; difficulty: GameLeaderboardKey['difficulty']; scope?: string; startedAt: string; browserQuestions?: boolean };
 export type LeaderboardEntry = { rank: number; displayName: string; avatarUrl?: string; score: number; achievedAt: string; isCurrentUser?: boolean };
 
 const configuredUrl = (import.meta.env.VITE_GAME_GATEWAY_URL || import.meta.env.VITE_CITY_UPDATE_GATEWAY_URL || '').replace(/\/$/, '');
@@ -69,31 +67,16 @@ export async function updateGameProfile(displayName: string, avatar?: File, acce
   if (avatar) avatarData = await compressAvatar(avatar);
   return request<{ account: GameAccount }>('/game-profile', { method: 'POST', body: JSON.stringify({ displayName, avatarData }) }, accessToken);
 }
-export async function startGameRun(key: Pick<GameLeaderboardKey, 'game' | 'scope'>, accessToken: string, tags: string[]) {
-  return request<{ run: GameRun }>('/ranked-game-runs', { method: 'POST', body: JSON.stringify({ ...key, tags, browserQuestions: true }) }, accessToken);
-}
-export function getRankedPack(run: string, number: number, accessToken: string, signal?: AbortSignal) {
-  return request<{ number: number; ticket: string }>(`/ranked-game-runs/${encodeURIComponent(run)}/pack`, {
-    method: 'POST', body: JSON.stringify({ number }),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000),
+export async function submitContestResult(
+  game: GameMode, scope: string, tags: string[], correctCount: number, accessToken: string,
+) {
+  const result = await request<{ saved: boolean }>('/contest-results', {
+    method: 'POST', body: JSON.stringify({ game, scope, tags, correctCount }), keepalive: true,
   }, accessToken);
+  if (result?.saved !== true) throw Error('排行榜成绩暂时无法保存，请重试。');
 }
-export function getRankedPuzzle(run: string, number: number, accessToken: string, ticket?: string, sourceRevision?: string) {
-  return request<RankedPuzzle>(`/ranked-game-runs/${encodeURIComponent(run)}/question`, {
-    method: 'POST', body: JSON.stringify({ number, ticket, sourceRevision }), signal: AbortSignal.timeout(45000),
-  }, accessToken);
-}
-export function answerRankedPuzzle(run: string, id: string, answer: string, timeout: boolean, accessToken: string, answerTicket?: string) {
-  return request<RankedResult | { pendingMs: number }>(`/ranked-game-runs/${encodeURIComponent(run)}/answer`, {
-    method: 'POST', body: JSON.stringify({ id, answer, timeout, answerTicket }),
-  }, accessToken);
-}
-export function hintRankedPuzzle(run: string, id: string, step: number, accessToken: string) {
-  return request<{ text: string; remaining: number; used: number; complete: boolean }>(`/ranked-game-runs/${encodeURIComponent(run)}/hint`, {
-    method: 'POST', body: JSON.stringify({ id, step }),
-  }, accessToken);
-}
-export async function getContestLeaderboard(game: GameLeaderboardKey['game'], scope: string, accessToken?: string) {
+
+export async function getContestLeaderboard(game: GameMode, scope: string, accessToken?: string) {
   const query = new URLSearchParams({ game, scope });
   const result = await request<{ entries?: LeaderboardEntry[] }>(`/contest-leaderboards?${query}`, {}, accessToken);
   if (!Array.isArray(result?.entries)) throw Error('排行榜返回格式无效。');

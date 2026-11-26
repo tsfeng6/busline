@@ -155,7 +155,7 @@ const preparingRankedPacks = new Map<string, Promise<string>>();
 async function handleGameGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
   const url=new URL(request.url),path=url.pathname;
   const configured=!!env.SUPABASE_URL&&!!env.SUPABASE_ANON_KEY;
-  if(!path.startsWith('/game-auth/')&&!path.startsWith('/game-runs')&&!path.startsWith('/ranked-game-runs')&&path!=='/contest-leaderboards'&&path!=='/game-profile'&&path!=='/wechat/complete')return null;
+  if(!path.startsWith('/game-auth/')&&!path.startsWith('/game-runs')&&!path.startsWith('/ranked-game-runs')&&path!=='/contest-leaderboards'&&path!=='/contest-results'&&path!=='/game-profile'&&path!=='/wechat/complete')return null;
   if(!configured)throw fail(503,'账号与排行榜服务尚未配置。');
   const base=env.SUPABASE_URL!.replace(/\/$/,'');
   if(!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(base))throw fail(503,'账号服务配置无效。');
@@ -294,6 +294,47 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
       achievedAt: String(item.achieved_at), isCurrentUser: item.is_current_user === true,
       avatarUrl: item.avatar_url || (item.avatar_path ? base + '/storage/v1/object/public/game-avatars/' + item.avatar_path : undefined),
     })) });
+  }
+  if (path === '/contest-results' && request.method === 'POST') {
+    const serviceKey = env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceKey) throw fail(503, '排行榜暂不可用。');
+    const { id: user } = await authenticatedProfile(bearer);
+    const input = await jsonBody(request, 2048);
+    const scope = typeof input.scope === 'string' ? input.scope.trim() : '';
+    if (!validContest(input.game, scope)) throw fail(400, '不存在这个竞赛项目。');
+    if (!Number.isSafeInteger(input.correctCount) || input.correctCount < 0) throw fail(400, '答对题数无效。');
+    let rules;
+    try { rules = contestRules(input.game, input.tags ?? []); }
+    catch (error) { throw fail(400, (error as Error).message); }
+    const score = input.correctCount * rules.multiplier;
+    if (score > Number.MAX_SAFE_INTEGER) throw fail(400, '分数无效。');
+
+    const service = async (resource: string, init: RequestInit = {}) => {
+      const response = await transport(base + '/rest/v1/' + resource, {
+        ...init,
+        signal: AbortSignal.timeout(15000),
+        headers: { apikey: serviceKey, ...(serviceKey.startsWith('sb_secret_') ? {} : { Authorization: `Bearer ${serviceKey}` }),
+          'Content-Type': 'application/json', ...init.headers },
+      });
+      if (!response.ok) throw fail(503, '排行榜成绩暂时无法保存，请重试。');
+      return response;
+    };
+    const suspensions = await (await service(`game_contest_suspensions?user_id=eq.${user}&select=user_id&limit=1`)).json();
+    if (suspensions.length) throw fail(403, '此账号暂无法参加巴士猜线竞赛。');
+
+    const achieved_at = new Date().toISOString();
+    const insert = await service('game_contest_entries?on_conflict=game,scope,user_id&select=score', {
+      method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=representation' },
+      body: JSON.stringify({ game: input.game, scope, user_id: user, score, achieved_at }),
+    });
+    if (!(await insert.json()).length) {
+      // Compare inside the write so retries and concurrent completions cannot lower a best score.
+      const query = new URLSearchParams({ game: 'eq.' + input.game, scope: 'eq.' + scope, user_id: 'eq.' + user, score: 'lt.' + score });
+      await service(`game_contest_entries?${query}`, {
+        method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ score, achieved_at }),
+      });
+    }
+    return json({ saved: true });
   }
   const rankedPath = /^\/ranked-game-runs(?:\/([a-f0-9-]{36})\/(pack|question|answer|hint))?$/.exec(path);
   if (rankedPath && request.method === 'POST') {

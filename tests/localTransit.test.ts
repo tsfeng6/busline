@@ -9,7 +9,6 @@ import {CityDataCache} from '../src/utils/cityDataCache';
 import {expandSavedStationCoverage} from '../src/utils/stationCoverage';
 import {contestRules, contestPrompts} from '../src/utils/contestRules';
 import {drawContestQuestion} from '../src/utils/contestDrawing';
-import {sealLocalQuestion, openLocalQuestion, type SealedQuestion} from '../src/utils/localQuestionCipher';
 import {createSimulationQuestion} from '../src/utils/simulationQuestion';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
 const center:[number,number]=[116,39];
@@ -100,18 +99,16 @@ test('actual game generation never invokes provider search services and accepts 
  const ref = <T,>(current: T) => ({ current });
  const scope = {
   gameRulesRef: ref(contestRules('line', ['unusual', 'fill'])), questionAbortRef: ref<AbortController | null>(null),
-  gameProvince: '北京市', gameCountyProvince: '北京市', gameSessionIdRef: ref(0), gameRunRef: ref(null),
+  gameProvince: '北京市', gameCountyProvince: '北京市', gameSessionIdRef: ref(0), activeContestRef: ref<{scope:string} | null>(null),
   loadPublishedCities: async () => [{city: snapshot.city, province: '北京市', countySeats: [seat]}],
   loadGameCity: async (city: string) => { assert.equal(city, snapshot.city); return snapshot; },
-  loadGameCityImage: async () => 'fixture-image', sealLocalQuestion, rankedPendingRef: ref(false),
-  getRankedPuzzle: () => { throw Error('模拟不应请求竞赛服务'); },
-  getRankedPack: () => { throw Error('模拟不应请求竞赛题包'); }, stopRankedPreload() {},
+  loadGameCityImage: async () => 'fixture-image',
   roadViewportCleanupRef: ref(null), activeRawMarkersRef: ref([]), roadStopMarkersRef: ref([]),
   allMapStopsRef: ref(new Map()), roadStopsDataRef: ref(new Map()), lineGroupRef: ref(null), markerGroupRef: ref(null),
   clearStopMarkerGroup() {}, setCountyGameMask() {},
   createSimulationQuestion, drawContestQuestion, contestPrompts,
-  gameTimeRemainingMsRef: ref(180000), questionShownAtRef: ref<number | null>(null), currentGameQuestionRef: ref<SealedQuestion | null>(null),
-  setSimulationDrawing: (value: typeof drawing) => { drawing = value; }, setGameQuestionData: (value: unknown) => { question = value; },
+  gameTimeRemainingMsRef: ref(180000), questionShownAtRef: ref<number | null>(null), currentGameQuestionRef: ref<{correctAnswer:string} | null>(null),
+  setLocalGameDrawing: (value: typeof drawing) => { drawing = value; }, setGameQuestionData: (value: unknown) => { question = value; },
   isMinigameActiveRef: ref(true), restoreMapAfterMinigame() {}, setGameDataError: (message: string) => { throw Error(message); },
  };
  const proxy=new Proxy(scope,{has:(target,key)=>key in target||(typeof key==='string'&&key.startsWith('set')),get:(target,key)=>key in target?Reflect.get(target,key):typeof key==='string'&&key.startsWith('set')?()=>{}:undefined});
@@ -124,7 +121,7 @@ test('actual game generation never invokes provider search services and accepts 
   assert.deepEqual(question.options, []);
   assert.ok(mode === 'city' ? drawing?.raster : drawing?.path);
   assert.equal(question.correctAnswer, undefined);
-  assert.ok((await openLocalQuestion<{correctAnswer:string}>(scope.currentGameQuestionRef.current!)).correctAnswer);
+  assert.ok(scope.currentGameQuestionRef.current?.correctAnswer);
   assert.equal(drawing?.county, mode === 'county');
   assert.equal(drawing?.basemap ?? '', '');
   assert.equal(typeof scope.questionShownAtRef.current,'number');
@@ -133,16 +130,12 @@ test('actual game generation never invokes provider search services and accepts 
    assert.deepEqual(drawing?.stops, []);
   }
  }
+ scope.gameRulesRef.current = contestRules('line', ['unusual', 'fill']);
+ scope.activeContestRef.current = {scope:'北京市'};
+ await run('line','未收录城市',1);
+ assert.ok(scope.currentGameQuestionRef.current?.correctAnswer);
+ scope.activeContestRef.current = null;
  await assert.rejects(run('line','未收录城市',1), /已有线路图/);
-});
-
-test('unanswered local quiz data is authenticated ciphertext', async () => {
- const sealed = await sealLocalQuestion({ correctAnswer: '第一题答案' });
- assert.equal(new TextDecoder().decode(sealed.ciphertext).includes('第一题答案'), false);
- const changed = sealed.ciphertext.slice(0);
- new Uint8Array(changed)[0] ^= 1;
- await assert.rejects(openLocalQuestion({ ...sealed, ciphertext: changed }));
- assert.deepEqual(await openLocalQuestion(sealed), { correctAnswer: '第一题答案' });
 });
 
 test('daily location effect waits for onboarding and runs only once across openings on the same day',()=>{
