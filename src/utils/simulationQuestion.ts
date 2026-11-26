@@ -1,6 +1,6 @@
 import type { CityDataset } from './cityDataset';
 import {
-  createLocalContestQuestion, createNetworkContestQuestion, estimateUrbanDistrict, hasContestDistricts, loadContestDistricts,
+  createLocalContestQuestion, createNetworkContestQuestion, estimateUrbanDistrict, hasContestDistricts, contestDistrictPolygons,
 } from './contestQuestions';
 import type { ContestRules } from './contestRules';
 import type { PublishedCity } from './localTransit';
@@ -42,7 +42,7 @@ export async function createSimulationQuestion(
   signal.throwIfAborted();
   const citywide = rules.range === 'all-city' || rules.range === 'unusual';
   const polygons = citywide ? [] : hasContestDistricts(city)
-    ? await loadContestDistricts(city, fetch)
+    ? contestDistrictPolygons(city)
     : estimateUrbanDistrict(data);
   signal.throwIfAborted();
   return createLocalContestQuestion(mode, data, rules, polygons, previous);

@@ -5,7 +5,7 @@ import { cityDataKey, normalizeCityDataset } from '../../src/utils/cityDataset';
 import { validCityOverview } from '../../src/utils/cityOverview';
 import type { PublishedCity } from '../../src/utils/localTransit';
 import { shuffle, type GameMode, type OfflineQuestion } from '../../src/utils/offlineGame';
-import { createLocalContestQuestion, createNetworkContestQuestion, loadContestDistricts } from '../../src/utils/contestQuestions';
+import { createLocalContestQuestion, createNetworkContestQuestion, contestDistrictPolygons } from '../../src/utils/contestQuestions';
 import type { ContestRules } from '../../src/utils/contestRules';
 
 export async function createRankedQuestion(
@@ -61,7 +61,7 @@ export async function createRankedQuestion(
         async bytes => createHash('sha256').update(bytes).digest('hex')), { partConcurrency: 3 }));
       if (mode === 'line' || mode === 'station') {
         const polygons = rules.range === 'all-city' || rules.range === 'unusual'
-          ? [] : await loadContestDistricts(scope, fetcher);
+          ? [] : contestDistrictPolygons(scope);
         return createLocalContestQuestion(mode, data, rules, polygons, previous, random);
       }
       return createNetworkContestQuestion(mode, data, rules,

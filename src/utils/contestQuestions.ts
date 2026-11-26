@@ -4,37 +4,15 @@ import type { ContestRules } from './contestRules';
 import { distanceMeters, radiusRing, routeName, type CountySeat, type Point } from './localTransit';
 import { createOfflineQuestion, shuffle, type OfflineQuestion } from './offlineGame';
 
+// GCJ-02 district polygons from the DataV administrative atlas, limited to the
+// configured central districts. Keep these available without a provider request.
+import { contestDistricts } from '../data/contestDistricts';
+
 type Ring = Point[];
 type Polygon = Ring[];
-const districts: Record<string, { code: string; names: string[] }> = {
-  北京市: { code: '110000', names: ['东城', '西城', '海淀', '朝阳', '丰台', '石景山'] },
-  上海市: { code: '310000', names: ['黄浦', '静安', '徐汇', '长宁', '普陀', '虹口', '杨浦'] },
-  保定市: { code: '130600', names: ['莲池', '竞秀'] },
-  乌鲁木齐市: { code: '650100', names: ['天山', '沙依巴克'] },
-  宜昌市: { code: '420500', names: ['西陵', '伍家岗'] },
-};
-export const hasContestDistricts = (city: string) => Object.hasOwn(districts, city);
-const districtReads = new Map<string, Promise<Polygon[]>>();
-
-export function loadContestDistricts(city: string, read: typeof fetch): Promise<Polygon[]> {
-  const district = districts[city];
-  if (!district) throw Error('此城市尚未开放竞赛。');
-  let pending = districtReads.get(city);
-  if (!pending) {
-    pending = (async () => {
-      const response = await read(`https://geo.datav.aliyun.com/areas_v3/bound/${district.code}_full.json`,
-        { redirect: 'error', signal: AbortSignal.timeout(5000) });
-      if (!response.ok) throw Error('区划数据暂时不可用。');
-      const { features } = await response.json();
-      return district.names.flatMap(name => {
-        const geometry = features.find((feature: any) => feature.properties?.name === name + '区')?.geometry;
-        if (!geometry || !['Polygon', 'MultiPolygon'].includes(geometry.type) || !geometry.coordinates?.length) throw Error('中心城区边界不完整。');
-        return (geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates) as Polygon[];
-      });
-    })().catch(error => { districtReads.delete(city); throw error; });
-    districtReads.set(city, pending);
-  }
-  return pending;
+export const hasContestDistricts = (city: string) => Object.hasOwn(contestDistricts, city);
+export function contestDistrictPolygons(city: string): Polygon[] {
+  return hasContestDistricts(city) ? contestDistricts[city] : [];
 }
 
 function contains(ring: Ring, [lng, lat]: Point) {
