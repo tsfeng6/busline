@@ -1,3 +1,6 @@
+import { createRankedQuestion, rankedDrawing } from './rankedGame';
+import { isGameAnswerCorrect } from '../../src/utils/gameAnswers';
+import { getGameHint, isGameHintComplete } from '../../src/utils/gameHint';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { cityDataKey } from '../../src/utils/cityDataset';
 import { MAX_CITY_BYTES, CITY_CHUNK_BYTES, CITY_UPLOAD_FORMAT, CITY_RECORD_FORMAT } from '../../src/utils/cityTransfer';
@@ -155,7 +158,7 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
   const url=new URL(request.url),path=url.pathname;
   const configured=!!env.SUPABASE_URL&&!!env.SUPABASE_ANON_KEY;
   if(path==='/leaderboards'&&request.method==='GET'&&!configured)return json({entries:[],disabled:true},200);
-  if(!path.startsWith('/game-auth/')&&!path.startsWith('/game-runs')&&path!=='/leaderboards'&&path!=='/game-profile'&&path!=='/wechat/complete')return null;
+  if(!path.startsWith('/game-auth/')&&!path.startsWith('/game-runs')&&!path.startsWith('/ranked-game-runs')&&path!=='/leaderboards'&&path!=='/game-profile'&&path!=='/wechat/complete')return null;
   if(!configured)throw fail(503,'账号与排行榜服务尚未配置。');
   const base=env.SUPABASE_URL!.replace(/\/$/,'');
   if(!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(base))throw fail(503,'账号服务配置无效。');
@@ -295,21 +298,65 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     }
     const response=json({entries});response.headers.set('Cache-Control','private, max-age=15');response.headers.set('Vary','Cookie, Authorization');return response;
   }
-  if(path==='/game-runs'&&request.method==='POST'){
-    const input=await jsonBody(request,512),scope=String(input.scope||'北京市').trim();if(!validLeaderboard(input.game,input.difficulty)||scope.length<1||scope.length>64)throw fail(400,'不存在这个游戏榜单。');
-    const data=await supabase('/rest/v1/rpc/start_game_run',{method:'POST',body:JSON.stringify({p_game:input.game,p_difficulty:input.difficulty,p_city:scope})},true);
-    const run=Array.isArray(data)?data[0]:data;
-    return json({run:{id:run.id,game:run.game,difficulty:run.difficulty,scope:run.game_city,startedAt:run.started_at}},201);
+  const rankedPath = /^\/ranked-game-runs(?:\/([a-f0-9-]{36})\/(question|answer|hint))?$/.exec(path);
+  if (rankedPath && request.method === 'POST') {
+    const serviceKey = env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
+    const appOrigin = publicUrl(env.PUBLIC_APP_URL);
+    if (!serviceKey || !appOrigin) throw fail(503, '服务端计分尚未配置。');
+    const { id: user } = await authenticatedProfile(bearer);
+    const input = await jsonBody(request, 2048);
+    const runId = rankedPath[1] ?? null;
+    const action = async (operation: string, payload = {}) => {
+      const response = await transport(base + '/rest/v1/rpc/ranked_game_action', {
+        method: 'POST', signal: AbortSignal.timeout(15000),
+        headers: { apikey: serviceKey, ...(serviceKey.startsWith('sb_secret_') ? {} : { Authorization: `Bearer ${serviceKey}` }), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p_user: user, p_action: operation, p_run: runId, p_input: payload }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw fail(409, response.status === 404 ? '服务端计分数据库尚未升级。' : '计分请求暂时无法完成，请重试。');
+      return body;
+    };
+    const reply = (body: unknown, code = 200) => {
+      const response = json(body, code);
+      response.headers.set('Cache-Control', 'no-store');
+      return response;
+    };
+    if (!runId) {
+      const scope = input.game === 'city' ? '全国' : typeof input.scope === 'string' ? input.scope.trim() : '';
+      if (!validLeaderboard(input.game, input.difficulty) || !scope || scope.length > 64) throw fail(400, '不存在这个游戏榜单。');
+      return reply({ run: await action('start', { game: input.game, difficulty: input.difficulty, scope }) }, 201);
+    }
+    const current = await action('read');
+    if (rankedPath[2] === 'answer') {
+      if (!uuid.test(input.id || '') || typeof input.answer !== 'string' || input.answer.length > 150) throw fail(400, '答案格式无效。');
+      const question = current.id === input.id ? current.question : null;
+      const correct = !!question && isGameAnswerCorrect(input.answer, question.correctAnswer, question.isFillIn, current.game);
+      const result = await action('answer', { id: input.id, answer: input.answer.trim(), timeout: input.timeout === true, correct });
+      if (result.finished) leaderboardCache.clear();
+      return reply(result);
+    }
+    if (rankedPath[2] === 'hint') {
+      if (input.id !== current.id || !current.question || !Number.isInteger(input.step) || input.step < 1 || input.step > 7) throw fail(400, '提示不可用。');
+      if (input.step > current.hintsOnQuestion && isGameHintComplete(current.question.correctAnswer, current.hintsOnQuestion)) throw fail(409, '本题提示已全部揭示。');
+      const next = await action('hint', { id: input.id, step: input.step });
+      return reply({ text: getGameHint(next.question.correctAnswer, next.hintsOnQuestion),
+        remaining: 7 - next.hints, used: next.hintsOnQuestion,
+        complete: isGameHintComplete(next.question.correctAnswer, next.hintsOnQuestion) });
+    }
+    const number = input.number;
+    if (current.finished || !Number.isSafeInteger(number) || number !== current.number + (current.question ? 0 : 1)) throw fail(409, '题目顺序无效。');
+    let issued = current;
+    if (!current.question) {
+      const question = await createRankedQuestion(appOrigin, transport, current.game, current.difficulty, current.scope, number, current.previousAnswer)
+        .catch(() => { throw fail(409, '暂时无法读取计分题目，请稍后重试。'); });
+      issued = await action('issue', { number, question });
+    }
+    const question = issued.question;
+    const promptText = { line: '请根据公交线网猜线路。', station: '请根据公交线网猜目标站。', city: '请根据公交线网猜城市。', county: '请根据周边公交线网猜县城。' }[current.game as GameName];
+    return reply({ id: issued.id, number: issued.number, options: question.isFillIn ? [] : question.options, isFillIn: question.isFillIn, promptText,
+      drawing: rankedDrawing(question, current.game), remainingMs: issued.remainingMs, hints: 7 - issued.hints });
   }
-  const finish=/^\/game-runs\/([a-f0-9-]{36})\/finish$/.exec(path);
-  if(finish&&request.method==='POST'){
-    const input=await jsonBody(request,512),score=Number(input.score);if(!Number.isInteger(score)||score<0||score>2000)throw fail(400,'分数无效。');
-    const data=await supabase('/rest/v1/rpc/finish_game_run',{method:'POST',body:JSON.stringify({p_run_id:finish[1],p_score:score})},true);
-    // The finish RPC does not echo the run scope. A full tiny-cache eviction
-    // is safer than risking a stale rank after a successful settlement.
-    leaderboardCache.clear();
-    const row=Array.isArray(data)?data[0]:data;return json({accepted:row?.accepted===true,bestScore:Number(row?.best_score||0),rank:row?.rank===null?undefined:Number(row?.rank)});
-  }
+  if (path.startsWith('/game-runs')) throw fail(410, '排行榜已升级，请刷新网页。');
   throw fail(404,'没有这个账号接口。');
 }
 async function bodyBytes(request:Request,limit:number){
@@ -465,6 +512,6 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
       if(!response.ok){await put(jobKey(id),{...job,submitted:true,state:'failed',message:'无法确认远端保存任务是否启动，请稍后检查任务。',updatedAt:Date.now()});throw fail(502,'无法启动远端保存；本地地图不受影响。');}
       return json({id,city:job.city,state:'queued',message:'已提交，等待校验并保存到 GitHub。'},202);
     });
-  }catch(error:any){const status=[400,401,403,404,405,409,413,429,502,503].includes(error.status)?error.status:503;
+  }catch(error:any){const status=[400,401,403,404,405,409,410,413,429,502,503].includes(error.status)?error.status:503;
     return json({error:status===503?'上传服务暂时不可用，请稍后重试。':error.message},status);}
 }

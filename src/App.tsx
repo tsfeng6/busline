@@ -1,3 +1,5 @@
+import type { RankedPuzzle } from './utils/rankedGame';
+import { isGameAnswerCorrect } from './utils/gameAnswers';
 import {NearbyRoutes,type NearbyState} from './components/NearbyRoutes';
 import { loadNearbyTransitTiles } from './utils/nearbyTransitTiles';
 import {loadPublishedCities,loadGameCity} from './utils/publishedTransit';
@@ -56,7 +58,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { getGameTimeLimit, formatGameTime, recordGameAnswer } from './utils/gameTimer';
-import { establishGameSession, gameAccountEnabled, finishGameRun, getGameAccount, getGameLeaderboard, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
+import { establishGameSession, gameAccountEnabled, answerRankedPuzzle, getRankedPuzzle, hintRankedPuzzle, getGameAccount, getGameLeaderboard, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
 import { GameModeVisual } from './components/GameModeVisual';
 import { GameLadderPanel } from './components/GameLadderPanel';
@@ -427,7 +429,45 @@ export default function App() {
   const gameTimedOutRef = useRef(false);
   const gameScoreRef = useRef(0);
   const [gameHints, setGameHints] = useState({ remaining: 7, usedOnQuestion: 0 });
+  const [practiceOnly, setPracticeOnly] = useState(false);
+  const [rankedPuzzle, setRankedPuzzle] = useState<RankedPuzzle | null>(null);
+  const [rankedHint, setRankedHint] = useState<{ text: string; complete: boolean } | null>(null);
+  const [rankedWaiting, setRankedWaiting] = useState(false);
+  const rankedPuzzleRef = useRef<RankedPuzzle | null>(null);
+  const rankedDeadlineRef = useRef<number | null>(null);
+  const rankedPendingRef = useRef(false);
+  const rankedRetryAt = useRef(0);
+  const rankedAnswerRef = useRef<(answer: string, timeout?: boolean) => Promise<void>>(async () => {});
+  const clearRankedPuzzle = () => {
+    rankedPuzzleRef.current = null;
+    rankedDeadlineRef.current = null;
+    rankedPendingRef.current = false;
+    rankedRetryAt.current = 0;
+    setRankedPuzzle(null);
+    setRankedHint(null);
+    setRankedWaiting(false);
+  };
   const handleGameHint = () => {
+    const ranked = rankedPuzzleRef.current;
+    const run = gameRunRef.current;
+    if (ranked && run) {
+      if (rankedPendingRef.current || gameHints.remaining <= 0 || rankedHint?.complete || gameFeedback) return;
+      rankedPendingRef.current = true;
+      setRankedWaiting(true);
+      setGameDataError('');
+      void hintRankedPuzzle(run.id, ranked.id, gameHints.usedOnQuestion + 1, gameAccessToken).then(result => {
+        if (rankedPuzzleRef.current?.id !== ranked.id) return;
+        setRankedHint({ text: result.text, complete: result.complete });
+        setGameHints({ remaining: result.remaining, usedOnQuestion: result.used });
+      }).catch(error => {
+        if (rankedPuzzleRef.current?.id === ranked.id) setGameDataError(error.message);
+      }).finally(() => {
+        if (rankedPuzzleRef.current?.id !== ranked.id) return;
+        rankedPendingRef.current = false;
+        setRankedWaiting(false);
+      });
+      return;
+    }
     if (gameState !== 'playing' || gameLoading || gameFeedback || !gameQuestionData || gameTimedOutRef.current) return;
     setGameHints(prev => {
       if (prev.remaining <= 0 || isGameHintComplete(gameQuestionData.correctAnswer, prev.usedOnQuestion)) return prev;
@@ -533,20 +573,12 @@ export default function App() {
     const mode = gameMode || 'line', scope = leaderboardScope(mode);
     void refreshLadderBoards(mode, scope);
   }, [showMinigameModal, gameAccessToken, gameMode, gameCity, gameCountyProvince, refreshLadderBoards]);
-  const settleGameLeaderboard = useCallback((score: number) => {
-    const run = gameRunRef.current;
-    gameRunRef.current = null;
-    if (!run || !gameAccessToken) return;
-    void finishGameRun(run.id, score, gameAccessToken)
-      .then(() => refreshLadderBoards(run.game, run.scope || '北京市'))
-      .catch((error: any) => {
-        const reason = error?.message || '服务暂时不可用';
-        setGameAuthMessage(`本局未能写入排行榜：${reason}`);
-        setGameDataError(`本局成绩未能写入排行榜：${reason}`);
-      });
-  }, [gameAccessToken, refreshLadderBoards]);
   const finishGameOnTimeout = useCallback(() => {
     if (gameTimedOutRef.current) return;
+    if (gameRunRef.current) {
+      void rankedAnswerRef.current('', true);
+      return;
+    }
     const missed = recordGameAnswer(currentGameQuestionRef, '', false, true);
     if (!missed && (gameMode === 'line' || gameMode === 'station')) return;
     if (missed) setGameHistory(previous => [...previous, missed]);
@@ -560,8 +592,7 @@ export default function App() {
     setGameFeedback(null);
     setConfirmQuitGame(false);
     setGameState('gameover');
-    settleGameLeaderboard(gameScoreRef.current);
-  }, [gameMode, settleGameLeaderboard]);
+  }, [gameMode]);
 
   // Use a deadline so background-tab throttling cannot extend the challenge.
   // Loading questions pauses the clock; each new question keeps the same budget.
@@ -571,7 +602,8 @@ export default function App() {
     const deadline = Date.now() + budget;
     gameDeadlineRef.current = deadline;
     const tick = () => {
-      const remaining = Math.max(0, deadline - Date.now());
+      if (gameRunRef.current && rankedDeadlineRef.current === null) return;
+      const remaining = Math.max(0, (rankedDeadlineRef.current ?? deadline) - Date.now());
       setGameTimeLeft(Math.ceil(remaining / 1000));
       if (remaining === 0) finishGameOnTimeout();
     };
@@ -579,7 +611,7 @@ export default function App() {
     const interval = window.setInterval(tick, 200);
     return () => {
       window.clearInterval(interval);
-      if (!gameTimedOutRef.current) gameTimeRemainingMsRef.current = Math.max(0, deadline - Date.now());
+      if (!gameRunRef.current && !gameTimedOutRef.current) gameTimeRemainingMsRef.current = Math.max(0, deadline - Date.now());
       gameDeadlineRef.current = null;
     };
   }, [gameState, gameLoading, gameQuestionData, finishGameOnTimeout]);
@@ -679,6 +711,7 @@ export default function App() {
   const exitMinigameToMap = () => {
     gameSessionIdRef.current++;
     gameRunRef.current = null;
+    clearRankedPuzzle();
     isMinigameActiveRef.current = false;
     setConfirmQuitGame(false);
     setShowMinigameModal(false);
@@ -695,6 +728,7 @@ export default function App() {
   const returnToMinigameMenu = () => {
     gameSessionIdRef.current++;
     gameRunRef.current = null;
+    clearRankedPuzzle();
     isMinigameActiveRef.current = false;
     setConfirmQuitGame(false);
     setGameState('menu');
@@ -757,6 +791,7 @@ export default function App() {
     const launch = (run: GameRun | null, message = '') => {
       if (gameSessionIdRef.current !== launchId) return;
       gameRunRef.current = run;
+      clearRankedPuzzle();
       setGameAuthMessage(message);
       setGameLaunchAnimation(true);
       window.setTimeout(() => setGameLaunchAnimation(false), 1150);
@@ -785,11 +820,11 @@ export default function App() {
       setReviewIndex(0);
       setReviewAutoPlay(false);
       setReviewHoveredStop(null);
-      setMapMode(gameStage(mode, diff, 1).showBasemap ? 'normal' : 'blank');
+      setMapMode(!run && gameStage(mode, diff, 1).showBasemap ? 'normal' : 'blank');
       void generateQuestion(mode, diff, city, 1, undefined, activeProv);
     };
 
-    if (!gameAccountEnabled || !gameAccount || !gameAccessToken) {
+    if (practiceOnly || !gameAccountEnabled || !gameAccount || !gameAccessToken) {
       launch(null, '本局成绩仅保存在本机。');
       return;
     }
@@ -821,6 +856,21 @@ export default function App() {
     lineGroupRef.current?.clearOverlays();if(markerGroupRef.current)clearStopMarkerGroup(markerGroupRef.current);
     setCountyGameMask();
     try {
+      const run = gameRunRef.current;
+      if (run) {
+        clearRankedPuzzle();
+        const puzzle = await getRankedPuzzle(run.id, qNum, gameAccessToken);
+        if (gameSessionIdRef.current !== sessionId) return;
+        rankedPuzzleRef.current = puzzle;
+        rankedDeadlineRef.current = Date.now() + puzzle.remainingMs;
+        gameTimeRemainingMsRef.current = puzzle.remainingMs;
+        setGameTimeLeft(Math.ceil(puzzle.remainingMs / 1000));
+        setGameHints({ remaining: puzzle.hints, usedOnQuestion: 0 });
+        setRankedPuzzle(puzzle);
+        setMapMode('blank');
+        setGameQuestionData({ correctAnswer: '', options: puzzle.options, isFillIn: puzzle.isFillIn, promptText: puzzle.promptText });
+        return;
+      }
       const catalog = await loadPublishedCities();
       if (gameSessionIdRef.current !== sessionId) return;
       if (!catalog.length) throw Error('网站暂时没有可供出题的城市线路数据。');
@@ -878,12 +928,65 @@ export default function App() {
       }
       setGameQuestionData({correctAnswer:question.correctAnswer,options:question.options,isFillIn:question.isFillIn,promptText:question.promptText});
     } catch(error:any) {
-      if(gameSessionIdRef.current===sessionId){setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
+      if(gameSessionIdRef.current===sessionId){gameRunRef.current=null;setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
     } finally {if(gameSessionIdRef.current===sessionId)setGameLoading(false);}
+  };
+
+  rankedAnswerRef.current = async (answer, timeout = false) => {
+    const run = gameRunRef.current;
+    const puzzle = rankedPuzzleRef.current;
+    if (!run || !puzzle || rankedPendingRef.current || (timeout && Date.now() < rankedRetryAt.current)) return;
+    rankedPendingRef.current = true;
+    setRankedWaiting(true);
+    setGameDataError('');
+    const session = gameSessionIdRef.current;
+    try {
+      const result = await answerRankedPuzzle(run.id, puzzle.id, answer.trim().slice(0, 150), timeout, gameAccessToken);
+      if (gameSessionIdRef.current !== session) return;
+      if ('pendingMs' in result) {
+        rankedDeadlineRef.current = Date.now() + result.pendingMs;
+        return;
+      }
+      rankedPuzzleRef.current = null;
+      rankedDeadlineRef.current = null;
+      gameScoreRef.current = result.score;
+      setGameScore(result.score);
+      setGameHistory(previous => [...previous, {
+        ...result.question, questionNum: result.number, mode: run.game, difficulty: run.difficulty,
+        province: run.game === 'county' ? run.scope : undefined,
+        userAnswer: result.answer, isCorrect: result.correct, timedOut: result.timedOut,
+      }]);
+      if (result.finished) {
+        setGameTimedOut(result.timedOut);
+        gameTimedOutRef.current = result.timedOut;
+        setGameState('gameover');
+        clearRankedPuzzle();
+        void refreshLadderBoards(run.game, run.scope || '北京市');
+      } else {
+        setGameFeedback({ correct: true, msg: '回答正确！即将进入下一题...' });
+        window.setTimeout(() => {
+          if (gameSessionIdRef.current !== session) return;
+          setGameFeedback(null);
+          setGameUserInput('');
+          setGameQuestionNum(result.number + 1);
+          void generateQuestion(run.game, run.difficulty, gameCity, result.number + 1);
+        }, 900);
+      }
+    } catch (error: any) {
+      if (gameSessionIdRef.current !== session) return;
+      rankedRetryAt.current = Date.now() + 2500;
+      setGameDataError(error.message || '计分暂时无法完成，请重试。');
+    } finally {
+      if (gameSessionIdRef.current === session) {
+        rankedPendingRef.current = false;
+        setRankedWaiting(false);
+      }
+    }
   };
 
   const handleMinigameSubmit = (answer: string) => {
     if (!gameQuestionData || gameState !== 'playing' || gameLoading || gameFeedback !== null || gameTimedOutRef.current) return;
+    if (gameRunRef.current) { void rankedAnswerRef.current(answer); return; }
     if (gameDeadlineRef.current !== null && Date.now() >= gameDeadlineRef.current) {
       finishGameOnTimeout();
       return;
@@ -892,75 +995,7 @@ export default function App() {
 
     const rawUser = answer.trim();
     const rawCorrect = gameQuestionData.correctAnswer.trim();
-    let isCorrect = rawUser === rawCorrect;
-
-    if (!isCorrect && gameQuestionData.isFillIn) {
-      const toHalfWidth = (s: string) =>
-        s.replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)).replace(/\u3000/g, ' ');
-      const norm = (s: string) =>
-        toHalfWidth(s)
-          .toLowerCase()
-          .replace(/\s+/g, '')
-          .replace(/\(.*?\)|（.*?）/g, '')
-          .replace(/[·\-—_.,，。、'"“”‘’]/g, '');
-
-      const u = norm(rawUser);
-      const c = norm(rawCorrect);
-
-      if (!u) {
-        isCorrect = false;
-      } else if (gameMode === 'line') {
-        const normLineName = (s: string) =>
-          s
-            .replace(/快速直达专线/g, '快直')
-            .replace(/快速直达/g, '快直')
-            .replace(/快速公交/g, '快')
-            .replace(/([内外])环/g, '$1')
-            .replace(/(?:公交|巴士|专线|路线|快车|班车|区间车|车|路|线)/g, (m) => {
-              if (m === '快车') return '快';
-              if (m === '专线') return '专';
-              if (m === '区间车') return '区间';
-              return '';
-            });
-        const nu = normLineName(u);
-        const nc = normLineName(c);
-        isCorrect = u === c || (nu.length > 0 && nu === nc);
-      } else if (gameMode === 'station') {
-        const stripStationEnd = (s: string) => {
-          const stripped = s.replace(
-            /(?:公交枢纽站|公交场站|公交总站|公交车站|公交站|枢纽站|首末站|总站|车站|站)$/,
-            ''
-          );
-          return stripped || s;
-        };
-        const stripStationAll = (s: string) => {
-          let res = stripStationEnd(s).replace(/^(?:地铁|公交)/, '');
-          res = res.replace(/(?:火车站|高铁站|汽车站|地铁站)$/, '') || res;
-          return res || s;
-        };
-        const u1 = stripStationEnd(u);
-        const c1 = stripStationEnd(c);
-        const u2 = stripStationAll(u);
-        const c2 = stripStationAll(c);
-        isCorrect = u === c || u1 === c1 || (u2.length >= 2 && u2 === c2);
-      } else if (gameMode === 'county') {
-        const stripCountySuffix = (s: string) => {
-          const stripped = s
-            .replace(/(?:[一-龥]{1,8}?(?:族|各族))*自治(?:县|州|旗)$/, '')
-            .replace(/(?:特别行政区|行政委员会|林区|矿区|新区|特区|[县市区旗盟])$/, '');
-          return stripped || s;
-        };
-        isCorrect = u === c || stripCountySuffix(u) === stripCountySuffix(c);
-      } else if (gameMode === 'city') {
-        const stripCitySuffix = (s: string) => {
-          const stripped = s
-            .replace(/(?:[一-龥]{1,8}?(?:族|各族))*自治州$/, '')
-            .replace(/(?:特别行政区|地区|[市盟])$/, '');
-          return stripped || s;
-        };
-        isCorrect = u === c || stripCitySuffix(u) === stripCitySuffix(c);
-      }
-    }
+    const isCorrect = isGameAnswerCorrect(rawUser, rawCorrect, gameQuestionData.isFillIn, gameMode);
 
     const recorded = recordGameAnswer(currentGameQuestionRef, rawUser, isCorrect);
     if (!recorded) return;
@@ -1002,7 +1037,6 @@ export default function App() {
         setGameUserInput('');
         const nextNum = gameQuestionNum + 1;
         if (gameMode === 'city' && nextNum > 10) {
-          settleGameLeaderboard(newScore);
           setGameState('gameover');
           return;
         }
@@ -1013,7 +1047,6 @@ export default function App() {
       setGameFeedback({ correct: false, msg: `回答错误！正确答案是：${gameQuestionData.correctAnswer}` });
       setTimeout(() => {
         if (gameSessionIdRef.current !== submittedSessionId || gameTimedOutRef.current) return;
-        settleGameLeaderboard(gameScore);
         setGameState('gameover');
       }, 1500);
     }
@@ -7165,6 +7198,18 @@ export default function App() {
             subdued={!tiledTimeline && (plannerRouteVisible || !!activeBusLine || coverageActive || timelineAvailable)}
             blocked={viewportLineBlocked} selection={viewportSelectionRef} onStats={setViewportStats} onDetailReady={setViewportDetailReady} />
           <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
+          {isAnswering && rankedPuzzle && <div className="absolute inset-0 z-20 flex justify-center bg-[#f5f5f3] px-4 pb-[min(30dvh,12rem)] pt-3">
+            <svg viewBox="0 0 1000 1000" className="h-full w-full" aria-label="公交线网题面" role="img">
+              {rankedPuzzle.drawing.county && <circle cx="500" cy="500" r="465" fill="none" stroke="#ccd9d4" strokeWidth="2" />}
+              <path d={rankedPuzzle.drawing.path} fill="none" stroke="#52796f" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+              {rankedPuzzle.drawing.stops.map(([x, y], i) => <circle key={i} cx={x} cy={y} r="3.5" fill="#52796f" stroke="white" />)}
+              {rankedPuzzle.drawing.terminals.map(({ first, last }, i) => <React.Fragment key={i}>
+                <circle cx={first[0]} cy={first[1]} r="6" fill="#16a34a" stroke="white" />
+                <circle cx={last[0]} cy={last[1]} r="5" fill="#ef4444" stroke="white" />
+              </React.Fragment>)}
+              {rankedPuzzle.drawing.target && <circle cx={rankedPuzzle.drawing.target[0]} cy={rankedPuzzle.drawing.target[1]} r="9" fill="#ef4444" stroke="white" strokeWidth="2" />}
+            </svg>
+          </div>}
 
           {isBoxSelectMode && (
             <div 
@@ -8477,6 +8522,10 @@ export default function App() {
 
                     {gameCatalogLoading&&<p role="status" className="text-xs text-slate-500">正在读取已有线路图城市…</p>}
                     {gameDataError&&<p role="alert" className="text-xs text-m3-error">{gameDataError}</p>}
+                    {gameAccount && gameAccountEnabled && <label className="flex items-center gap-2 text-xs text-slate-600">
+                      <input type="checkbox" checked={practiceOnly} onChange={event => setPracticeOnly(event.target.checked)} className="accent-m3-primary" />
+                      仅练习（不上榜）
+                    </label>}
                     {!gameAccount && gameAccountEnabled && <p className="text-xs text-slate-500">游客可直接开始，成绩仅保存在本机。</p>}
                     {!gameCatalogLoading&&gameMode==='county'&&!countyProvinces.length&&<p role="status" className="text-xs text-slate-500">暂未收录可定位的县政府站点，请先选择其他模式。</p>}
                     {/* Start & Review Buttons */}
@@ -8580,7 +8629,7 @@ export default function App() {
                       <span className="truncate">{gameQuestionData.promptText}</span>
                     </div>
 
-                    {isAdminVerified && (
+                    {isAdminVerified && !rankedPuzzle && (
                       <div role="status" className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs">
                         <Shield className="w-4 h-4 text-emerald-700 shrink-0" />
                         <span className="font-black">管理员测试答案</span>
@@ -8593,12 +8642,12 @@ export default function App() {
                       <motion.button
                         type="button"
                         onClick={handleGameHint}
-                        disabled={gameLoading || gameFeedback !== null || gameHints.remaining === 0 || isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)}
+                        disabled={gameLoading || gameFeedback !== null || gameHints.remaining === 0 || rankedWaiting || (rankedPuzzle ? rankedHint?.complete : isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion))}
                         whileTap={{ scale: 0.94 }}
                         className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-xs font-bold transition-colors hover:bg-m3-primary/20 disabled:opacity-45 disabled:cursor-not-allowed"
                       >
                         <Sparkles className="w-3.5 h-3.5" />
-                        {gameHints.remaining === 0 ? '提示已用完' : isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion) ? '本题已全部揭示' : '提示'}
+                        {gameHints.remaining === 0 ? '提示已用完' : (rankedPuzzle ? rankedHint?.complete : isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)) ? '本题已全部揭示' : '提示'}
                         <span className="tabular-nums">{gameHints.remaining}/7</span>
                       </motion.button>
                     </div>
@@ -8614,19 +8663,21 @@ export default function App() {
                           aria-live="polite"
                           className="px-3 py-2.5 rounded-2xl bg-m3-primary-container/50 border border-m3-outline-variant/40"
                         >
-                          <div className="text-[10px] font-bold text-m3-primary mb-1">答案提示 · {Array.from(gameQuestionData.correctAnswer).length} 个字符</div>
+                          <div className="text-[10px] font-bold text-m3-primary mb-1">答案提示 · {Array.from(rankedPuzzle ? rankedHint?.text ?? '' : gameQuestionData.correctAnswer).length} 个字符</div>
                           <motion.p
                             key={gameHints.usedOnQuestion}
                             initial={{ opacity: 0, y: 3 }}
                             animate={{ opacity: 1, y: 0 }}
                             className="text-sm font-black tracking-widest text-m3-on-primary-container break-all"
                           >
-                            {getGameHint(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)}
+                            {rankedPuzzle ? rankedHint?.text : getGameHint(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)}
                           </motion.p>
                         </motion.div>
                       )}
                     </AnimatePresence>
 
+                    {!rankedPuzzle && gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
+                    {rankedPuzzle && gameDataError && <p role="alert" className="text-xs text-red-700">{gameDataError}</p>}
                     {gameFeedback && (
                       <div className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold text-center ${gameFeedback.correct ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
                         {gameFeedback.msg}
@@ -8640,7 +8691,7 @@ export default function App() {
                             key={idx}
                             type="button"
                             title={opt}
-                            disabled={gameFeedback !== null}
+                            disabled={gameFeedback !== null || rankedWaiting}
                             onClick={() => handleMinigameSubmit(opt)}
                             className="px-3 py-2 rounded-xl border border-m3-outline-variant/30 bg-m3-surface-container-low hover:bg-m3-primary-container/30 hover:border-m3-primary text-slate-800 font-bold text-xs transition-all shadow-xs text-left truncate flex items-center gap-2"
                           >
@@ -8677,7 +8728,7 @@ export default function App() {
                         />
                         <button
                           type="button"
-                          disabled={gameFeedback !== null || !gameUserInput.trim()}
+                          disabled={gameFeedback !== null || rankedWaiting || !gameUserInput.trim()}
                           onClick={() => handleMinigameSubmit(gameUserInput)}
                           className="px-5 py-2 rounded-xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-sm hover:opacity-95 transition-all disabled:opacity-50 shrink-0"
                         >

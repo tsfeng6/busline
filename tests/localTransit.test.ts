@@ -94,7 +94,7 @@ test('actual game generation never invokes provider search services and accepts 
  let calls=0,question:any;let basemap:string;let maskRadius:number;const ref=(current:any)=>({current});
  const forbidden=class{constructor(){calls++;throw Error('No provider query permitted');}};
  const scope:any={window:{AMap:{PlaceSearch:forbidden,LineSearch:forbidden,StationSearch:forbidden,DistrictSearch:forbidden,Geocoder:forbidden,
-  Polyline:class{},CircleMarker:class{},Bounds:class{}}},mapInstance:{setFitView(){},setZoomAndCenter(){},setBounds(){}},gameProvince:'北京市',gameCountyProvince:'北京市',gameSessionIdRef:ref(0),
+  Polyline:class{},CircleMarker:class{},Bounds:class{}}},mapInstance:{setFitView(){},setZoomAndCenter(){},setBounds(){}},gameProvince:'北京市',gameCountyProvince:'北京市',gameSessionIdRef:ref(0),gameRunRef:ref(null),
   loadPublishedCities:async()=>[{city:snapshot.city,province:'北京市',countySeats:[seat]}],loadGameCity:async(city:string)=>{assert.equal(city,snapshot.city);return snapshot;},
   roadViewportCleanupRef:ref(null),activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),allMapStopsRef:ref(new Map()),roadStopsDataRef:ref(new Map()),
   lineGroupRef:ref({clearOverlays(){},addOverlay(){}}),markerGroupRef:ref({clearOverlays(){},getOverlays(){return [];},addOverlay(){},addOverlays(){}}),clearStopMarkerGroup(){},

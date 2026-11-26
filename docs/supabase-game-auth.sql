@@ -290,8 +290,8 @@ returns table (rank bigint, display_name text, avatar_path text, avatar_url text
   where ranked.rank <= 5 or ranked.user_id = auth.uid()
   order by ranked.rank, ranked.achieved_at asc;
 $$;
-grant execute on function public.start_game_run(text, text, text) to authenticated;
-grant execute on function public.finish_game_run(uuid, integer) to authenticated;
+revoke execute on function public.start_game_run(text, text, text) from public, anon, authenticated;
+revoke execute on function public.finish_game_run(uuid, integer) from public, anon, authenticated;
 grant execute on function public.get_game_leaderboard(text, text, text) to anon, authenticated;
 grant execute on function public.current_game_profile() to authenticated;
 grant execute on function public.update_game_profile(text, text) to authenticated;

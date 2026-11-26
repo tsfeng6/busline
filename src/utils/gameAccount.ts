@@ -1,3 +1,4 @@
+import type { RankedPuzzle, RankedResult } from './rankedGame';
 export type GameLeaderboardKey = { game: 'line' | 'station' | 'city' | 'county'; difficulty: 'easy' | 'hell' | 'hard'; scope?: string };
 export type GameAccount = { id: string; phone?: string; displayName: string; avatarUrl?: string };
 export type GameRun = { id: string; game: GameLeaderboardKey['game']; difficulty: GameLeaderboardKey['difficulty']; scope?: string; startedAt: string };
@@ -69,10 +70,22 @@ export async function updateGameProfile(displayName: string, avatar?: File, acce
   return request<{ account: GameAccount }>('/game-profile', { method: 'POST', body: JSON.stringify({ displayName, avatarData }) }, accessToken);
 }
 export async function startGameRun(key: GameLeaderboardKey, accessToken: string) {
-  return request<{ run: GameRun }>('/game-runs', { method: 'POST', body: JSON.stringify(key) }, accessToken);
+  return request<{ run: GameRun }>('/ranked-game-runs', { method: 'POST', body: JSON.stringify(key) }, accessToken);
 }
-export async function finishGameRun(id: string, score: number, accessToken: string) {
-  return request<{ accepted: boolean; bestScore: number; rank?: number }>('/game-runs/' + encodeURIComponent(id) + '/finish', { method: 'POST', body: JSON.stringify({ score }) }, accessToken);
+export function getRankedPuzzle(run: string, number: number, accessToken: string) {
+  return request<RankedPuzzle>(`/ranked-game-runs/${encodeURIComponent(run)}/question`, {
+    method: 'POST', body: JSON.stringify({ number }), signal: AbortSignal.timeout(45000),
+  }, accessToken);
+}
+export function answerRankedPuzzle(run: string, id: string, answer: string, timeout: boolean, accessToken: string) {
+  return request<RankedResult | { pendingMs: number }>(`/ranked-game-runs/${encodeURIComponent(run)}/answer`, {
+    method: 'POST', body: JSON.stringify({ id, answer, timeout }),
+  }, accessToken);
+}
+export function hintRankedPuzzle(run: string, id: string, step: number, accessToken: string) {
+  return request<{ text: string; remaining: number; used: number; complete: boolean }>(`/ranked-game-runs/${encodeURIComponent(run)}/hint`, {
+    method: 'POST', body: JSON.stringify({ id, step }),
+  }, accessToken);
 }
 export async function getGameLeaderboard(key: GameLeaderboardKey, accessToken?: string) {
   const query = new URLSearchParams({ game: key.game, difficulty: key.difficulty, scope: key.scope || '北京市' }).toString();

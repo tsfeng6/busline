@@ -177,3 +177,51 @@ test('WeChat callback verifies its signature and sends first-time users a regist
  assert.equal(response.status,200);const body=await response.text();assert.match(body,/完成注册/);assert.match(body,/wechat=register&token=/);assert.doesNotMatch(body,/&amp;token=/);
  assert.equal((await handleEdgeOneGateway(new Request('https://gateway.example/wechat/callback?timestamp='+timestamp+'&nonce='+nonce+'&signature=bad',{method:'POST',body:raw}),wechatEnv,store,transport)).status,401);
 });
+
+test('ranked gateway exposes only the drawing until the server grades the answer', async () => {
+ const {store} = fixture();
+ const id = '00000000-0000-0000-0000-000000000001', run = '00000000-0000-0000-0000-000000000002';
+ const questionId = '00000000-0000-0000-0000-000000000003';
+ const accountEnv = {...env, SUPABASE_URL:'https://project.supabase.co', SUPABASE_ANON_KEY:'anon-test-key',
+  SUPABASE_SECRET_KEY:'sb_secret_test', PUBLIC_APP_URL:'https://busline.cc'};
+ const state: Record<string, any> = { game:'city', difficulty:'hard', scope:'全国', number:0, previousAnswer:'', hints:0, remainingMs:180000 };
+ const upstream: typeof fetch = async (input, init) => {
+   const url = new URL(String(input));
+   if (url.pathname === '/rest/v1/rpc/current_game_profile') return Response.json([{id, display_name:'测试用户'}]);
+   if (url.hostname === 'busline.cc') {
+     assert.equal(new Headers(init?.headers).has('Authorization'), false);
+     return Response.json(url.pathname.endsWith('overview.json') ?
+       { cities:[{city:'北京市', bounds:[115,38,117,41], thumbnail:'thumbnails/北京.png'}] } : sample());
+   }
+   assert.equal(url.pathname, '/rest/v1/rpc/ranked_game_action');
+   assert.equal(new Headers(init?.headers).get('apikey'), 'sb_secret_test');
+   const { p_user, p_action, p_input } = JSON.parse(String(init?.body));
+   assert.equal(p_user, id);
+   if (p_action === 'start') return Response.json({id:run,...p_input});
+   if (p_action === 'read') return Response.json(state);
+   if (p_action === 'issue') {
+     Object.assign(state, { id:questionId, number:p_input.number, question:p_input.question });
+     return Response.json(state);
+   }
+   if (p_action === 'answer') {
+     assert.equal(p_input.correct, true);
+     assert.equal(p_input.score, undefined);
+     assert.equal(p_input.id, questionId);
+     return Response.json({ question:state.question, number:1, answer:p_input.answer, correct:true, timedOut:false, score:1, finished:false });
+   }
+   throw Error('unexpected action');
+ };
+ const post = (path: string, body: unknown) => handleEdgeOneGateway(new Request('https://gateway.example' + path, {
+   method:'POST', headers:{Cookie:'busline_game_session=test-session'}, body:JSON.stringify(body),
+ }), accountEnv, store, upstream);
+ assert.equal((await post('/ranked-game-runs', { game:'city', difficulty:'hard' })).status, 201);
+ const response = await post('/ranked-game-runs/' + run + '/question', {number:1});
+ assert.equal(response.status, 200);
+ assert.equal(response.headers.get('cache-control'), 'no-store');
+ const text = await response.text();
+ assert.doesNotMatch(text, /correctAnswer|targetCity|fallbackCenter|116\.123456789123|北京市/);
+ assert.match(JSON.parse(text).drawing.path, /^M/);
+ const settled = await post('/ranked-game-runs/' + run + '/answer', {id:questionId, answer:'北京市', score:999});
+ assert.equal((await settled.json()).score, 1);
+ assert.equal((await post('/game-runs/' + run + '/finish', {score:999})).status, 410);
+});
