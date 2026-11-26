@@ -8,6 +8,9 @@ export type RankedPuzzle = {
   promptText: string;
   drawing: {
     path: string;
+    basemap?: string;
+    frames?: { path: string; stops: [number, number][] }[];
+    arrows?: [number, number, number][];
     stops: [number, number][];
     target?: [number, number];
     terminals: { first: [number, number]; last: [number, number] }[];
@@ -15,6 +18,7 @@ export type RankedPuzzle = {
   };
   remainingMs: number;
   hints: number;
+  hintLimit: number;
 };
 
 export type RankedResult = {

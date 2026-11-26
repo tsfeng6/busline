@@ -58,10 +58,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { getGameTimeLimit, formatGameTime, recordGameAnswer } from './utils/gameTimer';
-import { establishGameSession, gameAccountEnabled, answerRankedPuzzle, getRankedPuzzle, hintRankedPuzzle, getGameAccount, getGameLeaderboard, startGameRun, type GameAccount, type GameLeaderboardKey, type GameRun, type LeaderboardEntry } from './utils/gameAccount';
+import { establishGameSession, gameAccountEnabled, answerRankedPuzzle, getRankedPuzzle, hintRankedPuzzle, getGameAccount, startGameRun, type GameAccount, type GameRun } from './utils/gameAccount';
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
-import { GameModeVisual } from './components/GameModeVisual';
-import { GameLadderPanel } from './components/GameLadderPanel';
+import { GameLobby } from './components/GameLobby';
+import { RankedGameDrawing } from './components/RankedGameDrawing';
+import { contests } from './utils/contestRules';
 
 const isFirebaseEnabled = () => true;
 
@@ -271,6 +272,15 @@ const parseDataSourceImages = (val: string | null | undefined): string[] => {
 };
 
 export default function App() {
+  const gamePage = /^\/game(?:\/index\.html|\/)?$/.test(window.location.pathname);
+  const [gameDivision, setGameDivision] = useState<'contest' | 'simulation'>('contest');
+  const [contest, setContest] = useState<(typeof contests)[number]>(contests[0]);
+  const [contestTags, setContestTags] = useState<string[]>([]);
+  const [simulationMode, setSimulationMode] = useState<'line' | 'station' | 'city' | 'county'>('line');
+  const [simulationDifficulty, setSimulationDifficulty] = useState<'easy' | 'hell'>('easy');
+  useEffect(() => {
+    if (gamePage) document.title = '巴士竞猜';
+  }, [gamePage]);
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isBoxSelectMode, setIsBoxSelectMode] = useState(false);
@@ -332,7 +342,7 @@ export default function App() {
   } | null>(null);
 
   // Minigame States & Logic
-  const [showMinigameModal, setShowMinigameModal] = useState(false);
+  const showMinigameModal = gamePage;
   const [gameMode, setGameMode] = useState<'line' | 'station' | 'city' | 'county' | null>(null);
   const [gameDifficulty, setGameDifficulty] = useState<'easy' | 'medium' | 'hard' | 'hell'>('easy');
   const [gameCity, setGameCity] = useState('北京市');
@@ -340,7 +350,6 @@ export default function App() {
   const [gameCountyProvince, setGameCountyProvince] = useState('浙江省');
   const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover' | 'review'>('menu');
   const [gameLoading, setGameLoading] = useState(false);
-  const [gameLoadingText, setGameLoadingText] = useState('正在读取已有线路数据…');
   const [gameScore, setGameScore] = useState(0);
   const [gameAccount, setGameAccount] = useState<GameAccount | null>(null);
   // The literal marker means that the authenticated session is held only in
@@ -352,7 +361,6 @@ export default function App() {
   const [gameAuthLoading, setGameAuthLoading] = useState(gameAccountEnabled);
   const gameSessionRestoreRef = useRef<ReturnType<typeof getGameAccount> | null>(null);
   const [gameAuthMessage, setGameAuthMessage] = useState('');
-  const [ladderBoards, setLadderBoards] = useState<{ standard: LeaderboardEntry[]; hell: LeaderboardEntry[] }>({ standard: [], hell: [] });
   const [gameLaunchAnimation, setGameLaunchAnimation] = useState(false);
 
   // Supabase's server-generated magic link returns the short-lived session in
@@ -392,23 +400,23 @@ export default function App() {
     void restore();
     return () => { cancelled = true; };
   }, []);
-  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   const [isAdminVerified, setIsAdminVerified] = useState(false);
   const [gameCatalog,setGameCatalog]=useState<PublishedCity[]>([]);
   const [gameDataError,setGameDataError]=useState('');
   const [gameCatalogLoading,setGameCatalogLoading]=useState(false);
+  const [gameCatalogError, setGameCatalogError] = useState('');
   const gameProvinces=[...new Set(gameCatalog.map(item=>item.province).filter(Boolean))];
   const gameCities=gameCatalog.filter(item=>item.province===gameProvince);
   const countyProvinces=[...new Set(gameCatalog.filter(item=>item.countySeats.length).map(item=>item.province).filter(Boolean))];
   useEffect(()=>{
     if(!showMinigameModal)return;
-    let cancelled=false;setGameCatalogLoading(true);setGameDataError('');
+    let cancelled=false;setGameCatalogLoading(true);setGameCatalogError('');
     loadPublishedCities(true).then(catalog=>{if(cancelled)return;setGameCatalog(catalog);
       const provinces=[...new Set(catalog.map(item=>item.province).filter(Boolean))];
       setGameProvince(previous=>provinces.includes(previous)?previous:provinces[0]||'');
       const counties=[...new Set(catalog.filter(item=>item.countySeats.length).map(item=>item.province).filter(Boolean))];
       setGameCountyProvince(previous=>counties.includes(previous)?previous:counties[0]||'');
-    }).catch(error=>{if(!cancelled)setGameDataError(error.message);}).finally(()=>{if(!cancelled)setGameCatalogLoading(false);});
+    }).catch(()=>{if(!cancelled)setGameCatalogError('暂时无法读取已收录城市，请刷新后重试。');}).finally(()=>{if(!cancelled)setGameCatalogLoading(false);});
     return()=>{cancelled=true;};
   },[showMinigameModal]);
   useEffect(()=>{if(gameCities.length&&!gameCities.some(item=>item.city===gameCity))setGameCity(gameCities[0].city);},[gameCatalog,gameProvince,gameCity]);
@@ -429,7 +437,6 @@ export default function App() {
   const gameTimedOutRef = useRef(false);
   const gameScoreRef = useRef(0);
   const [gameHints, setGameHints] = useState({ remaining: 7, usedOnQuestion: 0 });
-  const [practiceOnly, setPracticeOnly] = useState(false);
   const [rankedPuzzle, setRankedPuzzle] = useState<RankedPuzzle | null>(null);
   const [rankedHint, setRankedHint] = useState<{ text: string; complete: boolean } | null>(null);
   const [rankedWaiting, setRankedWaiting] = useState(false);
@@ -512,67 +519,6 @@ export default function App() {
   const gameSessionIdRef = useRef(0);
   const gameRunRef = useRef<GameRun | null>(null);
   const isMinigameActiveRef = useRef(false);
-  const leaderboardScope = (mode: 'line' | 'station' | 'city' | 'county', city = gameCity, province = gameCountyProvince) => mode === 'city' ? '全国' : mode === 'county' ? province : city || '北京市';
-  const leaderboardKey = (mode: 'line' | 'station' | 'city' | 'county', difficulty: 'easy' | 'medium' | 'hard' | 'hell', scope = leaderboardScope(mode)): GameLeaderboardKey =>
-    ({ game: mode, difficulty: (mode === 'line' || mode === 'station' ? difficulty : 'hard') as GameLeaderboardKey['difficulty'], scope });
-  const ladderCacheRef = useRef(new Map<string, { entries: LeaderboardEntry[]; at: number }>());
-  const ladderRequestsRef = useRef(new Map<string, Promise<LeaderboardEntry[]>>());
-  const ladderEntryCacheKey = (key: GameLeaderboardKey) => `${gameAccount?.id || 'anonymous'}\u0001${key.game}\u0001${key.difficulty}\u0001${key.scope || '北京市'}`;
-  const loadLeaderboardEntries = useCallback((key: GameLeaderboardKey) => {
-    const cacheKey = ladderEntryCacheKey(key);
-    const ongoing = ladderRequestsRef.current.get(cacheKey);
-    if (ongoing) return ongoing;
-    const request = getGameLeaderboard(key, gameAccessToken || undefined)
-      .then(result => {
-        ladderCacheRef.current.set(cacheKey, { entries: result.entries, at: Date.now() });
-        return result.entries;
-      })
-      .finally(() => ladderRequestsRef.current.delete(cacheKey));
-    ladderRequestsRef.current.set(cacheKey, request);
-    return request;
-  }, [gameAccessToken, gameAccount?.id]);
-  const warmLadderBoards = useCallback((mode: 'line' | 'station' | 'city' | 'county', scope: string) => {
-    const standard = leaderboardKey(mode, mode === 'line' || mode === 'station' ? 'easy' : 'hard', scope);
-    const hell = mode === 'line' || mode === 'station' ? leaderboardKey(mode, 'hell', scope) : null;
-    return Promise.all([loadLeaderboardEntries(standard), hell ? loadLeaderboardEntries(hell) : Promise.resolve([] as LeaderboardEntry[])]);
-  }, [loadLeaderboardEntries]);
-  const refreshLadderBoards = useCallback(async (mode: 'line' | 'station' | 'city' | 'county', scope: string) => {
-    if (!gameAccountEnabled) return;
-    const standard = leaderboardKey(mode, mode === 'line' || mode === 'station' ? 'easy' : 'hard', scope);
-    const hell = mode === 'line' || mode === 'station' ? leaderboardKey(mode, 'hell', scope) : null;
-    const cachedStandard = ladderCacheRef.current.get(ladderEntryCacheKey(standard))?.entries;
-    const cachedHell = hell ? ladderCacheRef.current.get(ladderEntryCacheKey(hell))?.entries : [];
-    const hasCachedBoard = !!cachedStandard && (!hell || !!cachedHell);
-    // Render a known board synchronously, then revalidate it quietly. The
-    // first-ever visit still shows the loading state until a board exists.
-    if (hasCachedBoard) setLadderBoards({ standard: cachedStandard, hell: cachedHell || [] });
-    setLeaderboardLoading(!hasCachedBoard);
-    try {
-      const [normal, hard] = await warmLadderBoards(mode, scope);
-      setLadderBoards({ standard: normal, hell: hard });
-    } catch {
-      if (!hasCachedBoard) setLadderBoards({ standard: [], hell: [] });
-    } finally {
-      setLeaderboardLoading(false);
-    }
-  }, [gameAccount?.id, warmLadderBoards]);
-  useEffect(() => {
-    if (!gameAccountEnabled || !gameAccessToken) return;
-    // Warm each default scope after the map and account have settled. This
-    // happens outside the modal, so selecting any mode is normally instant.
-    const timer = window.setTimeout(() => {
-      void warmLadderBoards('line', leaderboardScope('line'));
-      void warmLadderBoards('station', leaderboardScope('station'));
-      void warmLadderBoards('city', leaderboardScope('city'));
-      void warmLadderBoards('county', leaderboardScope('county'));
-    }, 900);
-    return () => window.clearTimeout(timer);
-  }, [gameAccessToken, gameCity, gameCountyProvince, warmLadderBoards]);
-  useEffect(() => {
-    if (!showMinigameModal || !gameAccountEnabled) return;
-    const mode = gameMode || 'line', scope = leaderboardScope(mode);
-    void refreshLadderBoards(mode, scope);
-  }, [showMinigameModal, gameAccessToken, gameMode, gameCity, gameCountyProvince, refreshLadderBoards]);
   const finishGameOnTimeout = useCallback(() => {
     if (gameTimedOutRef.current) return;
     if (gameRunRef.current) {
@@ -708,23 +654,6 @@ export default function App() {
     setStationConnectivityCard(null);
   };
 
-  const exitMinigameToMap = () => {
-    gameSessionIdRef.current++;
-    gameRunRef.current = null;
-    clearRankedPuzzle();
-    isMinigameActiveRef.current = false;
-    setConfirmQuitGame(false);
-    setShowMinigameModal(false);
-    setGameState('menu');
-    setGameLoading(false);
-    setGameQuestionData(null);
-    setGameFeedback(null);
-    setGameUserInput('');
-    setReviewAutoPlay(false);
-    setReviewHoveredStop(null);
-    restoreMapAfterMinigame();
-  };
-
   const returnToMinigameMenu = () => {
     gameSessionIdRef.current++;
     gameRunRef.current = null;
@@ -775,11 +704,12 @@ export default function App() {
     mode: 'line' | 'station' | 'city' | 'county',
     diff: 'easy' | 'medium' | 'hard' | 'hell',
     city: string,
-    province?: string
+    province?: string,
+    competitive = false,
   ) => {
     if (gameLoading || (gameState === 'playing' && isMinigameActiveRef.current)) return;
-    if (!(window as any).AMap || !mapInstance) {
-      setApiErrorNotification('地图尚未就绪，请稍后再开始游戏。');
+    if (!competitive && (!(window as any).AMap || !mapInstance)) {
+      setGameDataError('地图尚未就绪，请稍后再开始模拟。');
       return;
     }
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
@@ -800,7 +730,7 @@ export default function App() {
       clearMapStateForMinigame();
       setGameMode(mode);
       setGameDifficulty(diff);
-      setGameCity(city);
+      if (!run) setGameCity(city);
       const timeLimit = getGameTimeLimit(mode, diff);
       gameTimeRemainingMsRef.current = timeLimit === null ? null : timeLimit * 1000;
       gameDeadlineRef.current = null;
@@ -824,20 +754,27 @@ export default function App() {
       void generateQuestion(mode, diff, city, 1, undefined, activeProv);
     };
 
-    if (practiceOnly || !gameAccountEnabled || !gameAccount || !gameAccessToken) {
+    if (!competitive) {
       launch(null, '本局成绩仅保存在本机。');
       return;
     }
+    if (!gameAccountEnabled || !gameAccount || !gameAccessToken) {
+      setSettingsTab('profile');
+      setShowSettings(true);
+      return;
+    }
     setGameLoading(true);
-    setGameLoadingText('正在建立排行榜会话…');
-    void startGameRun(leaderboardKey(mode, diff, leaderboardScope(mode, city, activeProv)), gameAccessToken)
+    const scope = mode === 'county' ? activeProv : mode === 'city' ? '全国' : city;
+    void startGameRun({ game: mode, scope }, gameAccessToken, contestTags)
       .then(({ run }) => launch(run), (error: any) => {
         if (gameSessionIdRef.current !== launchId) return;
         if (error?.status === 401) {
           setGameAccount(null);
           setGameAccessToken('');
         }
-        launch(null, '本局成绩仅保存在本机，未计入排行榜。');
+        setGameLoading(false);
+        setGameState('menu');
+        setGameDataError(error.message || '暂时无法开始竞赛，请稍后重试。');
       });
   };
 
@@ -846,10 +783,10 @@ export default function App() {
     qNum: number, prevAnswer?: string, provinceOverride?: string
   ) => {
     const AMap = (window as any).AMap;
-    if (!AMap || !mapInstance) return;
+    if ((!AMap || !mapInstance) && !gameRunRef.current) return;
     const sessionId = ++gameSessionIdRef.current;
     setGameHints(prev => ({ ...prev, usedOnQuestion: 0 }));
-    setConfirmQuitGame(false);setGameLoading(true);setGameLoadingText('正在读取网站已有线路数据…');
+    setConfirmQuitGame(false);setGameLoading(true);
     setActiveBusLine(null);setSelectedStop(null);setSelectedSegmentLines(null);setStationConnectivityCard(null);setSelectionPos(null);
     roadViewportCleanupRef.current?.();roadViewportCleanupRef.current=null;
     activeRawMarkersRef.current=[];roadStopMarkersRef.current=[];allMapStopsRef.current.clear();roadStopsDataRef.current.clear();
@@ -881,7 +818,7 @@ export default function App() {
         const pool=shuffle(seats.filter(item=>seats.length===1||item.name!==prevAnswer));
         let selected: ReturnType<typeof createOfflineQuestion> | undefined;
         for (const seat of pool) {
-          const data=await loadGameCity(seat.city,(completed,total)=>{if(gameSessionIdRef.current===sessionId)setGameLoadingText(`正在读取线路数据（${completed}/${total}）…`);});
+          const data=await loadGameCity(seat.city);
           if (gameSessionIdRef.current !== sessionId) return;
           try { selected=createOfflineQuestion(mode,diff,data,seats.map(item=>item.name),qNum,prevAnswer,seat);break; } catch { /* Try only other saved county anchors; never query a provider. */ }
         }
@@ -890,7 +827,7 @@ export default function App() {
       } else {
         const pool=mode==='city'?catalog.filter(item=>catalog.length===1||item.city!==prevAnswer):catalog.filter(item=>item.city===city);
         const chosen=shuffle(pool)[0];if(!chosen)throw Error('请选择网站已有线路图的城市。');
-        const data=await loadGameCity(chosen.city,(completed,total)=>{if(gameSessionIdRef.current===sessionId)setGameLoadingText(`正在读取线路数据（${completed}/${total}）…`);});
+        const data=await loadGameCity(chosen.city);
         if (gameSessionIdRef.current !== sessionId) return;
         question=createOfflineQuestion(mode,diff,data,catalog.map(item=>item.city),qNum,prevAnswer);
       }
@@ -898,7 +835,7 @@ export default function App() {
       setMapMode(question.showBasemap === false ? 'blank' : 'normal');
       const paths=question.networkPaths||question.lineInfos?.map(line=>line.path)||[];
       if (paths.length) {
-        const network = new AMap.Polyline({path:paths,strokeColor:'#52796F',strokeWeight:lineThickness==='thin'?2:3.2,strokeOpacity:.85,lineJoin:'round',lineCap:'round',zIndex:45});
+        const network = new AMap.Polyline({path:paths,strokeColor:'#52796F',strokeWeight:mode==='line'?7:lineThickness==='thin'?2:3.2,showDir:mode==='line',strokeOpacity:.85,lineJoin:'round',lineCap:'round',zIndex:45});
         lineGroupRef.current?.addOverlay(network);
         if (question.countyWindow) {
           const {center,radius}=question.countyWindow,ring=radiusRing(center,radius);
@@ -911,7 +848,7 @@ export default function App() {
         const markers=(question.networkStops||[]).map(stop=>new AMap.CircleMarker({center:stop.lngLat,radius:3.5,fillColor:'#52796F',strokeColor:'#fff',strokeWeight:1,zIndex:60,bubble:true}));
         markerGroupRef.current?.addOverlays(markers);
       }
-      if ((mode==='line'||mode==='station') && paths.length) {
+      if (mode==='line' && paths.length) {
         const terminalMarkers=paths.filter(path=>path.length).flatMap(path=>{
           const first=path[0],last=path[path.length-1];
           return [new AMap.CircleMarker({center:first,radius:7,fillColor:'#16a34a',strokeColor:'#fff',strokeWeight:2,zIndex:90}),new AMap.CircleMarker({center:last,radius:5,fillColor:'#ef4444',strokeColor:'#fff',strokeWeight:2,zIndex:92})];
@@ -961,7 +898,6 @@ export default function App() {
         gameTimedOutRef.current = result.timedOut;
         setGameState('gameover');
         clearRankedPuzzle();
-        void refreshLadderBoards(run.game, run.scope || '北京市');
       } else {
         setGameFeedback({ correct: true, msg: '回答正确！即将进入下一题...' });
         window.setTimeout(() => {
@@ -1036,10 +972,6 @@ export default function App() {
         setGameFeedback(null);
         setGameUserInput('');
         const nextNum = gameQuestionNum + 1;
-        if (gameMode === 'city' && nextNum > 10) {
-          setGameState('gameover');
-          return;
-        }
         setGameQuestionNum(nextNum);
         generateQuestion(gameMode!, gameDifficulty, gameCity, nextNum, rawCorrect);
       }, 900);
@@ -1140,10 +1072,11 @@ export default function App() {
   const roadNetLayerRef = useRef<any>(null);
 
   useEffect(() => {
+    if (gamePage) return;
     localStorage.setItem('app_map_mode', mapMode);
     localStorage.setItem('app_show_basemap', String(mapMode !== 'blank'));
     localStorage.setItem('app_use_satellite_map', String(mapMode === 'satellite'));
-  }, [mapMode]);
+  }, [gamePage, mapMode]);
 
   useEffect(() => {
     localStorage.setItem('app_station_mode', stationMode);
@@ -1444,7 +1377,11 @@ export default function App() {
 
     if (item.mode === 'line' && item.lineInfos && item.lineInfos.length > 0) {
       const chosenLine = item.lineInfos[0];
-      renderBusLine(chosenLine, AMap, mapInstance, false, false, false);
+      if (chosenLine.path?.length > 1) {
+        lineGroupRef.current?.addOverlay(new AMap.Polyline({
+          path: chosenLine.path, strokeColor: '#52796F', strokeWeight: 7, showDir: true, lineJoin: 'round', lineCap: 'round', zIndex: 45,
+        }));
+      }
       const validStops = (chosenLine.via_stops || []).filter((st: any) => st?.location);
       if (reviewShowStops && validStops.length > 2 && markerGroupRef.current) {
         const midStops = validStops.slice(1, validStops.length - 1);
@@ -4911,7 +4848,7 @@ export default function App() {
     AMapLoader.load({
       key: AMAP_KEY,
       version: '2.0',
-      plugins: ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.DistrictSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking', 'AMap.Transfer'],
+      plugins: gamePage ? [] : ['AMap.PlaceSearch', 'AMap.LineSearch', 'AMap.StationSearch', 'AMap.DistrictSearch', 'AMap.Scale', 'AMap.ToolBar', 'AMap.Geocoder', 'AMap.AutoComplete', 'AMap.Geolocation', 'AMap.Driving', 'AMap.Walking', 'AMap.Transfer'],
     }).then((AMap) => {
       if (watchdogTimer) clearTimeout(watchdogTimer);
       const savedCenter = localStorage.getItem('map_center');
@@ -4943,6 +4880,7 @@ export default function App() {
 
       let cityLookupVersion = 0;
       const updateMapCity = () => {
+        if (gamePage) return;
         const version = ++cityLookupVersion;
         map.getCity((result: any) => {
           if (mapRef.current !== map || version !== cityLookupVersion) return;
@@ -4960,7 +4898,7 @@ export default function App() {
       setLoading(false);
 
       const saveMapState = () => {
-        if (!map) return;
+        if (gamePage || !map) return;
         const center = map.getCenter();
         const zoom = map.getZoom();
         localStorage.setItem('map_center', JSON.stringify([center.lng, center.lat]));
@@ -4983,7 +4921,7 @@ export default function App() {
       });
 
       const defaultClickHandler = (e: any) => {
-        if (isMinigameActiveRef.current) return;
+        if (gamePage || isMinigameActiveRef.current) return;
         if (isDrawingModeRef.current) {
           handleDrawingMapClick(e);
           return;
@@ -6896,7 +6834,7 @@ export default function App() {
 
   const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
   const isAnswering = showMinigameModal && gameState === 'playing';
-  return (
+  if (!gamePage) return (
     <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
       {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
       {/* Global API Quota / Error Banner */}
@@ -7140,14 +7078,9 @@ export default function App() {
               {/* Minigame FAB */}
               <div className="pointer-events-auto shrink-0">
                 <button 
-                  onClick={() => {
-                    setGameMode(null);
-                    setGameState('menu');
-                    void warmLadderBoards('line', leaderboardScope('line'));
-                    setShowMinigameModal(true);
-                  }}
+                  onClick={() => window.location.assign('/game')}
                   className="backdrop-blur-md bg-m3-surface/90 border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center text-slate-700 hover:bg-m3-surface-container-high hover:text-m3-primary hover:scale-105 transition-all duration-200 active:scale-90 group"
-                  title="小游戏：公交猜一猜"
+                  title="巴士竞猜" aria-label="巴士竞猜"
                 >
                   <Gamepad2 className="w-4.5 h-4.5 transition-transform group-hover:rotate-12 duration-300" />
                 </button>
@@ -7198,19 +7131,6 @@ export default function App() {
             subdued={!tiledTimeline && (plannerRouteVisible || !!activeBusLine || coverageActive || timelineAvailable)}
             blocked={viewportLineBlocked} selection={viewportSelectionRef} onStats={setViewportStats} onDetailReady={setViewportDetailReady} />
           <div ref={containerRef} className="w-full h-full bg-white shadow-inner" id="amap-container" />
-          {isAnswering && rankedPuzzle && <div className="absolute inset-0 z-20 flex justify-center bg-[#f5f5f3] px-4 pb-[min(30dvh,12rem)] pt-3">
-            <svg viewBox="0 0 1000 1000" className="h-full w-full" aria-label="公交线网题面" role="img">
-              {rankedPuzzle.drawing.county && <circle cx="500" cy="500" r="465" fill="none" stroke="#ccd9d4" strokeWidth="2" />}
-              <path d={rankedPuzzle.drawing.path} fill="none" stroke="#52796f" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
-              {rankedPuzzle.drawing.stops.map(([x, y], i) => <circle key={i} cx={x} cy={y} r="3.5" fill="#52796f" stroke="white" />)}
-              {rankedPuzzle.drawing.terminals.map(({ first, last }, i) => <React.Fragment key={i}>
-                <circle cx={first[0]} cy={first[1]} r="6" fill="#16a34a" stroke="white" />
-                <circle cx={last[0]} cy={last[1]} r="5" fill="#ef4444" stroke="white" />
-              </React.Fragment>)}
-              {rankedPuzzle.drawing.target && <circle cx={rankedPuzzle.drawing.target[0]} cy={rankedPuzzle.drawing.target[1]} r="9" fill="#ef4444" stroke="white" strokeWidth="2" />}
-            </svg>
-          </div>}
-
           {isBoxSelectMode && (
             <div 
               onMouseDown={handleBoxSelectMouseDown}
@@ -8372,636 +8292,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Minigame Modal / HUD */}
-        <AnimatePresence>
-          {showMinigameModal && (
-            <>
-              {(gameState === 'menu' || gameState === 'gameover' || gameLoading) && (
-                <motion.div 
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  onClick={() => {
-                    if (!gameLoading) {
-                      exitMinigameToMap();
-                    }
-                  }}
-                  className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-md pointer-events-auto flex flex-col items-center justify-center text-white gap-3"
-                >
-                  {gameLoading && (
-                    <>
-                      {gameLaunchAnimation ? <motion.div initial={{ scale: 0.4, opacity: 0, rotate: -40 }} animate={{ scale: 1, opacity: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 320, damping: 18 }} className="relative flex h-24 w-24 items-center justify-center rounded-[30px] bg-m3-primary text-white shadow-[0_0_70px_rgba(82,121,111,0.8)]"><motion.div animate={{ scale: [1, 1.28, 1], opacity: [0.8, 0.15, 0.8] }} transition={{ duration: 1.05, repeat: Infinity }} className="absolute inset-[-18px] rounded-[40px] border-2 border-m3-primary" /><Route className="h-10 w-10" /></motion.div> : <Loader2 className="w-10 h-10 animate-spin text-m3-primary" />}
-                      {!gameLaunchAnimation && <motion.p key="loading" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-sm font-black tracking-wide">{gameLoadingText}</motion.p>}
-                      <button type="button" onClick={returnToMinigameMenu} className="mt-2 rounded-xl border border-white/35 px-4 py-2 text-xs font-black text-white transition-colors hover:bg-white/10">取消并返回菜单</button>
-                    </>
-                  )}
-                </motion.div>
-              )}
-
-              <motion.div
-                initial={{ opacity: 0, scale: 0.92, y: 16 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.92, y: 16 }}
-                transition={{ type: 'spring', damping: 24, stiffness: 220 }}
-                className={
-                  (gameState === 'playing' || gameState === 'review') && !gameLoading
-                    ? "fixed bottom-3 left-1/2 -translate-x-1/2 z-[121] w-[860px] max-w-[96vw] bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 rounded-[22px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
-                    : gameState === 'playing' && gameLoading
-                    ? "hidden"
-                    : "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[121] w-[980px] max-w-[94vw] max-h-[85vh] bg-m3-surface-container-high border border-m3-outline-variant/30 rounded-[32px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
-                }
-              >
-                {gameState === 'menu' && (
-                  <div className="p-7 overflow-y-auto flex flex-col gap-6 relative md:grid md:grid-cols-[minmax(230px,0.8fr)_minmax(360px,1.2fr)] md:items-start">
-                    <button
-                      type="button"
-                      onClick={exitMinigameToMap}
-                      className="absolute top-5 right-5 w-8 h-8 flex items-center justify-center rounded-full bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-500 hover:text-slate-800 transition-colors"
-                    >
-                      <X className="w-5 h-5" />
-                    </button>
-
-                    <div className="md:col-span-2">
-                      <div className="flex items-center gap-2.5 mb-1">
-                        <div className="w-9 h-9 rounded-2xl bg-m3-primary text-m3-on-primary flex items-center justify-center shadow-md">
-                          <Gamepad2 className="w-5 h-5" />
-                        </div>
-                        <h2 className="text-xl font-black text-slate-900 tracking-tight">公交猜一猜小游戏</h2>
-                      </div>
-                      <p className="text-xs text-slate-500 font-medium">挑战你的路网知识，解锁“巴士之神”至高荣誉！</p>
-                    </div>
-
-                    {gameAccountEnabled && <div className="rounded-2xl border border-m3-outline-variant/30 bg-m3-surface p-3 md:col-start-2 md:row-start-2">
-                      {(() => { const mode = gameMode || 'line', scope = leaderboardScope(mode); const single = mode === 'city' || mode === 'county'; const label = mode === 'city' ? '全国榜' : mode === 'county' ? `${scope}榜` : `${scope}榜`; return <><div className="mb-2 flex items-center justify-between"><span className="text-xs font-black text-slate-700">{label} · {mode === 'line' ? '看图猜线路' : mode === 'station' ? '看通达度猜站名' : mode === 'city' ? '看线网猜城市' : '看线网猜县城'}</span><button type="button" onClick={() => void refreshLadderBoards(mode, scope)} className="text-[11px] font-bold text-m3-primary">刷新</button></div><div className={`grid gap-2 ${single ? 'grid-cols-1' : 'grid-cols-2'}`}><GameLadderPanel title={single ? '天梯榜' : '标准天梯'} entries={ladderBoards.standard} loading={leaderboardLoading} />{!single && <GameLadderPanel title="地狱天梯" entries={ladderBoards.hell} loading={leaderboardLoading} />}</div></>; })()}
-                    </div>}
-
-                    {/* Mode selection */}
-                    <div className="space-y-3 md:col-start-1 md:row-start-2 md:row-span-5">
-                      <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择游戏模式</label>
-                      <div className="grid grid-cols-1 gap-2.5">
-                        {[
-                          { id: 'line', title: '看图猜线路', desc: '随机抽取线路观察走向，挑战猜出正确的公交线路名称' },
-                          { id: 'station', title: '看通达度猜站名', desc: '观察站点周边多路公交交织网络，猜出对应的公交站点名称' },
-                          { id: 'city', title: '看线网猜城市', desc: '从已有线路图城市中随机出题，猜出所属城市（共10题）' },
-                          { id: 'county', title: '看线网猜县城', desc: '使用已有县政府站点附近的线网，遮挡周边区域后猜县城' }
-                        ].map(m => (
-                          <div 
-                            key={m.id}
-                            onClick={() => {
-                              const mode = m.id as 'line' | 'station' | 'city' | 'county';
-                              setGameMode(mode);
-                              void warmLadderBoards(mode, leaderboardScope(mode));
-                            }}
-                            className={`p-4 rounded-2xl border cursor-pointer transition-all flex items-start gap-3.5 ${gameMode === m.id ? 'bg-m3-primary-container/40 border-m3-primary shadow-sm ring-1 ring-m3-primary/30' : 'bg-m3-surface border-m3-outline-variant/30 hover:bg-m3-surface-container-low'}`}
-                          >
-                            <GameModeVisual mode={m.id as 'line' | 'station' | 'city' | 'county'} active={gameMode === m.id} />
-                            <div className="flex-1 min-w-0">
-                              <h3 className="text-sm font-black text-slate-900">{m.title}</h3>
-                              <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">{m.desc}</p>
-
-                              {/* Best record */}
-                              <div className="mt-2 flex items-center gap-2 text-[10px] font-bold text-slate-600">
-                                <span>最佳纪录:</span>
-                                <span className="px-2 py-0.5 rounded-full bg-m3-surface-container text-m3-primary font-black">
-                                  {(m.id === 'city' || m.id === 'county')
-                                    ? `${bestRecords[m.id]?.hard || 0}分`
-                                    : `标准:${bestRecords[m.id].easy} | 地狱:${bestRecords[m.id].hell || 0}`}
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Difficulty & Scope Settings */}
-                    {gameMode && gameMode !== 'city' && gameMode !== 'county' && (
-                      <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20 md:col-start-2 md:row-start-3">
-                        <div className="space-y-2">
-                          <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择难度</label>
-                          <div className="grid grid-cols-2 gap-2">
-                            {[
-                              { id: 'easy', label: '标准天梯（选择题，120秒/题）' },
-                              { id: 'hell', label: '地狱天梯（填空题，90秒/题）' }
-                            ].map(d => (
-                              <button
-                                key={d.id}
-                                type="button"
-                                onClick={() => setGameDifficulty(d.id as any)}
-                                className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition-all ${gameDifficulty === d.id ? 'bg-m3-primary text-m3-on-primary border-m3-primary shadow-sm' : 'bg-m3-surface border-m3-outline-variant/30 text-slate-700 hover:bg-m3-surface-container'}`}
-                              >
-                                {d.label}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                          <label className="text-xs font-bold text-slate-700">先选择省份<select value={gameProvince} disabled={gameCatalogLoading} onChange={event=>setGameProvince(event.target.value)} className="block mt-2 w-full px-3 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs">{gameProvinces.map(province=><option key={province} value={province}>{province}</option>)}</select></label>
-                          <label className="text-xs font-bold text-slate-700">再选择城市<select value={gameCity} disabled={gameCatalogLoading||!gameCities.length} onChange={event=>setGameCity(event.target.value)} className="block mt-2 w-full px-3 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs">{gameCities.map(city=><option key={city.city} value={city.city}>{city.city}</option>)}</select></label>
-                        </div>
-                      </div>
-                    )}
-
-                    {gameMode === 'county' && (
-                      <div className="space-y-4 pt-2 border-t border-m3-outline-variant/20 md:col-start-2 md:row-start-3">
-                        <div className="space-y-2">
-                          <label className="text-xs font-black text-slate-700 tracking-wide uppercase">选择省份（仅含已有县政府站点线网）</label>
-                          <select
-                            value={gameCountyProvince}
-                            onChange={(e) => setGameCountyProvince(e.target.value)}
-                            className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
-                          >
-                            {countyProvinces.map(p => (
-                              <option key={p} value={p}>{p}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-                    )}
-
-                    {gameCatalogLoading&&<p role="status" className="text-xs text-slate-500">正在读取已有线路图城市…</p>}
-                    {gameDataError&&<p role="alert" className="text-xs text-m3-error">{gameDataError}</p>}
-                    {gameAccount && gameAccountEnabled && <label className="flex items-center gap-2 text-xs text-slate-600">
-                      <input type="checkbox" checked={practiceOnly} onChange={event => setPracticeOnly(event.target.checked)} className="accent-m3-primary" />
-                      仅练习（不上榜）
-                    </label>}
-                    {!gameAccount && gameAccountEnabled && <p className="text-xs text-slate-500">游客可直接开始，成绩仅保存在本机。</p>}
-                    {!gameCatalogLoading&&gameMode==='county'&&!countyProvinces.length&&<p role="status" className="text-xs text-slate-500">暂未收录可定位的县政府站点，请先选择其他模式。</p>}
-                    {/* Start & Review Buttons */}
-                    <div className="flex gap-2.5 md:col-start-2">
-                      <button
-                        type="button"
-                        disabled={!gameMode||gameCatalogLoading||!gameCatalog.length||((gameMode==='line'||gameMode==='station')&&!gameCities.some(city=>city.city===gameCity))||(gameMode==='county'&&!countyProvinces.includes(gameCountyProvince))}
-                        onClick={() => startMinigame(
-                          gameMode!,
-                          gameDifficulty,
-                          gameCity,
-                          gameMode === 'county' ? gameCountyProvince : gameProvince
-                        )}
-                        className="flex-1 py-3.5 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-sm shadow-lg hover:opacity-95 transition-all disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
-                      >
-                        <Sparkles className="w-4 h-4" />
-                        {gameCatalogLoading?'正在读取城市…':'开始挑战'}
-                      </button>
-                      {gameHistory.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={startMinigameReview}
-                          className="px-4 py-3.5 rounded-2xl bg-m3-surface border border-m3-outline-variant/40 text-slate-800 font-black text-xs shadow-sm hover:bg-m3-surface-container transition-all cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
-                        >
-                          <History className="w-4 h-4 text-m3-primary" />
-                          复盘上局 ({gameHistory.length}题)
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {gameState === 'menu' && gameMode && (
-                  <p className="px-4 pb-3 text-center text-xs font-bold text-m3-primary">
-                    {(gameMode === 'line' || gameMode === 'station') ? `每题限时 ${getGameTimeLimit(gameMode, gameDifficulty)} 秒` : getGameTimeLimit(gameMode, gameDifficulty) === null ? '本局不限时' : `本局限时 ${getGameTimeLimit(gameMode, gameDifficulty)! / 60} 分钟`}
-                    <span className="text-slate-500 font-medium"> · 出题加载期间暂停计时</span>
-                  </p>
-                )}
-
-                {gameState === 'playing' && gameQuestionData && (
-                  <div className="px-4 py-3 flex flex-col gap-2 relative bg-m3-surface">
-                    <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
-                      <div className="flex items-center gap-2 min-w-0 flex-1">
-                        <span className="px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[11px] font-black shrink-0">
-                          {gameMode === 'line'
-                            ? '看图猜线路'
-                            : gameMode === 'station'
-                            ? '看通达度猜站名'
-                            : gameMode === 'county'
-                            ? '看线网猜县城'
-                            : '看线网猜城市'}
-                        </span>
-                        <span className="text-[11px] font-bold text-slate-500 shrink-0">
-                          {gameMode === 'city' ? `第 ${gameQuestionNum}/10 题` : `第 ${gameQuestionNum} 题`}
-                        </span>
-                        <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50/90 border border-amber-200/70 text-amber-900 text-[11px] font-bold min-w-0 truncate">
-                          <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span className="truncate">{gameQuestionData.promptText}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2.5 shrink-0 ml-auto">
-                        <span
-                          role="timer"
-                          aria-label={gameTimeLeft === null ? '无时间限制' : `剩余时间 ${formatGameTime(gameTimeLeft)}`}
-                          className={`px-2.5 py-1 rounded-full text-xs font-black tabular-nums ${gameTimeLeft !== null && gameTimeLeft <= 30 ? 'bg-red-50 text-red-600' : 'bg-m3-primary-container text-m3-on-primary-container'}`}
-                        >
-                          {gameTimeLeft === null ? '不限时' : formatGameTime(gameTimeLeft)}
-                        </span>
-                        <span className="text-xs font-extrabold text-slate-700">得分: <strong className="text-m3-primary">{gameScore}</strong></span>
-                        {confirmQuitGame ? (
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={returnToMinigameMenu}
-                              className="text-[11px] font-black text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded-lg transition-colors"
-                            >
-                              确认退出
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmQuitGame(false)}
-                              className="text-[11px] font-bold text-slate-500 hover:text-slate-800 px-1.5 py-0.5"
-                            >
-                              取消
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmQuitGame(true)}
-                            className="text-xs font-bold text-red-500 hover:underline"
-                          >
-                            退出
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex sm:hidden items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-50/90 border border-amber-200/70 text-amber-900 text-[11px] font-bold">
-                      <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      <span className="truncate">{gameQuestionData.promptText}</span>
-                    </div>
-
-                    {isAdminVerified && !rankedPuzzle && (
-                      <div role="status" className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs">
-                        <Shield className="w-4 h-4 text-emerald-700 shrink-0" />
-                        <span className="font-black">管理员测试答案</span>
-                        <strong className="font-black break-all">{gameQuestionData.correctAnswer}</strong>
-                      </div>
-                    )}
-
-                    <div className="flex items-center justify-between gap-3 flex-wrap">
-                      <span className="text-[11px] font-medium text-slate-500">每局共 7 次提示，从答案两端逐字揭示</span>
-                      <motion.button
-                        type="button"
-                        onClick={handleGameHint}
-                        disabled={gameLoading || gameFeedback !== null || gameHints.remaining === 0 || rankedWaiting || (rankedPuzzle ? rankedHint?.complete : isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion))}
-                        whileTap={{ scale: 0.94 }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-xs font-bold transition-colors hover:bg-m3-primary/20 disabled:opacity-45 disabled:cursor-not-allowed"
-                      >
-                        <Sparkles className="w-3.5 h-3.5" />
-                        {gameHints.remaining === 0 ? '提示已用完' : (rankedPuzzle ? rankedHint?.complete : isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)) ? '本题已全部揭示' : '提示'}
-                        <span className="tabular-nums">{gameHints.remaining}/7</span>
-                      </motion.button>
-                    </div>
-                    <AnimatePresence>
-                      {gameHints.usedOnQuestion > 0 && !gameLoading && (
-                        <motion.div
-                          key={gameQuestionNum}
-                          initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                          animate={{ opacity: 1, y: 0, scale: 1 }}
-                          exit={{ opacity: 0, y: 4 }}
-                          transition={{ type: 'spring', damping: 24, stiffness: 260 }}
-                          role="status"
-                          aria-live="polite"
-                          className="px-3 py-2.5 rounded-2xl bg-m3-primary-container/50 border border-m3-outline-variant/40"
-                        >
-                          <div className="text-[10px] font-bold text-m3-primary mb-1">答案提示 · {Array.from(rankedPuzzle ? rankedHint?.text ?? '' : gameQuestionData.correctAnswer).length} 个字符</div>
-                          <motion.p
-                            key={gameHints.usedOnQuestion}
-                            initial={{ opacity: 0, y: 3 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="text-sm font-black tracking-widest text-m3-on-primary-container break-all"
-                          >
-                            {rankedPuzzle ? rankedHint?.text : getGameHint(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)}
-                          </motion.p>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                    {!rankedPuzzle && gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
-                    {rankedPuzzle && gameDataError && <p role="alert" className="text-xs text-red-700">{gameDataError}</p>}
-                    {gameFeedback && (
-                      <div className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold text-center ${gameFeedback.correct ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
-                        {gameFeedback.msg}
-                      </div>
-                    )}
-
-                    {!gameQuestionData.isFillIn && gameQuestionData.options && gameQuestionData.options.length > 0 ? (
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        {(gameQuestionData.options || []).map((opt, idx) => (
-                          <button
-                            key={idx}
-                            type="button"
-                            title={opt}
-                            disabled={gameFeedback !== null || rankedWaiting}
-                            onClick={() => handleMinigameSubmit(opt)}
-                            className="px-3 py-2 rounded-xl border border-m3-outline-variant/30 bg-m3-surface-container-low hover:bg-m3-primary-container/30 hover:border-m3-primary text-slate-800 font-bold text-xs transition-all shadow-xs text-left truncate flex items-center gap-2"
-                          >
-                            <span className="w-5 h-5 rounded-full bg-m3-surface-container flex items-center justify-center text-[10px] font-black text-slate-600 shrink-0">
-                              {['A', 'B', 'C', 'D'][idx]}
-                            </span>
-                            <span className="truncate">{opt}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <span className="hidden sm:inline text-[11px] font-bold text-slate-500 shrink-0">填空作答:</span>
-                        <input
-                          type="text"
-                          disabled={gameFeedback !== null}
-                          placeholder={
-                            gameMode === 'county'
-                              ? '输入县城名称（如：桐庐 / 桐庐县）'
-                              : gameMode === 'city'
-                              ? '输入城市名称（如：北京 / 北京市）'
-                              : gameMode === 'station'
-                              ? '输入站点名称（如：西单）'
-                              : '输入线路名称（如：1路 / 919快）'
-                          }
-                          value={gameUserInput}
-                          onChange={(e) => setGameUserInput(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && gameUserInput.trim()) {
-                              handleMinigameSubmit(gameUserInput);
-                            }
-                          }}
-                          className="flex-1 px-3.5 py-2 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
-                        />
-                        <button
-                          type="button"
-                          disabled={gameFeedback !== null || rankedWaiting || !gameUserInput.trim()}
-                          onClick={() => handleMinigameSubmit(gameUserInput)}
-                          className="px-5 py-2 rounded-xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-sm hover:opacity-95 transition-all disabled:opacity-50 shrink-0"
-                        >
-                          提交
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {gameState === 'playing' && !gameLoading && !gameQuestionData && (
-                  <div className="p-6 flex flex-col items-center text-center gap-4 bg-m3-surface">
-                    <p className="text-xs font-bold text-slate-600">题目生成遇到网络波动，请重试或返回菜单。</p>
-                    <div className="flex gap-2.5">
-                      <button
-                        type="button"
-                        onClick={() => generateQuestion(gameMode!, gameDifficulty, gameCity, gameQuestionNum)}
-                        className="px-4 py-2 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-black shadow-sm"
-                      >
-                        重新出题
-                      </button>
-                      <button
-                        type="button"
-                        onClick={returnToMinigameMenu}
-                        className="px-4 py-2 rounded-xl bg-m3-surface-container text-slate-700 text-xs font-black"
-                      >
-                        返回菜单
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {gameState === 'gameover' && (
-                  <div className="p-8 flex flex-col items-center text-center gap-5 relative">
-                    <button
-                      type="button"
-                      onClick={exitMinigameToMap}
-                      className="absolute top-5 right-5 w-8 h-8 flex items-center justify-center rounded-full bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-500 hover:text-slate-800 transition-colors"
-                    >
-                      <X className="w-5 h-5" />
-                    </button>
-                    <div className="w-16 h-16 rounded-3xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-lg">
-                      <Trophy className="w-8 h-8" />
-                    </div>
-
-                    <div>
-                      <h2 className="text-xl font-black text-slate-900">{gameTimedOut ? '时间到，挑战结束！' : '挑战结束！'}</h2>
-                      <p className="text-xs text-slate-500 font-medium mt-1">本次挑战最终得分</p>
-                      <div className="text-4xl font-black text-m3-primary mt-2">{gameScore} <span className="text-sm font-bold text-slate-400">分</span></div>
-                    </div>
-
-                    {(() => {
-                      const rating = getRating(gameMode!, gameScore);
-                      return (
-                        <div className={`px-5 py-2 rounded-2xl border text-xs font-black shadow-sm flex items-center gap-2 ${rating.color}`}>
-                          <Award className="w-4 h-4" />
-                          获得段位评级：{rating.title}
-                        </div>
-                      );
-                    })()}
-
-                    {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式已启用</p>}
-                    {gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
-                    <div className="flex gap-2.5 w-full pt-2">
-                      {gameHistory.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={startMinigameReview}
-                          className="flex-1 py-3 rounded-2xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-black text-xs transition-all flex items-center justify-center gap-1.5"
-                        >
-                          <History className="w-4 h-4" />
-                          复盘本局 ({gameHistory.length}题)
-                        </button>
-                      )}
-                      <button
-                        type="button"
-
-                        onClick={() => startMinigame(gameMode!, gameDifficulty, gameCity)}
-                        className="flex-1 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-md hover:opacity-95 transition-all"
-                      >
-                        再玩一次
-                      </button>
-                      <button
-                        type="button"
-                        onClick={returnToMinigameMenu}
-                        className="flex-1 py-3 rounded-2xl bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-700 font-black text-xs transition-all"
-                      >
-                        返回菜单
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {gameState === 'review' && gameHistory[reviewIndex] && (() => {
-                  const item = gameHistory[reviewIndex];
-                  const lineMeta = item.mode === 'line' && item.lineInfos?.[0]?.name
-                    ? parseLineInfo(item.lineInfos[0].name)
-                    : null;
-                  const modeLabel = item.mode === 'line'
-                    ? '看图猜线路'
-                    : item.mode === 'station'
-                    ? '看通达度猜站名'
-                    : item.mode === 'county'
-                    ? '看线网猜县城'
-                    : '看线网猜城市';
-
-                  return (
-                    <div className="px-4 py-3 flex flex-col gap-2.5 bg-m3-surface">
-                      {/* Top Header */}
-                      <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
-                        <div className="flex items-center gap-2 min-w-0 flex-wrap">
-                          <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-black flex items-center gap-1 shrink-0">
-                            <History className="w-3 h-3" />
-                            题目复盘
-                          </span>
-                          <span className="px-2 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[11px] font-bold shrink-0">
-                            {modeLabel}
-                          </span>
-                          <span className="text-[11px] font-black text-slate-700 shrink-0">
-                            第 {reviewIndex + 1} / {gameHistory.length} 题
-                          </span>
-                          <span className="px-2 py-0.5 rounded-full bg-m3-surface-container text-slate-600 text-[11px] font-bold shrink-0">
-                            {item.province ? `${item.province} · ${item.targetCity}` : item.targetCity}
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-full text-[11px] font-black shrink-0 ${item.isCorrect ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                            {item.isCorrect ? '回答正确' : '回答错误'}
-                          </span>
-                          {reviewHoveredStop && (
-                            <span className="px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[11px] font-bold truncate max-w-[200px]">
-                              {reviewHoveredStop}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0 ml-auto">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setReviewAutoPlay(false);
-                              restoreMapAfterMinigame();
-                              setGameState('gameover');
-                            }}
-                            className="text-xs font-bold text-slate-600 hover:text-slate-900 px-2 py-0.5 rounded-lg hover:bg-m3-surface-container transition-colors"
-                          >
-                            返回结算
-                          </button>
-                          <button
-                            type="button"
-                            onClick={returnToMinigameMenu}
-                            className="text-xs font-bold text-red-500 hover:underline"
-                          >
-                            返回菜单
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Answer Summary Row */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-m3-surface-container-low border border-m3-outline-variant/20 text-xs">
-                        <div className="flex flex-wrap items-center gap-3 min-w-0">
-                          <span className="font-bold text-slate-600">
-                            你的答案：<strong className={item.isCorrect ? 'text-emerald-700' : 'text-red-600'}>{item.timedOut ? '超时未作答' : item.userAnswer || '（未填）'}</strong>
-                          </span>
-                          <span className="font-bold text-slate-700">
-                            正确答案：<strong className="text-m3-primary">{item.correctAnswer}</strong>
-                          </span>
-                          {lineMeta && lineMeta.start && lineMeta.start !== '-' && (
-                            <span className="text-[11px] font-medium text-slate-500">
-                              （<span className="text-emerald-600 font-bold">●</span> {lineMeta.start} → <span className="text-red-500 font-bold">●</span> {lineMeta.end}）
-                            </span>
-                          )}
-                        </div>
-                        {item.mode === 'line' && (
-                          <div className="flex items-center gap-2.5 text-[11px] font-bold text-slate-500 shrink-0">
-                            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-green-600 inline-block" /> 始发站</span>
-                            <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" /> 终点站</span>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Controls Row: Sequence Stepper + Basemap & Stops Toggles */}
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <button
-                            type="button"
-                            disabled={reviewIndex <= 0}
-                            onClick={() => { setReviewAutoPlay(false); setReviewIndex(i => Math.max(0, i - 1)); }}
-                            className="px-2.5 py-1.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-container-high disabled:opacity-40 text-xs font-bold text-slate-700 flex items-center gap-1 transition-colors"
-                          >
-                            <ChevronLeft className="w-3.5 h-3.5" />
-                            上一题
-                          </button>
-                          <div className="flex items-center gap-1 overflow-x-auto max-w-[260px] sm:max-w-[340px] py-0.5">
-                            {gameHistory.map((h, idx) => (
-                              <button
-                                key={idx}
-                                type="button"
-                                onClick={() => { setReviewAutoPlay(false); setReviewIndex(idx); }}
-                                className={`w-6 h-6 rounded-lg text-[11px] font-black transition-all shrink-0 border ${
-                                  idx === reviewIndex
-                                    ? 'bg-m3-primary text-m3-on-primary border-m3-primary shadow-sm'
-                                    : h.isCorrect
-                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                                    : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
-                                }`}
-                              >
-                                {idx + 1}
-                              </button>
-                            ))}
-                          </div>
-                          <button
-                            type="button"
-                            disabled={reviewIndex >= gameHistory.length - 1}
-                            onClick={() => { setReviewAutoPlay(false); setReviewIndex(i => Math.min(gameHistory.length - 1, i + 1)); }}
-                            className="px-2.5 py-1.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-container-high disabled:opacity-40 text-xs font-bold text-slate-700 flex items-center gap-1 transition-colors"
-                          >
-                            下一题
-                            <ChevronRight className="w-3.5 h-3.5" />
-                          </button>
-                          {gameHistory.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (!reviewAutoPlay && reviewIndex >= gameHistory.length - 1) {
-                                  setReviewIndex(0);
-                                }
-                                setReviewAutoPlay(v => !v);
-                              }}
-                              className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 border transition-colors ${
-                                reviewAutoPlay
-                                  ? 'bg-m3-primary text-m3-on-primary border-m3-primary'
-                                  : 'bg-m3-surface border-m3-outline-variant/30 text-slate-700 hover:bg-m3-surface-container'
-                              }`}
-                            >
-                              {reviewAutoPlay ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                              {reviewAutoPlay ? '暂停播放' : '依次播放'}
-                            </button>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-2 ml-auto">
-                          <button
-                            type="button"
-                            onClick={() => setReviewShowBasemap(v => !v)}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 transition-all ${
-                              reviewShowBasemap
-                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                : 'bg-m3-surface border-m3-outline-variant/30 text-slate-600 hover:bg-m3-surface-container'
-                            }`}
-                          >
-                            <MapIcon className="w-3.5 h-3.5" />
-                            底图：{reviewShowBasemap ? '开' : '关'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setReviewShowStops(v => !v)}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 transition-all ${
-                              reviewShowStops
-                                ? 'bg-blue-50 text-blue-800 border-blue-300'
-                                : 'bg-m3-surface border-m3-outline-variant/30 text-slate-600 hover:bg-m3-surface-container'
-                            }`}
-                          >
-                            <MapPin className="w-3.5 h-3.5" />
-                            站点：{reviewShowStops ? '开' : '关'}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
-
         <WechatAccountLink
           account={gameAccount}
           accessToken={gameAccessToken}
@@ -9879,4 +9169,513 @@ export default function App() {
 
     </div>
   );
+  const launchSelectedGame = () => {
+    if (gameDivision === 'contest') {
+      startMinigame(contest.game, contest.game === 'line' || contest.game === 'station' ? 'easy' : 'hard',
+        contest.scope, gameCountyProvince, true);
+    } else {
+      startMinigame(simulationMode, simulationDifficulty, gameCity);
+    }
+  };
+  return <div className="relative h-dvh w-full overflow-hidden bg-m3-surface-container-low">
+    <div ref={containerRef} aria-hidden={gameState === 'menu' || !!rankedPuzzle} className="relative isolate h-full w-full bg-white" id="amap-container" />
+    {isAnswering && rankedPuzzle && <RankedGameDrawing key={rankedPuzzle.id} drawing={rankedPuzzle.drawing} />}
+    {gameState === 'menu' && <GameLobby
+      division={gameDivision} onDivision={next => { setGameDivision(next); setGameDataError(''); }}
+      contest={contest} onContest={next => { setContest(next); setContestTags([]); setGameDataError(''); }}
+      tags={contestTags} onTags={setContestTags}
+      mode={simulationMode} onMode={next => { setSimulationMode(next); setGameDataError(''); }}
+      difficulty={simulationDifficulty} onDifficulty={setSimulationDifficulty}
+      bestScore={simulationMode === 'line' || simulationMode === 'station' ? bestRecords[simulationMode][simulationDifficulty] : bestRecords[simulationMode].hard}
+      province={gameProvince} provinces={gameProvinces} onProvince={setGameProvince}
+      city={gameCity} cities={gameCities.map(city => city.city)} onCity={setGameCity}
+      countyProvince={gameCountyProvince} countyProvinces={countyProvinces} onCountyProvince={setGameCountyProvince}
+      catalogLoading={gameCatalogLoading} catalogAvailable={!!gameCatalog.length}
+      error={gameDataError || ((gameDivision === 'simulation' || contest.game === 'county') ? gameCatalogError : '')}
+      accountName={gameAccount?.displayName} accountLoading={gameAuthLoading} accountEnabled={gameAccountEnabled}
+      onAccount={() => { setSettingsTab('profile'); setShowSettings(true); }}
+      onStart={launchSelectedGame} reviewCount={gameHistory.length} onReview={startMinigameReview}
+    />}
+      <AnimatePresence>
+        {(gameState !== 'menu' || gameLoading) && (
+          <>
+            {(gameState === 'menu' || gameState === 'gameover' || gameLoading) && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => {
+                  if (!gameLoading) {
+                    returnToMinigameMenu();
+                  }
+                }}
+                className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-md pointer-events-auto flex flex-col items-center justify-center text-white gap-3"
+              >
+                {gameLoading && (
+                  <>
+                    {gameLaunchAnimation ? <motion.div initial={{ scale: 0.4, opacity: 0, rotate: -40 }} animate={{ scale: 1, opacity: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 320, damping: 18 }} className="relative flex h-24 w-24 items-center justify-center rounded-[30px] bg-m3-primary text-white shadow-[0_0_70px_rgba(82,121,111,0.8)]"><motion.div animate={{ scale: [1, 1.28, 1], opacity: [0.8, 0.15, 0.8] }} transition={{ duration: 1.05, repeat: Infinity }} className="absolute inset-[-18px] rounded-[40px] border-2 border-m3-primary" /><Route className="h-10 w-10" /></motion.div> : <Loader2 className="w-10 h-10 animate-spin text-m3-primary" />}
+                    <motion.p key="loading" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-sm font-black tracking-wide">正在出题</motion.p>
+                    <button type="button" onClick={returnToMinigameMenu} className="mt-2 rounded-xl border border-white/35 px-4 py-2 text-xs font-black text-white transition-colors hover:bg-white/10">取消并返回菜单</button>
+                  </>
+                )}
+              </motion.div>
+            )}
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 16 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 16 }}
+              transition={{ type: 'spring', damping: 24, stiffness: 220 }}
+              className={
+                (gameState === 'playing' || gameState === 'review') && !gameLoading
+                  ? "fixed bottom-3 left-1/2 -translate-x-1/2 z-[121] w-[860px] max-w-[96vw] bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 rounded-[22px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
+                  : gameState === 'playing' && gameLoading
+                  ? "hidden"
+                  : "fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[121] w-[980px] max-w-[94vw] max-h-[85vh] bg-m3-surface-container-high border border-m3-outline-variant/30 rounded-[32px] shadow-2xl overflow-hidden flex flex-col pointer-events-auto"
+              }
+            >
+              {gameState === 'playing' && gameQuestionData && (
+                <div className="px-4 py-3 flex flex-col gap-2 relative bg-m3-surface">
+                  <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className="px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[11px] font-black shrink-0">
+                        {gameMode === 'line'
+                          ? '看图猜线路'
+                          : gameMode === 'station'
+                          ? '看通达度猜站名'
+                          : gameMode === 'county'
+                          ? '看线网猜县城'
+                          : '看线网猜城市'}
+                      </span>
+                      <span className="text-[11px] font-bold text-slate-500 shrink-0">
+                        第 {gameQuestionNum} 题
+                      </span>
+                      <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-50/90 border border-amber-200/70 text-amber-900 text-[11px] font-bold min-w-0 truncate">
+                        <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span className="truncate">{gameQuestionData.promptText}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2.5 shrink-0 ml-auto">
+                      <span
+                        role="timer"
+                        aria-label={gameTimeLeft === null ? '无时间限制' : `剩余时间 ${formatGameTime(gameTimeLeft)}`}
+                        className={`px-2.5 py-1 rounded-full text-xs font-black tabular-nums ${gameTimeLeft !== null && gameTimeLeft <= 30 ? 'bg-red-50 text-red-600' : 'bg-m3-primary-container text-m3-on-primary-container'}`}
+                      >
+                        {gameTimeLeft === null ? '不限时' : formatGameTime(gameTimeLeft)}
+                      </span>
+                      <span className="text-xs font-extrabold text-slate-700">得分: <strong className="text-m3-primary">{gameScore}</strong></span>
+                      {confirmQuitGame ? (
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={returnToMinigameMenu}
+                            className="text-[11px] font-black text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded-lg transition-colors"
+                          >
+                            确认退出
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmQuitGame(false)}
+                            className="text-[11px] font-bold text-slate-500 hover:text-slate-800 px-1.5 py-0.5"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmQuitGame(true)}
+                          className="text-xs font-bold text-red-500 hover:underline"
+                        >
+                          退出
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex sm:hidden items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-50/90 border border-amber-200/70 text-amber-900 text-[11px] font-bold">
+                    <Shield className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span className="truncate">{gameQuestionData.promptText}</span>
+                  </div>
+
+                  {isAdminVerified && !rankedPuzzle && (
+                    <div role="status" className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-950 text-xs">
+                      <Shield className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span className="font-black">管理员测试答案</span>
+                      <strong className="font-black break-all">{gameQuestionData.correctAnswer}</strong>
+                    </div>
+                  )}
+
+                  {(rankedPuzzle?.hintLimit ?? 7) > 0 && <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <span className="text-[11px] font-medium text-slate-500">每局共 {rankedPuzzle?.hintLimit ?? 7} 次提示</span>
+                    <motion.button
+                      type="button"
+                      onClick={handleGameHint}
+                      disabled={gameLoading || gameFeedback !== null || gameHints.remaining === 0 || rankedWaiting || (rankedPuzzle ? rankedHint?.complete : isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion))}
+                      whileTap={{ scale: 0.94 }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-xs font-bold transition-colors hover:bg-m3-primary/20 disabled:opacity-45 disabled:cursor-not-allowed"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      {gameHints.remaining === 0 ? '提示已用完' : (rankedPuzzle ? rankedHint?.complete : isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)) ? '本题已全部揭示' : '提示'}
+                      <span className="tabular-nums">{gameHints.remaining}/{rankedPuzzle?.hintLimit ?? 7}</span>
+                    </motion.button>
+                  </div>}
+                  <AnimatePresence>
+                    {gameHints.usedOnQuestion > 0 && !gameLoading && (
+                      <motion.div
+                        key={gameQuestionNum}
+                        initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 4 }}
+                        transition={{ type: 'spring', damping: 24, stiffness: 260 }}
+                        role="status"
+                        aria-live="polite"
+                        className="px-3 py-2.5 rounded-2xl bg-m3-primary-container/50 border border-m3-outline-variant/40"
+                      >
+                        <div className="text-[10px] font-bold text-m3-primary mb-1">答案提示 · {Array.from(rankedPuzzle ? rankedHint?.text ?? '' : gameQuestionData.correctAnswer).length} 个字符</div>
+                        <motion.p
+                          key={gameHints.usedOnQuestion}
+                          initial={{ opacity: 0, y: 3 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="text-sm font-black tracking-widest text-m3-on-primary-container break-all"
+                        >
+                          {rankedPuzzle ? rankedHint?.text : getGameHint(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)}
+                        </motion.p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {!rankedPuzzle && gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
+                  {rankedPuzzle && gameDataError && <p role="alert" className="text-xs text-red-700">{gameDataError}</p>}
+                  {gameFeedback && (
+                    <div className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold text-center ${gameFeedback.correct ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+                      {gameFeedback.msg}
+                    </div>
+                  )}
+
+                  {!gameQuestionData.isFillIn && gameQuestionData.options && gameQuestionData.options.length > 0 ? (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {(gameQuestionData.options || []).map((opt, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          title={opt}
+                          disabled={gameFeedback !== null || rankedWaiting}
+                          onClick={() => handleMinigameSubmit(opt)}
+                          className="px-3 py-2 rounded-xl border border-m3-outline-variant/30 bg-m3-surface-container-low hover:bg-m3-primary-container/30 hover:border-m3-primary text-slate-800 font-bold text-xs transition-all shadow-xs text-left truncate flex items-center gap-2"
+                        >
+                          <span className="w-5 h-5 rounded-full bg-m3-surface-container flex items-center justify-center text-[10px] font-black text-slate-600 shrink-0">
+                            {['A', 'B', 'C', 'D'][idx]}
+                          </span>
+                          <span className="truncate">{opt}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="hidden sm:inline text-[11px] font-bold text-slate-500 shrink-0">填空作答:</span>
+                      <input
+                        type="text"
+                        disabled={gameFeedback !== null}
+                        placeholder={
+                          gameMode === 'county'
+                            ? '输入县城名称（如：桐庐 / 桐庐县）'
+                            : gameMode === 'city'
+                            ? '输入城市名称（如：北京 / 北京市）'
+                            : gameMode === 'station'
+                            ? '输入站点名称（如：西单）'
+                            : '输入线路名称（如：1路 / 919快）'
+                        }
+                        value={gameUserInput}
+                        onChange={(e) => setGameUserInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && gameUserInput.trim()) {
+                            handleMinigameSubmit(gameUserInput);
+                          }
+                        }}
+                        className="flex-1 px-3.5 py-2 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-bold text-slate-800 outline-none focus:border-m3-primary"
+                      />
+                      <button
+                        type="button"
+                        disabled={gameFeedback !== null || rankedWaiting || !gameUserInput.trim()}
+                        onClick={() => handleMinigameSubmit(gameUserInput)}
+                        className="px-5 py-2 rounded-xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-sm hover:opacity-95 transition-all disabled:opacity-50 shrink-0"
+                      >
+                        提交
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {gameState === 'playing' && !gameLoading && !gameQuestionData && (
+                <div className="p-6 flex flex-col items-center text-center gap-4 bg-m3-surface">
+                  <p className="text-xs font-bold text-slate-600">题目生成遇到网络波动，请重试或返回菜单。</p>
+                  <div className="flex gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => generateQuestion(gameMode!, gameDifficulty, gameCity, gameQuestionNum)}
+                      className="px-4 py-2 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-black shadow-sm"
+                    >
+                      重新出题
+                    </button>
+                    <button
+                      type="button"
+                      onClick={returnToMinigameMenu}
+                      className="px-4 py-2 rounded-xl bg-m3-surface-container text-slate-700 text-xs font-black"
+                    >
+                      返回菜单
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {gameState === 'gameover' && (
+                <div className="p-8 flex flex-col items-center text-center gap-5 relative">
+                  <button
+                    type="button"
+                    onClick={returnToMinigameMenu} aria-label="返回游戏大厅"
+                    className="absolute top-5 right-5 w-8 h-8 flex items-center justify-center rounded-full bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-500 hover:text-slate-800 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                  <div className="w-16 h-16 rounded-3xl bg-amber-100 text-amber-600 flex items-center justify-center shadow-lg">
+                    <Trophy className="w-8 h-8" />
+                  </div>
+
+                  <div>
+                    <h2 className="text-xl font-black text-slate-900">{gameTimedOut ? '时间到，挑战结束！' : '挑战结束！'}</h2>
+                    <p className="text-xs text-slate-500 font-medium mt-1">本次挑战最终得分</p>
+                    <div className="text-4xl font-black text-m3-primary mt-2">{gameScore} <span className="text-sm font-bold text-slate-400">分</span></div>
+                  </div>
+
+                  {!gameRunRef.current && (() => {
+                    const rating = getRating(gameMode!, gameScore);
+                    return (
+                      <div className={`px-5 py-2 rounded-2xl border text-xs font-black shadow-sm flex items-center gap-2 ${rating.color}`}>
+                        <Award className="w-4 h-4" />
+                        获得段位评级：{rating.title}
+                      </div>
+                    );
+                  })()}
+
+                  {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式已启用</p>}
+                  {gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
+                  <div className="flex gap-2.5 w-full pt-2">
+                    {gameHistory.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={startMinigameReview}
+                        className="flex-1 py-3 rounded-2xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-black text-xs transition-all flex items-center justify-center gap-1.5"
+                      >
+                        <History className="w-4 h-4" />
+                        复盘本局 ({gameHistory.length}题)
+                      </button>
+                    )}
+                    <button
+                      type="button"
+
+                      onClick={launchSelectedGame}
+                      className="flex-1 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-md hover:opacity-95 transition-all"
+                    >
+                      再玩一次
+                    </button>
+                    <button
+                      type="button"
+                      onClick={returnToMinigameMenu}
+                      className="flex-1 py-3 rounded-2xl bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-700 font-black text-xs transition-all"
+                    >
+                      返回菜单
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {gameState === 'review' && gameHistory[reviewIndex] && (() => {
+                const item = gameHistory[reviewIndex];
+                const lineMeta = item.mode === 'line' && item.lineInfos?.[0]?.name
+                  ? parseLineInfo(item.lineInfos[0].name)
+                  : null;
+                const modeLabel = item.mode === 'line'
+                  ? '看图猜线路'
+                  : item.mode === 'station'
+                  ? '看通达度猜站名'
+                  : item.mode === 'county'
+                  ? '看线网猜县城'
+                  : '看线网猜城市';
+
+                return (
+                  <div className="px-4 py-3 flex flex-col gap-2.5 bg-m3-surface">
+                    {/* Top Header */}
+                    <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
+                      <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                        <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-black flex items-center gap-1 shrink-0">
+                          <History className="w-3 h-3" />
+                          题目复盘
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[11px] font-bold shrink-0">
+                          {modeLabel}
+                        </span>
+                        <span className="text-[11px] font-black text-slate-700 shrink-0">
+                          第 {reviewIndex + 1} / {gameHistory.length} 题
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full bg-m3-surface-container text-slate-600 text-[11px] font-bold shrink-0">
+                          {item.province ? `${item.province} · ${item.targetCity}` : item.targetCity}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded-full text-[11px] font-black shrink-0 ${item.isCorrect ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                          {item.isCorrect ? '回答正确' : '回答错误'}
+                        </span>
+                        {reviewHoveredStop && (
+                          <span className="px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-[11px] font-bold truncate max-w-[200px]">
+                            {reviewHoveredStop}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 ml-auto">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReviewAutoPlay(false);
+                            restoreMapAfterMinigame();
+                            setGameState('gameover');
+                          }}
+                          className="text-xs font-bold text-slate-600 hover:text-slate-900 px-2 py-0.5 rounded-lg hover:bg-m3-surface-container transition-colors"
+                        >
+                          返回结算
+                        </button>
+                        <button
+                          type="button"
+                          onClick={returnToMinigameMenu}
+                          className="text-xs font-bold text-red-500 hover:underline"
+                        >
+                          返回菜单
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Answer Summary Row */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-m3-surface-container-low border border-m3-outline-variant/20 text-xs">
+                      <div className="flex flex-wrap items-center gap-3 min-w-0">
+                        <span className="font-bold text-slate-600">
+                          你的答案：<strong className={item.isCorrect ? 'text-emerald-700' : 'text-red-600'}>{item.timedOut ? '超时未作答' : item.userAnswer || '（未填）'}</strong>
+                        </span>
+                        <span className="font-bold text-slate-700">
+                          正确答案：<strong className="text-m3-primary">{item.correctAnswer}</strong>
+                        </span>
+                        {lineMeta && lineMeta.start && lineMeta.start !== '-' && (
+                          <span className="text-[11px] font-medium text-slate-500">
+                            （<span className="text-emerald-600 font-bold">●</span> {lineMeta.start} → <span className="text-red-500 font-bold">●</span> {lineMeta.end}）
+                          </span>
+                        )}
+                      </div>
+                      {item.mode === 'line' && (
+                        <div className="flex items-center gap-2.5 text-[11px] font-bold text-slate-500 shrink-0">
+                          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-green-600 inline-block" /> 始发站</span>
+                          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" /> 终点站</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Controls Row: Sequence Stepper + Basemap & Stops Toggles */}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          disabled={reviewIndex <= 0}
+                          onClick={() => { setReviewAutoPlay(false); setReviewIndex(i => Math.max(0, i - 1)); }}
+                          className="px-2.5 py-1.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-container-high disabled:opacity-40 text-xs font-bold text-slate-700 flex items-center gap-1 transition-colors"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5" />
+                          上一题
+                        </button>
+                        <div className="flex items-center gap-1 overflow-x-auto max-w-[260px] sm:max-w-[340px] py-0.5">
+                          {gameHistory.map((h, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => { setReviewAutoPlay(false); setReviewIndex(idx); }}
+                              className={`w-6 h-6 rounded-lg text-[11px] font-black transition-all shrink-0 border ${
+                                idx === reviewIndex
+                                  ? 'bg-m3-primary text-m3-on-primary border-m3-primary shadow-sm'
+                                  : h.isCorrect
+                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                                  : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100'
+                              }`}
+                            >
+                              {idx + 1}
+                            </button>
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          disabled={reviewIndex >= gameHistory.length - 1}
+                          onClick={() => { setReviewAutoPlay(false); setReviewIndex(i => Math.min(gameHistory.length - 1, i + 1)); }}
+                          className="px-2.5 py-1.5 rounded-xl bg-m3-surface-container hover:bg-m3-surface-container-high disabled:opacity-40 text-xs font-bold text-slate-700 flex items-center gap-1 transition-colors"
+                        >
+                          下一题
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                        {gameHistory.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!reviewAutoPlay && reviewIndex >= gameHistory.length - 1) {
+                                setReviewIndex(0);
+                              }
+                              setReviewAutoPlay(v => !v);
+                            }}
+                            className={`px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 border transition-colors ${
+                              reviewAutoPlay
+                                ? 'bg-m3-primary text-m3-on-primary border-m3-primary'
+                                : 'bg-m3-surface border-m3-outline-variant/30 text-slate-700 hover:bg-m3-surface-container'
+                            }`}
+                          >
+                            {reviewAutoPlay ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                            {reviewAutoPlay ? '暂停播放' : '依次播放'}
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 ml-auto">
+                        <button
+                          type="button"
+                          onClick={() => setReviewShowBasemap(v => !v)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 transition-all ${
+                            reviewShowBasemap
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                              : 'bg-m3-surface border-m3-outline-variant/30 text-slate-600 hover:bg-m3-surface-container'
+                          }`}
+                        >
+                          <MapIcon className="w-3.5 h-3.5" />
+                          底图：{reviewShowBasemap ? '开' : '关'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setReviewShowStops(v => !v)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold border flex items-center gap-1.5 transition-all ${
+                            reviewShowStops
+                              ? 'bg-blue-50 text-blue-800 border-blue-300'
+                              : 'bg-m3-surface border-m3-outline-variant/30 text-slate-600 hover:bg-m3-surface-container'
+                          }`}
+                        >
+                          <MapPin className="w-3.5 h-3.5" />
+                          站点：{reviewShowStops ? '开' : '关'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    <WechatAccountLink
+      account={gameAccount} accessToken={gameAccessToken} authLoading={gameAuthLoading}
+      hideTrigger profileOnly open={showSettings} tab="profile" onTabChange={() => {}}
+      onOpen={() => setShowSettings(true)} onClose={() => setShowSettings(false)}
+      onSignedIn={(account, token) => { setGameAccount(account); setGameAccessToken(token); setGameAuthLoading(false); }}
+      onLogout={() => { setGameAccount(null); setGameAccessToken(''); setGameAuthLoading(false); }}
+    >{null}</WechatAccountLink>
+  </div>;
 }

@@ -21,6 +21,7 @@ type AccountCardProps = {
   accessToken: string;
   authLoading: boolean;
   hideTrigger?: boolean;
+  profileOnly?: boolean;
   open: boolean;
   tab: AccountTab;
   onTabChange: (tab: AccountTab) => void;
@@ -31,7 +32,7 @@ type AccountCardProps = {
   children: ReactNode;
 };
 
-export function WechatAccountLink({ account, accessToken, authLoading, hideTrigger, open, tab, onTabChange, onOpen, onClose, onSignedIn, onLogout, children }: AccountCardProps) {
+export function WechatAccountLink({ account, accessToken, authLoading, hideTrigger, profileOnly, open, tab, onTabChange, onOpen, onClose, onSignedIn, onLogout, children }: AccountCardProps) {
   const registrationToken = getWechatRegistrationToken();
   const [mode, setMode] = useState<'qr' | 'password' | 'register'>(registrationToken ? 'register' : 'qr');
   const [message, setMessage] = useState(''), [name, setName] = useState(''), [avatar, setAvatar] = useState<File | null>(null), [avatarPreview, setAvatarPreview] = useState('');
@@ -145,7 +146,7 @@ export function WechatAccountLink({ account, accessToken, authLoading, hideTrigg
           onClick={event => event.stopPropagation()}
           className="relative flex h-[680px] max-h-[86dvh] w-full max-w-[920px] flex-col overflow-hidden rounded-[28px] border border-m3-outline-variant/30 bg-m3-surface shadow-2xl md:flex-row">
           <nav aria-label="个人主页导航" className="flex shrink-0 flex-wrap items-center gap-1.5 bg-m3-surface-container-highest p-3 pr-14 md:w-[210px] md:flex-col md:items-stretch md:border-r md:border-m3-outline-variant/20 md:p-4">
-            {([{ id: 'profile', label: '个人主页' }, { id: 'general', label: '应用设置' }, { id: 'about', label: '关于' }] as const).map(({ id, label }) => (
+            {([{ id: 'profile', label: '个人主页' }, { id: 'general', label: '应用设置' }, { id: 'about', label: '关于' }] as const).filter(item => !profileOnly || item.id === 'profile').map(({ id, label }) => (
               <button key={id} type="button" disabled={!!busy} aria-current={tab === id ? 'page' : undefined}
                 onClick={() => onTabChange(id)}
                 className={`flex min-w-0 items-center gap-2 rounded-xl px-2.5 py-2 text-left text-xs font-bold transition-colors md:px-4 md:py-2.5 ${tab === id ? 'bg-m3-primary-container text-m3-on-primary-container shadow-sm' : 'text-slate-600 hover:bg-m3-primary/5'}`}>

@@ -8,6 +8,9 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     base: './',
+    build: {
+      rollupOptions: { input: { map: path.resolve(__dirname, 'index.html'), game: path.resolve(__dirname, 'game/index.html') } },
+    },
     plugins: [react(), tailwindcss(), viteApiPlugin()],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),

@@ -9,21 +9,17 @@
 4. 前端构建变量填写 `VITE_GAME_GATEWAY_URL` 为同一个 EdgeOne 网关 HTTPS 地址，再重新部署前端；此变量只是网关地址，不含任何密钥。未填写时，小游戏照常离线运行，账号和排行榜显示为未启用。
 5. 如需使用隐藏管理员测试入口，在同一 EdgeOne Pages Function 配置服务端变量 `ADMIN_PASSWORD`（按管理员约定的密钥填写）与随机的 `ADMIN_SESSION_SECRET`。两者都不能使用 `VITE_` 前缀，也不能写进前端或仓库。管理员校验会通过游戏网关而非静态网站的 `/api` 路径完成。
 
-网关继续保留原 `/uploads` 与 GitHub Actions 写入流程。账号接口使用 `/game-auth/*`、`/ranked-game-runs*` 和 `/leaderboards`，与城市上传的 GitHub Token、Blob 存储和回调密钥完全分离。
+网关继续保留原 `/uploads` 与 GitHub Actions 写入流程。账号接口使用 `/game-auth/*`、`/ranked-game-runs*` 和 `/contest-leaderboards`，与城市上传的 GitHub Token、Blob 存储和回调密钥完全分离。
 
-排行榜提供六个榜单，线路和站名各有标准和地狱榜，城市和县城各有固定规则榜。计分对局由 EdgeOne 从已发布的线网生成题目，浏览器在结算前仅取得题面和按次揭开的提示。数据库控制题序、计时及结算，榜单只记录逐题判定后的分数。用户仍可通过公众号登录、修改昵称及头像，也可以选择不上榜的本地练习。
+巴士竞猜的入口为 `/game`。模拟沿用本地出题，竞赛需登录并使用全新的独立积分榜。线路与站名各有北京、上海榜，城市为全国榜，县城按省份分榜。每位玩家仅保留个人最高分。同分时，较早达成者排在前面。
 
-排行榜按题目范围隔离：看图猜线路、看通达度猜站名按城市榜（默认北京市，成功定位后自动采用所在已收录城市）；看线网猜城市使用全国统一榜；看线网猜县城按省榜（成功定位后自动采用所在省份）。SQL 中的 `game_city` 是该范围的统一名称，因此全国榜的值为“全国”、县城榜的值为省份。
-
-脚本会维护独立的 `game_leaderboards`（榜单范围）与 `game_leaderboard_entries`（每位用户的个人最高分）数据。某范围首个有效结算会自动创建对应榜单；同一用户之后只有更高分才会更新其榜内记录，低分或相同分会保留原成绩和达成时间。读取排行榜只查询对应榜单条目，不再扫描 `game_runs` 全部历史；脚本也会一次性、幂等地将既有已结算且非空的历史成绩迁入新表。升级时重新执行完整 SQL 脚本即可。
-
-登录状态恢复只调用一次 `current_game_profile`，避免串行读取认证用户和资料两次；网关还会按用户、城市范围、模式和难度短暂缓存排行榜 15 秒。结算成功会立即清除缓存，因此不会把新成绩延后显示。部署这一优化后，同样需要重新执行完整 SQL 脚本以更新资料函数。
+网关从已发布的线网生成题目并按组校验标签。浏览器在结算前取得题面、选项和按需揭示的提示。数据库记录题序、计时、倍率积分和答题结果。历史天梯数据保留在原表。竞赛停赛名单由数据库管理员维护在 `game_contest_suspensions`，加入名单后，账号无法继续竞赛且其排名暂时隐藏。
 
 ## 微信公众号账号
 
 在同一个 EdgeOne Pages Function 的 Production 环境变量中追加（全部为服务端变量）：
 
-- `SUPABASE_SECRET_KEY`：仅供 `/wechat/*` 使用的 Supabase `sb_secret_...` key。绝不能使用 `VITE_` 前缀或提交到仓库。旧的 `SUPABASE_SERVICE_ROLE_KEY` 仍可作为兼容回退，但优先使用新版 Secret key。
+- `SUPABASE_SECRET_KEY`：供微信账号和竞赛服务端计分使用的 Supabase `sb_secret_...` key。绝不能使用 `VITE_` 前缀或提交到仓库。旧的 `SUPABASE_SERVICE_ROLE_KEY` 仍可作为兼容回退，但优先使用新版 Secret key。
 - `WECHAT_CALLBACK_TOKEN`：自行生成至少 16 个随机字符；在微信公众平台“基本配置”的 Token 填入完全相同的值。
 - `WECHAT_APP_ID`、`WECHAT_APP_SECRET`：公众号开发者凭据，仅用于首次注册时读取已关注用户的微信昵称和头像；AppSecret 不得进入浏览器、仓库或聊天记录。
 - `PUBLIC_APP_URL`：正式前端 HTTPS 地址，例如 `https://busline.cc`。
@@ -43,6 +39,6 @@
 
 1. 在已有游戏账号数据库执行 [supabase-ranked-game.sql](supabase-ranked-game.sql)。新项目先执行 [supabase-game-auth.sql](supabase-game-auth.sql)。
 2. 部署 EdgeOne 网关与前端。网关沿用现有的 `SUPABASE_URL` 和 `SUPABASE_ANON_KEY`，并需要服务端专用的 `SUPABASE_SECRET_KEY`（或旧版 `SUPABASE_SERVICE_ROLE_KEY`）及 `PUBLIC_APP_URL`。`PUBLIC_APP_URL` 应指向已发布城市快照的 Busline 网站。
-3. 以已登录账号开始计分对局，核对答错和超时后可复盘，以及榜单分数由已判定答题结果决定。之后也可选择「仅练习（不上榜）」验证本地模式。
+3. 以已登录账号开始计分对局，核对答错和超时后可复盘，以及榜单分数由已判定答题结果决定。之后也可进入「模拟」验证本地模式。
 
 迁移会关闭旧的客户端总分接口。迁移和部署之间，旧版页面可能暂时无法写入排行榜。历史成绩保留。临时题目及结算结果供本局复盘和重试，过期后由后续开局清理。

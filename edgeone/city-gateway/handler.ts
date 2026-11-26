@@ -1,3 +1,4 @@
+import { contestRules, contests } from '../../src/utils/contestRules';
 import { createRankedQuestion, rankedDrawing } from './rankedGame';
 import { isGameAnswerCorrect } from '../../src/utils/gameAnswers';
 import { getGameHint, isGameHintComplete } from '../../src/utils/gameHint';
@@ -19,16 +20,10 @@ const fail=(status:number,message:string)=>Object.assign(Error(message),{status}
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 const equal=(a:string,b:string)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 export const gatewaySignature=(secret:string,text:string)=>createHmac('sha256',secret).update(text).digest('hex');
-type GameName='line'|'station'|'city'|'county';type GameDifficulty='easy'|'hell'|'hard';
-const validLeaderboard=(game:any,difficulty:any):game is GameName=>
-  (['line','station'].includes(game)&&['easy','hell'].includes(difficulty))||(['city','county'].includes(game)&&difficulty==='hard');
-type LeaderboardCacheEntry={expiresAt:number;entries:unknown[]};
-// EdgeOne isolates are short-lived, so this is deliberately only a tiny
-// best-effort cache. It removes duplicate modal/refresh requests without ever
-// making the database the sole source of truth; score settlement evicts it.
-const leaderboardCache=new Map<string,LeaderboardCacheEntry>();
-const leaderboardCachePrefix=(game:string,difficulty:string,scope:string)=>`${game}\u0001${difficulty}\u0001${scope}\u0001`;
-const leaderboardCacheKey=(game:string,difficulty:string,scope:string,bearer:string)=>leaderboardCachePrefix(game,difficulty,scope)+(bearer?hash(bearer):'public');
+type GameName='line'|'station'|'city'|'county';
+const validContest = (game: unknown, scope: string): game is GameName =>
+  scope.length <= 64 && contests.some(contest => contest.game === game
+    && (contest.game === 'county' ? scope.length > 0 : contest.scope === scope));
 const gameAccount=(user:any,profile?:any):{id:string;displayName:string;avatarUrl?:string}=>({id:String(user?.id||profile?.id||''),displayName:String(profile?.display_name||'巴士玩家').slice(0,24),avatarUrl:profile?.avatar_url||profile?.avatar_path?String(profile?.avatar_url||profile?.avatar_path):undefined});
 const xmlEscape=(value:string)=>value.replace(/[<>&'\"]/g,char=>({"<":'&lt;',">":'&gt;','&':'&amp;',"'":'&apos;','\"':'&quot;'}[char]!));
 const xmlValue=(xml:string,name:string)=>{const found=new RegExp(`<${name}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${name}>|<${name}>([\\s\\S]*?)<\\/${name}>`).exec(xml);return (found?.[1]||found?.[2]||'').trim();};
@@ -157,8 +152,7 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
 async function handleGameGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
   const url=new URL(request.url),path=url.pathname;
   const configured=!!env.SUPABASE_URL&&!!env.SUPABASE_ANON_KEY;
-  if(path==='/leaderboards'&&request.method==='GET'&&!configured)return json({entries:[],disabled:true},200);
-  if(!path.startsWith('/game-auth/')&&!path.startsWith('/game-runs')&&!path.startsWith('/ranked-game-runs')&&path!=='/leaderboards'&&path!=='/game-profile'&&path!=='/wechat/complete')return null;
+  if(!path.startsWith('/game-auth/')&&!path.startsWith('/game-runs')&&!path.startsWith('/ranked-game-runs')&&path!=='/contest-leaderboards'&&path!=='/game-profile'&&path!=='/wechat/complete')return null;
   if(!configured)throw fail(503,'账号与排行榜服务尚未配置。');
   const base=env.SUPABASE_URL!.replace(/\/$/,'');
   if(!/^https:\/\/[a-z0-9.-]+\.supabase\.co$/i.test(base))throw fail(503,'账号服务配置无效。');
@@ -285,18 +279,18 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     await supabase('/rest/v1/rpc/complete_wechat_link_token',{method:'POST',body:JSON.stringify({p_token_hash:hash(token)})},true);
     return json({bound:true});
   }
-  if(path==='/leaderboards'&&request.method==='GET'){
-    const game=url.searchParams.get('game'),difficulty=url.searchParams.get('difficulty'),scope=String(url.searchParams.get('scope')||'北京市').trim();if(!validLeaderboard(game,difficulty)||scope.length<1||scope.length>64)throw fail(400,'不存在这个游戏榜单。');
-    const difficultyValue=String(difficulty),cacheKey=leaderboardCacheKey(game,difficultyValue,scope,bearer),cached=leaderboardCache.get(cacheKey);
-    let entries:unknown[];
-    if(cached&&cached.expiresAt>Date.now())entries=cached.entries;
-    else {
-      const data=await supabase('/rest/v1/rpc/get_game_leaderboard',{method:'POST',body:JSON.stringify({p_game:game,p_difficulty:difficultyValue,p_city:scope})},/^Bearer\s+\S+$/i.test(bearer));
-      entries=(Array.isArray(data)?data:[]).map((item:any)=>({rank:Number(item.rank),displayName:String(item.display_name),avatarUrl:item.avatar_url||item.avatar_path?String(item.avatar_url||base+'/storage/v1/object/public/game-avatars/'+item.avatar_path):undefined,score:Number(item.score),achievedAt:String(item.achieved_at),isCurrentUser:item.is_current_user===true}));
-      leaderboardCache.set(cacheKey,{expiresAt:Date.now()+15_000,entries});
-      if(leaderboardCache.size>120)for(const [key,value] of leaderboardCache)if(value.expiresAt<=Date.now())leaderboardCache.delete(key);
-    }
-    const response=json({entries});response.headers.set('Cache-Control','private, max-age=15');response.headers.set('Vary','Cookie, Authorization');return response;
+  if (path === '/contest-leaderboards' && request.method === 'GET') {
+    const game = url.searchParams.get('game');
+    const scope = url.searchParams.get('scope')?.trim() ?? '';
+    if (!validContest(game, scope)) throw fail(400, '不存在这个竞赛榜单。');
+    const data = await supabase('/rest/v1/rpc/get_game_contest_board', {
+      method: 'POST', body: JSON.stringify({ p_game: game, p_scope: scope }),
+    }, !!bearer);
+    return json({ entries: (Array.isArray(data) ? data : []).map(item => ({
+      rank: Number(item.rank), displayName: String(item.display_name), score: Number(item.score),
+      achievedAt: String(item.achieved_at), isCurrentUser: item.is_current_user === true,
+      avatarUrl: item.avatar_url || (item.avatar_path ? base + '/storage/v1/object/public/game-avatars/' + item.avatar_path : undefined),
+    })) });
   }
   const rankedPath = /^\/ranked-game-runs(?:\/([a-f0-9-]{36})\/(question|answer|hint))?$/.exec(path);
   if (rankedPath && request.method === 'POST') {
@@ -313,6 +307,7 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
         body: JSON.stringify({ p_user: user, p_action: operation, p_run: runId, p_input: payload }),
       });
       const body = await response.json().catch(() => null);
+      if (body?.code === '42501' && body?.message === '此账号暂无法参加巴士竞猜竞赛。') throw fail(403, body.message);
       if (!response.ok) throw fail(409, response.status === 404 ? '服务端计分数据库尚未升级。' : '计分请求暂时无法完成，请重试。');
       return body;
     };
@@ -323,8 +318,13 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     };
     if (!runId) {
       const scope = input.game === 'city' ? '全国' : typeof input.scope === 'string' ? input.scope.trim() : '';
-      if (!validLeaderboard(input.game, input.difficulty) || !scope || scope.length > 64) throw fail(400, '不存在这个游戏榜单。');
-      return reply({ run: await action('start', { game: input.game, difficulty: input.difficulty, scope }) }, 201);
+      if (!validContest(input.game, scope)) throw fail(400, '不存在这个竞赛项目。');
+      let rules;
+      try { rules = contestRules(input.game, input.tags ?? []); }
+      catch (error) { throw fail(400, (error as Error).message); }
+      const difficulty = rules.perQuestion ? 'easy' : 'hard';
+      const run = await action('start', { game: input.game, difficulty, scope, rules });
+      return reply({ run }, 201);
     }
     const current = await action('read');
     if (rankedPath[2] === 'answer') {
@@ -332,29 +332,30 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
       const question = current.id === input.id ? current.question : null;
       const correct = !!question && isGameAnswerCorrect(input.answer, question.correctAnswer, question.isFillIn, current.game);
       const result = await action('answer', { id: input.id, answer: input.answer.trim(), timeout: input.timeout === true, correct });
-      if (result.finished) leaderboardCache.clear();
       return reply(result);
     }
     if (rankedPath[2] === 'hint') {
-      if (input.id !== current.id || !current.question || !Number.isInteger(input.step) || input.step < 1 || input.step > 7) throw fail(400, '提示不可用。');
+      if (input.id !== current.id || !current.question || !Number.isInteger(input.step) || input.step < 1 || input.step > current.rules.hintLimit) throw fail(400, '提示不可用。');
       if (input.step > current.hintsOnQuestion && isGameHintComplete(current.question.correctAnswer, current.hintsOnQuestion)) throw fail(409, '本题提示已全部揭示。');
       const next = await action('hint', { id: input.id, step: input.step });
       return reply({ text: getGameHint(next.question.correctAnswer, next.hintsOnQuestion),
-        remaining: 7 - next.hints, used: next.hintsOnQuestion,
+        remaining: current.rules.hintLimit - next.hints, used: next.hintsOnQuestion,
         complete: isGameHintComplete(next.question.correctAnswer, next.hintsOnQuestion) });
     }
     const number = input.number;
     if (current.finished || !Number.isSafeInteger(number) || number !== current.number + (current.question ? 0 : 1)) throw fail(409, '题目顺序无效。');
     let issued = current;
     if (!current.question) {
-      const question = await createRankedQuestion(appOrigin, transport, current.game, current.difficulty, current.scope, number, current.previousAnswer)
+      const question = await createRankedQuestion(appOrigin, transport, current.game, current.difficulty, current.scope, number, current.previousAnswer, current.rules)
         .catch(() => { throw fail(409, '暂时无法读取计分题目，请稍后重试。'); });
-      issued = await action('issue', { number, question });
+      const drawing = rankedDrawing(question, current.game, current.rules.cycle);
+      const { contextPaths, ...review } = question;
+      issued = await action('issue', { number, question: review, drawing });
     }
     const question = issued.question;
     const promptText = { line: '请根据公交线网猜线路。', station: '请根据公交线网猜目标站。', city: '请根据公交线网猜城市。', county: '请根据周边公交线网猜县城。' }[current.game as GameName];
     return reply({ id: issued.id, number: issued.number, options: question.isFillIn ? [] : question.options, isFillIn: question.isFillIn, promptText,
-      drawing: rankedDrawing(question, current.game), remainingMs: issued.remainingMs, hints: 7 - issued.hints });
+      drawing: issued.drawing, remainingMs: issued.remainingMs, hints: current.rules.hintLimit - issued.hints, hintLimit: current.rules.hintLimit });
   }
   if (path.startsWith('/game-runs')) throw fail(410, '排行榜已升级，请刷新网页。');
   throw fail(404,'没有这个账号接口。');

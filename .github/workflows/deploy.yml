@@ -54,6 +54,7 @@ jobs:
           VITE_CITY_DATA_ENABLED: ${{ vars.VITE_CITY_DATA_ENABLED }}
           VITE_CITY_UPDATE_MODE: ${{ vars.VITE_CITY_UPDATE_MODE }}
           VITE_CITY_UPDATE_GATEWAY_URL: ${{ vars.VITE_CITY_UPDATE_GATEWAY_URL }}
+          VITE_GAME_GATEWAY_URL: ${{ vars.VITE_GAME_GATEWAY_URL }}
 
       - name: Verify production styles
         run: |

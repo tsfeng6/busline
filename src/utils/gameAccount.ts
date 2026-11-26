@@ -69,8 +69,8 @@ export async function updateGameProfile(displayName: string, avatar?: File, acce
   if (avatar) avatarData = await compressAvatar(avatar);
   return request<{ account: GameAccount }>('/game-profile', { method: 'POST', body: JSON.stringify({ displayName, avatarData }) }, accessToken);
 }
-export async function startGameRun(key: GameLeaderboardKey, accessToken: string) {
-  return request<{ run: GameRun }>('/ranked-game-runs', { method: 'POST', body: JSON.stringify(key) }, accessToken);
+export async function startGameRun(key: Pick<GameLeaderboardKey, 'game' | 'scope'>, accessToken: string, tags: string[]) {
+  return request<{ run: GameRun }>('/ranked-game-runs', { method: 'POST', body: JSON.stringify({ ...key, tags }) }, accessToken);
 }
 export function getRankedPuzzle(run: string, number: number, accessToken: string) {
   return request<RankedPuzzle>(`/ranked-game-runs/${encodeURIComponent(run)}/question`, {
@@ -87,9 +87,9 @@ export function hintRankedPuzzle(run: string, id: string, step: number, accessTo
     method: 'POST', body: JSON.stringify({ id, step }),
   }, accessToken);
 }
-export async function getGameLeaderboard(key: GameLeaderboardKey, accessToken?: string) {
-  const query = new URLSearchParams({ game: key.game, difficulty: key.difficulty, scope: key.scope || '北京市' }).toString();
-  return request<{ entries: LeaderboardEntry[] }>(`/leaderboards?${query}`, {}, accessToken);
+export function getContestLeaderboard(game: GameLeaderboardKey['game'], scope: string, accessToken?: string) {
+  const query = new URLSearchParams({ game, scope });
+  return request<{ entries: LeaderboardEntry[] }>(`/contest-leaderboards?${query}`, {}, accessToken);
 }
 
 export async function compressAvatar(file: File): Promise<string> {

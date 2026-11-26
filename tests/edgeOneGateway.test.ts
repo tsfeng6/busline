@@ -197,24 +197,31 @@ test('ranked gateway exposes only the drawing until the server grades the answer
    assert.equal(new Headers(init?.headers).get('apikey'), 'sb_secret_test');
    const { p_user, p_action, p_input } = JSON.parse(String(init?.body));
    assert.equal(p_user, id);
-   if (p_action === 'start') return Response.json({id:run,...p_input});
+   if (p_action === 'start') {
+     assert.equal(p_input.rules.multiplier, 3);
+     assert.deepEqual(p_input.rules.tags, ['fill']);
+     state.rules = p_input.rules;
+     return Response.json({id:run, game:p_input.game, scope:p_input.scope, difficulty:p_input.difficulty});
+   }
    if (p_action === 'read') return Response.json(state);
    if (p_action === 'issue') {
-     Object.assign(state, { id:questionId, number:p_input.number, question:p_input.question });
+     Object.assign(state, { id:questionId, number:p_input.number, question:p_input.question, drawing:p_input.drawing });
      return Response.json(state);
    }
    if (p_action === 'answer') {
      assert.equal(p_input.correct, true);
      assert.equal(p_input.score, undefined);
      assert.equal(p_input.id, questionId);
-     return Response.json({ question:state.question, number:1, answer:p_input.answer, correct:true, timedOut:false, score:1, finished:false });
+     return Response.json({ question:state.question, number:1, answer:p_input.answer, correct:true, timedOut:false, score:3, finished:false });
    }
    throw Error('unexpected action');
  };
  const post = (path: string, body: unknown) => handleEdgeOneGateway(new Request('https://gateway.example' + path, {
    method:'POST', headers:{Cookie:'busline_game_session=test-session'}, body:JSON.stringify(body),
  }), accountEnv, store, upstream);
- assert.equal((await post('/ranked-game-runs', { game:'city', difficulty:'hard' })).status, 201);
+ assert.equal((await post('/ranked-game-runs', { game:'line', scope:'广州市' })).status, 400);
+ assert.equal((await post('/ranked-game-runs', { game:'station', scope:'上海市', tags:['fill','nearby'] })).status, 400);
+ assert.equal((await post('/ranked-game-runs', { game:'city', tags:['fill'], multiplier:999 })).status, 201);
  const response = await post('/ranked-game-runs/' + run + '/question', {number:1});
  assert.equal(response.status, 200);
  assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -222,6 +229,49 @@ test('ranked gateway exposes only the drawing until the server grades the answer
  assert.doesNotMatch(text, /correctAnswer|targetCity|fallbackCenter|116\.123456789123|北京市/);
  assert.match(JSON.parse(text).drawing.path, /^M/);
  const settled = await post('/ranked-game-runs/' + run + '/answer', {id:questionId, answer:'北京市', score:999});
- assert.equal((await settled.json()).score, 1);
+ assert.equal((await settled.json()).score, 3);
  assert.equal((await post('/game-runs/' + run + '/finish', {score:999})).status, 410);
+});
+
+test('contest labels are exclusive and only valid for their mode', async () => {
+  const { contestRules } = await import('../src/utils/contestRules');
+  assert.equal(contestRules('line', []).multiplier, .5);
+  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 60000);
+  assert.equal(contestRules('station', ['hints-3', 'time-10']).hintLimit, 3);
+  assert.equal(contestRules('station', ['hints-3', 'time-10']).timeLimit, 10);
+  assert.equal(contestRules('county', ['fill']).multiplier, 3);
+  assert.throws(() => contestRules('line', ['time-5', 'time-10']), /每组/);
+  assert.throws(() => contestRules('line', ['cycle']), /无效/);
+  assert.throws(() => contestRules('city', ['no-base']), /无效/);
+});
+
+test('contest question scope, nearby choices and diagram layers follow server rules', async () => {
+  const { contestRules } = await import('../src/utils/contestRules');
+  const { createLocalContestQuestion } = await import('../edgeone/city-gateway/contestQuestions');
+  const { rankedDrawing } = await import('../edgeone/city-gateway/rankedGame');
+  const line = (name: string, points: [number, number][]) => ({
+    ...sample().lines[0], id: name, name, path: points,
+    via_stops: points.map(([lng, lat], index) => ({ id: name + index,
+      name: index === 0 ? '中心站' : name + '终点', location: { lng, lat } })),
+  });
+  const data = { ...sample(), lines: [
+    line('1路', [[116.1,39.8],[116.2,39.8]]), line('2路', [[116.1,39.8],[116.3,39.8]]),
+    line('3路', [[116.1,39.8],[116.9,39.8]]), line('专10路', [[116.1,39.8],[116.2,39.81]]),
+  ] };
+  const districts: [number, number][][][] = [[[[116,39.7],[116.5,39.7],[116.5,39.9],[116,39.9],[116,39.7]]]];
+  const random = () => .999;
+  const question = createLocalContestQuestion('line', data, contestRules('line', ['nearby']), districts, '', random);
+  assert.equal(question.correctAnswer, '1路');
+  assert.deepEqual(question.options, ['1路','2路']);
+  assert.ok(rankedDrawing(question, 'line').arrows?.length);
+  assert.ok(rankedDrawing(question, 'line').basemap);
+
+  const station = createLocalContestQuestion('station', data, contestRules('station', ['cycle','no-stops','no-base']), districts, '', random);
+  const drawing = rankedDrawing(station, 'station', true);
+  assert.equal(station.correctAnswer, '中心站');
+  assert.equal(drawing.frames?.length, 3);
+  assert.ok(drawing.target);
+  assert.deepEqual(drawing.terminals, []);
+  assert.ok(drawing.frames?.every(frame => !!frame.path && frame.stops.length === 0));
+  assert.equal(drawing.basemap, '');
 });
