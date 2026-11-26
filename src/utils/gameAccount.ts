@@ -83,9 +83,9 @@ export function getRankedPuzzle(run: string, number: number, accessToken: string
     method: 'POST', body: JSON.stringify({ number, ticket, sourceRevision }), signal: AbortSignal.timeout(45000),
   }, accessToken);
 }
-export function answerRankedPuzzle(run: string, id: string, answer: string, timeout: boolean, accessToken: string) {
+export function answerRankedPuzzle(run: string, id: string, answer: string, timeout: boolean, accessToken: string, answerTicket?: string) {
   return request<RankedResult | { pendingMs: number }>(`/ranked-game-runs/${encodeURIComponent(run)}/answer`, {
-    method: 'POST', body: JSON.stringify({ id, answer, timeout }),
+    method: 'POST', body: JSON.stringify({ id, answer, timeout, answerTicket }),
   }, accessToken);
 }
 export function hintRankedPuzzle(run: string, id: string, step: number, accessToken: string) {

@@ -18,7 +18,7 @@ import { TransitTilePublisher } from './transit-tiles';
 import { TRANSIT_TILE_BASE, type TransitTileIndex } from '../src/utils/transitTiles';
 import { cityStorageFiles } from './city-storage-files';
 
-const CITY_OVERVIEW_RASTER_VERSION = 5;
+const CITY_OVERVIEW_RASTER_VERSION = 6;
 // GitHub Pages has a 1 GiB site limit.  The source branch intentionally keeps
 // readable JSON, but the static mirror must split and gzip sizeable legacy
 // snapshots or latest/history copies exhaust that limit before deployment.
@@ -220,12 +220,13 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
       const thumb=reusedLayer?null:cityThumbnail(latest);
       if(thumb){
         const thumbPng=cityOverviewPNG(thumb.raster);
-        await copy(`city-data/v1/thumbnails/${city}-geo-v3.png`,thumbPng);
-        const overview:CityOverview={...thumb.meta,province:provinceForCity(latest.city),countySeats:savedCountySeats(latest),thumbnail:`thumbnails/${encodeURIComponent(city)}-geo-v3.png`};
+        await copy(`city-data/v1/thumbnails/${city}-geo-v4.png`,thumbPng);
+        const overview:CityOverview={...thumb.meta,province:provinceForCity(latest.city),countySeats:savedCountySeats(latest),thumbnail:`thumbnails/${encodeURIComponent(city)}-geo-v4.png`};
         overviews.push(overview);
         newLayers.set(city,{id:publicationCacheDir?fingerprint:(currentId||''),overview,thumbnail:thumbPng,coverage:cityTiles.serializeLayer()});
       }
     }
+    await rm(join(output, 'city-data/v1/thumbnails', `${city}-geo-v3.png`), { force: true });
     console.log(`Prepared ${city}${unchanged ? ' (reused)' : ''}`);
     if (!unchanged && files.has(historyPath)) {
       const text = source(historyPath), records = JSON.parse(text);
@@ -241,7 +242,7 @@ export async function mirrorCitySnapshots(ref: string, output = 'public', repo =
   for (const city of Object.keys(previousCities)) if (!contributions.has(city)) {
     changed.add(city);
     await rm(join(output, 'city-data/v1', city), { recursive: true, force: true });
-    await rm(join(output, 'city-data/v1/thumbnails', `${city}-geo-v3.png`), { force: true });
+    for (const version of ['v3', 'v4']) await rm(join(output, 'city-data/v1/thumbnails', `${city}-geo-${version}.png`), { force: true });
   }
   const tileBase='tiles/xyz-v1';
   const effectiveLayers=new Map(cachedLayers); for(const [city,layer] of newLayers)effectiveLayers.set(city,layer);

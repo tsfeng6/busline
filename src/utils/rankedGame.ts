@@ -3,6 +3,7 @@ import type { OfflineQuestion } from './offlineGame';
 export type RankedPuzzle = {
   id: string;
   number: number;
+  answerTicket?: string;
   options: string[];
   isFillIn: boolean;
   promptText: string;

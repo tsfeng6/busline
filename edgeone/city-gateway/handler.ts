@@ -1,7 +1,7 @@
 import { contestRules, contests, contestPrompts } from '../../src/utils/contestRules';
 import { createRankedQuestion } from './rankedGame';
 import { drawContestQuestion } from '../../src/utils/contestDrawing';
-import { openQuestion, QUESTION_TICKET_LIMIT, sealQuestion } from './questionTicket';
+import { openAnswer, openQuestion, QUESTION_TICKET_LIMIT, sealAnswer, sealQuestion } from './questionTicket';
 import { isGameAnswerCorrect } from '../../src/utils/gameAnswers';
 import { getGameHint, isGameHintComplete } from '../../src/utils/gameHint';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -301,7 +301,7 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     const appOrigin = publicUrl(env.PUBLIC_APP_URL);
     if (!serviceKey || !appOrigin) throw fail(503, '服务端计分尚未配置。');
     const { id: user } = await authenticatedProfile(bearer);
-    const input = await jsonBody(request, rankedPath[2] === 'question' ? QUESTION_TICKET_LIMIT : 2048);
+    const input = await jsonBody(request, rankedPath[2] === 'question' ? QUESTION_TICKET_LIMIT : rankedPath[2] === 'answer' ? 4096 : 2048);
     const runId = rankedPath[1] ?? null;
     const action = async (operation: string, payload = {}) => {
       const response = await transport(base + '/rest/v1/rpc/ranked_game_action', {
@@ -330,9 +330,27 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
       const run = await action('start', { game: input.game, difficulty, scope, rules: { ...rules, browserQuestions } });
       return reply({ run: { ...run, browserQuestions } }, 201);
     }
-    const current = await action('read');
     const unlock = (saved: { encrypted?: boolean; correctAnswer: string; isFillIn: boolean }, number: number) =>
       saved.encrypted ? openQuestion(saved.correctAnswer, serviceKey, runId, number).question : saved;
+    if (rankedPath[2] === 'answer') {
+      if (!uuid.test(input.id || '') || typeof input.answer !== 'string' || input.answer.length > 150) throw fail(400, '答案格式无效。');
+      let verifier: ReturnType<typeof openAnswer> | undefined;
+      if (typeof input.answerTicket === 'string') {
+        try { verifier = openAnswer(input.answerTicket, serviceKey, runId, user, input.id); }
+        catch { /* An older ticket may survive key rotation. Read the authoritative question. */ }
+      }
+      if (!verifier) {
+        const current = await action('read');
+        if (current.id === input.id && current.question) {
+          verifier = { ...unlock(current.question, current.number), game: current.game };
+        }
+      }
+      const correct = !!verifier && isGameAnswerCorrect(input.answer, verifier.correctAnswer, verifier.isFillIn, verifier.game as GameName);
+      // The RPC still checks ownership, question ID, deadline and repeat submissions.
+      const result = await action('answer', { id: input.id, answer: input.answer.trim(), timeout: input.timeout === true, correct });
+      return reply(result.question?.encrypted ? { ...result, question: unlock(result.question, result.number) } : result);
+    }
+    const current = await action('read');
     const prepare = async (previous: string, useCityThumbnail = false, number?: number) => {
       try {
         const question = await createRankedQuestion(appOrigin, transport, current.game, current.scope, previous, current.rules, useCityThumbnail,
@@ -366,13 +384,6 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
         preparingRankedPacks.set(key, pending);
       }
       return reply({ number, ticket: await pending });
-    }
-    if (rankedPath[2] === 'answer') {
-      if (!uuid.test(input.id || '') || typeof input.answer !== 'string' || input.answer.length > 150) throw fail(400, '答案格式无效。');
-      const question = current.id === input.id && current.question ? unlock(current.question, current.number) : null;
-      const correct = !!question && isGameAnswerCorrect(input.answer, question.correctAnswer, question.isFillIn, current.game);
-      const result = await action('answer', { id: input.id, answer: input.answer.trim(), timeout: input.timeout === true, correct });
-      return reply(result.question?.encrypted ? { ...result, question: unlock(result.question, result.number) } : result);
     }
     if (rankedPath[2] === 'hint') {
       if (input.id !== current.id || !current.question || !Number.isInteger(input.step) || input.step < 1 || input.step > current.rules.hintLimit) throw fail(400, '提示不可用。');
@@ -410,8 +421,11 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     }
     const question = issued.question;
     const promptText = contestPrompts[current.game as GameName];
+    const { correctAnswer, isFillIn } = unlock(question, issued.number);
+    const sealed = sealAnswer({ correctAnswer, isFillIn, game: current.game }, serviceKey, runId, user, issued.id);
+    const answerTicket = sealed.length <= 2048 ? sealed : undefined;
     return reply({ id: issued.id, number: issued.number, options: question.isFillIn ? [] : question.options, isFillIn: question.isFillIn, promptText,
-      drawing: issued.drawing, remainingMs: issued.remainingMs, hints: current.rules.hintLimit - issued.hints, hintLimit: current.rules.hintLimit });
+      answerTicket, drawing: issued.drawing, remainingMs: issued.remainingMs, hints: current.rules.hintLimit - issued.hints, hintLimit: current.rules.hintLimit });
   }
   if (path.startsWith('/game-runs')) throw fail(410, '排行榜已升级，请刷新网页。');
   throw fail(404,'没有这个账号接口。');

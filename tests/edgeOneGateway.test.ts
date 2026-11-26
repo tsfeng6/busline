@@ -185,7 +185,7 @@ test('ranked gateway exposes only the drawing until the server grades the answer
  const accountEnv = {...env, SUPABASE_URL:'https://project.supabase.co', SUPABASE_ANON_KEY:'anon-test-key',
   SUPABASE_SECRET_KEY:'sb_secret_test', PUBLIC_APP_URL:'https://busline.cc'};
  const state: Record<string, any> = { game:'city', difficulty:'hard', scope:'全国', number:0, previousAnswer:'', hints:0, remainingMs:180000 };
- let cityReads = 0;
+ let cityReads = 0, stateReads = 0;
  const upstream: typeof fetch = async (input, init) => {
    const url = new URL(String(input));
    if (url.pathname === '/rest/v1/rpc/current_game_profile') return Response.json([{id, display_name:'测试用户'}]);
@@ -206,7 +206,7 @@ test('ranked gateway exposes only the drawing until the server grades the answer
      state.rules = p_input.rules;
      return Response.json({id:run, game:p_input.game, scope:p_input.scope, difficulty:p_input.difficulty});
    }
-   if (p_action === 'read') return Response.json(state);
+   if (p_action === 'read') { stateReads++; return Response.json(state); }
    if (p_action === 'issue') {
      Object.assign(state, { id:questionId, number:p_input.number, question:p_input.question, drawing:p_input.drawing });
      return Response.json(state);
@@ -276,7 +276,14 @@ test('ranked gateway exposes only the drawing until the server grades the answer
  assert.equal(state.question.correctAnswer, verifier);
  assert.equal(state.question.encrypted, true);
  assert.equal((await post(prefix + '/pack', {number:2})).status, 200);
- const verified = await post(prefix + '/answer', { id:questionId, answer:local.correctAnswer, score:999 });
+ const { answerTicket } = JSON.parse(metadata);
+ assert.match(answerTicket, /^[A-Za-z0-9_-]+$/);
+ const { openAnswer } = await import('../edgeone/city-gateway/questionTicket');
+ assert.throws(() => openAnswer(answerTicket, accountEnv.SUPABASE_SECRET_KEY, run, id, run));
+ assert.throws(() => openAnswer(answerTicket, accountEnv.SUPABASE_SECRET_KEY, run, run, questionId));
+ const readsBeforeAnswer = stateReads;
+ const verified = await post(prefix + '/answer', { id:questionId, answer:local.correctAnswer, score:999, answerTicket });
+ assert.equal(stateReads, readsBeforeAnswer);
  const verifiedBody = await verified.json();
  assert.equal(verifiedBody.correct, true);
  assert.equal(verifiedBody.question.correctAnswer, local.correctAnswer);

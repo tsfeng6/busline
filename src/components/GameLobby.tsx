@@ -6,6 +6,7 @@ import { getContestLeaderboard, type LeaderboardEntry } from '../utils/gameAccou
 import { hasContestDistricts } from '../utils/contestQuestions';
 import type { PublishedCity } from '../utils/localTransit';
 import type { GameMode } from '../utils/offlineGame';
+import { ContestCardNetwork } from './ContestCardNetwork';
 import { ContestNetworkMap } from './ContestNetworkMap';
 import { GameLadderPanel } from './GameLadderPanel';
 import { GameModeVisual } from './GameModeVisual';
@@ -206,7 +207,7 @@ export function GameLobby(props: LobbyProps) {
             key={region.id} className="contest-card grid items-start gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] sm:gap-5 sm:p-6"
             style={{ borderRadius: 24 }}>
             <div className="contest-region-map lg:sticky lg:top-4">
-              <ContestNetworkMap catalog={props.catalog} region={region} loading={props.catalogLoading} expanded />
+              <ContestNetworkMap catalog={props.catalog} region={region} loading={props.catalogLoading} />
             </div>
             <motion.div className="min-w-0 space-y-4" initial={reduceMotion ? false : { opacity: 0 }}
               animate={{ opacity: 1 }} transition={{ duration: .25, delay: reduceMotion ? 0 : .12 }}>
@@ -239,8 +240,8 @@ export function GameLobby(props: LobbyProps) {
             {contestRegions.map(item => <motion.article key={item.id}
               layoutId={reduceMotion ? undefined : `region-${item.id}`} style={{ borderRadius: 24 }}
               className="contest-card contest-preview group relative grid min-h-48 grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-3 p-3 sm:min-h-56 sm:gap-5 sm:p-4">
-              <ContestNetworkMap catalog={props.catalog} region={item} loading={props.catalogLoading} />
-              <div className="flex min-w-0 flex-col py-1 pr-1 text-white">
+              <ContestCardNetwork region={item.id} />
+              <div className="relative col-start-2 flex min-w-0 flex-col py-1 pr-1 text-white">
                 <h3 className="mb-3 text-right text-2xl font-black tracking-tight sm:mb-5 sm:text-4xl">{item.title}</h3>
                 <div className={`grid gap-x-3 gap-y-2 ${item.contests.length > 1 ? 'min-[365px]:grid-cols-2' : ''}`}>
                   {item.contests.map(id => <BoardPreview key={id} contest={contestsById.get(id)!} board={boardFor(id)} />)}

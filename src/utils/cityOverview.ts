@@ -53,7 +53,7 @@ export function cityThumbnail(data:{city:string;capturedAt:string;lines:{path:[n
     }
   }
   let d='';for(let y=0;y<H;y++)for(let x=0;x<W;x++){if(!grid[y*W+x])continue;const start=x;while(x+1<W&&grid[y*W+x+1])x++;d+=`M${start} ${y}h${Math.max(.5,x-start)}`;}
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W-1} ${H-1}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="#52796f" stroke-width="${CITY_THUMBNAIL_STROKE_PX}" stroke-linecap="round"/></svg>`;
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W-1} ${H-1}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="#346db3" stroke-width="${CITY_THUMBNAIL_STROKE_PX}" stroke-linecap="round"/></svg>`;
   return {svg,raster:{width:W,height:H,pixels:grid},meta:{city:data.city,center:[(minX+maxX)/2,(minY+maxY)/2] as [number,number],bounds,lineDirections:data.lines.length,capturedAt:data.capturedAt}};
 }
 

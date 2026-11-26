@@ -878,15 +878,17 @@ export default function App() {
     const submittedAt = Date.now();
     const deadline = rankedDeadlineRef.current;
     try {
-      const result = await answerRankedPuzzle(run.id, puzzle.id, answer.trim().slice(0, 150), timeout, gameAccessToken);
+      const sealed = currentGameQuestionRef.current;
+      const [result, localReview] = await Promise.all([
+        answerRankedPuzzle(run.id, puzzle.id, answer.trim().slice(0, 150), timeout, gameAccessToken, puzzle.answerTicket),
+        sealed ? openLocalQuestion<UnansweredQuestion>(sealed).catch(() => undefined) : undefined,
+      ]);
       if (gameSessionIdRef.current !== session) return;
       if ('pendingMs' in result) {
         rankedDeadlineRef.current = Date.now() + result.pendingMs;
         return;
       }
-      const sealed = currentGameQuestionRef.current;
-      const review = sealed ? await openLocalQuestion<UnansweredQuestion>(sealed).catch(() => result.question) : result.question;
-      if (gameSessionIdRef.current !== session) return;
+      const review = localReview ?? result.question;
       currentGameQuestionRef.current = null;
       recordQuestionTime(submittedAt, deadline);
       rankedPuzzleRef.current = null;
@@ -912,7 +914,7 @@ export default function App() {
           setGameUserInput('');
           setGameQuestionNum(result.number + 1);
           void generateQuestion(run.game, gameCity, result.number + 1, result.question.correctAnswer);
-        }, 900);
+        }, 450);
       }
     } catch (error: any) {
       if (gameSessionIdRef.current !== session) return;
@@ -9168,6 +9170,7 @@ export default function App() {
 
                   {!rankedPuzzle && gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
                   {gameDataError && <p role="alert" className="text-xs text-red-700">{gameDataError}</p>}
+                  {rankedWaiting && <p role="status" className="flex items-center gap-1.5 text-xs font-semibold text-m3-primary"><Loader2 aria-hidden="true" size={14} className="animate-spin" />正在判题…</p>}
                   {gameFeedback && (
                     <div className={`px-3 py-1.5 rounded-xl text-[11px] font-extrabold text-center ${gameFeedback.correct ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
                       {gameFeedback.msg}

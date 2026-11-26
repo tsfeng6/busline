@@ -111,6 +111,7 @@ test('geographic PNG has transparent background and draws only the original proj
  let at=8;const compressed:Buffer[]=[];
  while(at<png.length){const size=png.readUInt32BE(at),type=png.toString('ascii',at+4,at+8);if(type==='IDAT')compressed.push(png.subarray(at+8,at+8+size));at+=size+12;}
  const rows=inflateSync(Buffer.concat(compressed));
+ assert.deepEqual([...rows.subarray(1, 5)], [0x34, 0x6d, 0xb3, 255]);
  assert.equal(rows[4],255);assert.equal(rows[8],0);assert.equal(rows[13],0);assert.equal(rows[17],255);
 });
 

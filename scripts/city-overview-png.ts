@@ -5,6 +5,6 @@ function chunk(type:string,data:Buffer){const tag=Buffer.from(type),head=Buffer.
 export function cityOverviewPNG({width,height,pixels,alpha=false}:{width:number;height:number;pixels:Uint8Array;alpha?:boolean}){
  const header=Buffer.alloc(13);header.writeUInt32BE(width,0);header.writeUInt32BE(height,4);header[8]=8;header[9]=6;
  const rows=Buffer.alloc(height*(1+width*4));
- for(let y=0;y<height;y++)for(let x=0;x<width;x++){if(!pixels[y*width+x])continue;const at=y*(width*4+1)+1+x*4;rows[at]=0x52;rows[at+1]=0x79;rows[at+2]=0x6f;rows[at+3]=alpha?pixels[y*width+x]:255;}
+ for(let y=0;y<height;y++)for(let x=0;x<width;x++){if(!pixels[y*width+x])continue;const at=y*(width*4+1)+1+x*4;rows[at]=0x34;rows[at+1]=0x6d;rows[at+2]=0xb3;rows[at+3]=alpha?pixels[y*width+x]:255;}
  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(rows)),chunk('IEND',Buffer.alloc(0))]);
 }
