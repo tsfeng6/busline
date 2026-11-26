@@ -1,5 +1,6 @@
-import { contestRules, contests } from '../../src/utils/contestRules';
-import { createRankedQuestion, rankedDrawing } from './rankedGame';
+import { contestRules, contests, contestPrompts } from '../../src/utils/contestRules';
+import { createRankedQuestion } from './rankedGame';
+import { drawContestQuestion } from '../../src/utils/contestDrawing';
 import { isGameAnswerCorrect } from '../../src/utils/gameAnswers';
 import { getGameHint, isGameHintComplete } from '../../src/utils/gameHint';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -346,14 +347,14 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     if (current.finished || !Number.isSafeInteger(number) || number !== current.number + (current.question ? 0 : 1)) throw fail(409, '题目顺序无效。');
     let issued = current;
     if (!current.question) {
-      const question = await createRankedQuestion(appOrigin, transport, current.game, current.difficulty, current.scope, number, current.previousAnswer, current.rules)
+      const question = await createRankedQuestion(appOrigin, transport, current.game, current.scope, current.previousAnswer, current.rules)
         .catch(() => { throw fail(409, '暂时无法读取计分题目，请稍后重试。'); });
-      const drawing = rankedDrawing(question, current.game, current.rules.cycle);
+      const drawing = drawContestQuestion(question, current.game, current.rules.cycle);
       const { contextPaths, ...review } = question;
       issued = await action('issue', { number, question: review, drawing });
     }
     const question = issued.question;
-    const promptText = { line: '请根据公交线网猜线路。', station: '请根据公交线网猜目标站。', city: '请根据公交线网猜城市。', county: '请根据周边公交线网猜县城。' }[current.game as GameName];
+    const promptText = contestPrompts[current.game as GameName];
     return reply({ id: issued.id, number: issued.number, options: question.isFillIn ? [] : question.options, isFillIn: question.isFillIn, promptText,
       drawing: issued.drawing, remainingMs: issued.remainingMs, hints: current.rules.hintLimit - issued.hints, hintLimit: current.rules.hintLimit });
   }

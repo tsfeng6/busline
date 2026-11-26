@@ -3,7 +3,7 @@ import { isGameAnswerCorrect } from './utils/gameAnswers';
 import {NearbyRoutes,type NearbyState} from './components/NearbyRoutes';
 import { loadNearbyTransitTiles } from './utils/nearbyTransitTiles';
 import {loadPublishedCities,loadGameCity} from './utils/publishedTransit';
-import {COUNTY_GAME_RADIUS_METERS,createOfflineQuestion,gameStage,shuffle} from './utils/offlineGame';
+import {COUNTY_GAME_RADIUS_METERS} from './utils/offlineGame';
 import {DAILY_LOCATION_KEY,claimDailyLocation,gpsToMap,nearbyLines,cityTouchesRadius,radiusRing,type PublishedCity,type Point} from './utils/localTransit';
 import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
@@ -53,16 +53,18 @@ import {
   saveCitySearchToCache,
   saveLinesToCache,
 } from './utils/lineCache';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Zap, Gamepad2, Trophy, Award, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Zap, Gamepad2, Trophy, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
-import { getGameTimeLimit, formatGameTime, recordGameAnswer } from './utils/gameTimer';
+import { formatGameTime, recordGameAnswer } from './utils/gameTimer';
 import { establishGameSession, gameAccountEnabled, answerRankedPuzzle, getRankedPuzzle, hintRankedPuzzle, getGameAccount, startGameRun, type GameAccount, type GameRun } from './utils/gameAccount';
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
 import { GameLobby } from './components/GameLobby';
 import { RankedGameDrawing } from './components/RankedGameDrawing';
-import { contests, contestTagGroups } from './utils/contestRules';
+import { contests, contestTagGroups, contestRules, contestPrompts, type ContestRules } from './utils/contestRules';
+import { createSimulationQuestion } from './utils/simulationQuestion';
+import { drawContestQuestion } from './utils/contestDrawing';
 
 const isFirebaseEnabled = () => true;
 
@@ -277,7 +279,7 @@ export default function App() {
   const [contest, setContest] = useState<(typeof contests)[number]>(contests[0]);
   const [contestTags, setContestTags] = useState<string[]>([]);
   const [simulationMode, setSimulationMode] = useState<'line' | 'station' | 'city' | 'county'>('line');
-  const [simulationDifficulty, setSimulationDifficulty] = useState<'easy' | 'hell'>('easy');
+  const [simulationTags, setSimulationTags] = useState<string[]>([]);
   useEffect(() => {
     if (gamePage) document.title = '巴士竞猜';
   }, [gamePage]);
@@ -344,7 +346,6 @@ export default function App() {
   // Minigame States & Logic
   const showMinigameModal = gamePage;
   const [gameMode, setGameMode] = useState<'line' | 'station' | 'city' | 'county' | null>(null);
-  const [gameDifficulty, setGameDifficulty] = useState<'easy' | 'medium' | 'hard' | 'hell'>('easy');
   const [gameCity, setGameCity] = useState('北京市');
   const [gameProvince, setGameProvince] = useState('北京市');
   const [gameCountyProvince, setGameCountyProvince] = useState('浙江省');
@@ -447,6 +448,9 @@ export default function App() {
   }, []);
   const gameScoreRef = useRef(0);
   const [gameHints, setGameHints] = useState({ remaining: 7, usedOnQuestion: 0 });
+  const gameRulesRef = useRef<ContestRules | null>(null);
+  const questionAbortRef = useRef<AbortController | null>(null);
+  const [simulationDrawing, setSimulationDrawing] = useState<RankedPuzzle['drawing'] | null>(null);
   const [rankedPuzzle, setRankedPuzzle] = useState<RankedPuzzle | null>(null);
   const [rankedHint, setRankedHint] = useState<{ text: string; complete: boolean } | null>(null);
   const [rankedWaiting, setRankedWaiting] = useState(false);
@@ -503,7 +507,6 @@ export default function App() {
   type GameHistoryItem = {
     questionNum: number;
     mode: 'line' | 'station' | 'city' | 'county';
-    difficulty: 'easy' | 'medium' | 'hard' | 'hell';
     targetCity: string;
     province?: string;
     promptText: string;
@@ -536,7 +539,7 @@ export default function App() {
       return;
     }
     const missed = recordGameAnswer(currentGameQuestionRef, '', false, true);
-    if (!missed && (gameMode === 'line' || gameMode === 'station')) return;
+    if (!missed) return;
     if (missed) {
       recordQuestionTime(Date.now(), gameDeadlineRef.current);
       setGameHistory(previous => [...previous, missed]);
@@ -551,7 +554,7 @@ export default function App() {
     setGameFeedback(null);
     setConfirmQuitGame(false);
     setGameState('gameover');
-  }, [gameMode, recordQuestionTime]);
+  }, [recordQuestionTime]);
 
   // Use a deadline so background-tab throttling cannot extend the challenge.
   // Loading questions pauses the clock; each new question keeps the same budget.
@@ -561,7 +564,7 @@ export default function App() {
     const deadline = Date.now() + budget;
     gameDeadlineRef.current = deadline;
     const tick = () => {
-      if (gameRunRef.current && rankedDeadlineRef.current === null) return;
+      if (questionShownAtRef.current === null) return;
       const remaining = Math.max(0, (rankedDeadlineRef.current ?? deadline) - Date.now());
       setGameTimeLeft(Math.ceil(remaining / 1000));
       if (remaining === 0) finishGameOnTimeout();
@@ -570,75 +573,22 @@ export default function App() {
     const interval = window.setInterval(tick, 200);
     return () => {
       window.clearInterval(interval);
-      if (!gameRunRef.current && !gameTimedOutRef.current) gameTimeRemainingMsRef.current = Math.max(0, deadline - Date.now());
       gameDeadlineRef.current = null;
     };
   }, [gameState, gameLoading, gameQuestionData, finishGameOnTimeout]);
 
   const [confirmQuitGame, setConfirmQuitGame] = useState(false);
-  const [bestRecords, setBestRecords] = useState(() => {
-    const defaultRecords = {
-      line: { easy: 0, medium: 0, hard: 0, hell: 0 },
-      station: { easy: 0, medium: 0, hard: 0, hell: 0 },
-      city: { hard: 0 },
-      county: { hard: 0 },
-      migratedHell: true
-    };
+  const [bestRecords, setBestRecords] = useState<Record<string, number>>(() => {
     try {
-      const saved = localStorage.getItem('busline_minigame_records');
-      if (!saved) return defaultRecords;
-      const parsed = JSON.parse(saved);
-      const migratedCounty = Math.max(parsed.county?.hard || 0, parsed.city?.county || 0);
-      const alreadyMigratedHell = parsed.migratedHell === true;
-      const migrateModeRecords = (rec: any) => {
-        if (!rec) return { easy: 0, medium: 0, hard: 0, hell: 0 };
-        if (!alreadyMigratedHell) {
-          return {
-            easy: rec.easy || 0,
-            medium: rec.medium || 0,
-            hard: 0,
-            hell: Math.max(rec.hell || 0, rec.hard || 0)
-          };
-        }
-        return {
-          easy: rec.easy || 0,
-          medium: rec.medium || 0,
-          hard: rec.hard || 0,
-          hell: rec.hell || 0
-        };
-      };
-      const migrated = {
-        line: migrateModeRecords(parsed.line),
-        station: migrateModeRecords(parsed.station),
-        city: { hard: parsed.city?.hard || 0 },
-        county: { hard: migratedCounty },
-        migratedHell: true
-      };
-      if (!alreadyMigratedHell) {
-        localStorage.setItem('busline_minigame_records', JSON.stringify(migrated));
-      }
-      return migrated;
-    } catch (e) {
-      return defaultRecords;
+      return JSON.parse(localStorage.getItem('busline_simulation_tag_records') ?? '{}') ?? {};
+    } catch {
+      return {};
     }
   });
-
-  const getRating = (mode: string, score: number) => {
-    if (mode === 'line' || mode === 'station' || mode === 'county') {
-      if (score >= 30) return { title: '巴士之神', color: 'text-amber-500 bg-amber-50 border-amber-200' };
-      if (score >= 20) return { title: '王者', color: 'text-purple-600 bg-purple-50 border-purple-200' };
-      if (score >= 15) return { title: '钻石', color: 'text-blue-600 bg-blue-50 border-blue-200' };
-      if (score >= 10) return { title: '黄金', color: 'text-yellow-600 bg-yellow-50 border-yellow-200' };
-      if (score >= 5) return { title: '白银', color: 'text-slate-600 bg-slate-100 border-slate-200' };
-      return { title: '青铜', color: 'text-amber-700 bg-amber-100/50 border-amber-200/50' };
-    } else {
-      if (score >= 8) return { title: '巴士之神', color: 'text-amber-500 bg-amber-50 border-amber-200' };
-      if (score >= 6) return { title: '王者', color: 'text-purple-600 bg-purple-50 border-purple-200' };
-      if (score >= 4) return { title: '黄金', color: 'text-yellow-600 bg-yellow-50 border-yellow-200' };
-      if (score >= 2) return { title: '白银', color: 'text-slate-600 bg-slate-100 border-slate-200' };
-      return { title: '青铜', color: 'text-amber-700 bg-amber-100/50 border-amber-200/50' };
-    }
-  };
+  const simulationKey = JSON.stringify([
+    simulationMode, simulationMode === 'county' ? gameCountyProvince : simulationMode === 'city' ? '全国' : gameCity,
+    [...simulationTags].sort(),
+  ]);
 
   const restoreMapAfterMinigame = () => {
     setCountyGameMask();
@@ -668,6 +618,8 @@ export default function App() {
   };
 
   const returnToMinigameMenu = () => {
+    questionAbortRef.current?.abort();
+    setSimulationDrawing(null);
     gameSessionIdRef.current++;
     gameRunRef.current = null;
     clearRankedPuzzle();
@@ -715,16 +667,13 @@ export default function App() {
 
   const startMinigame = (
     mode: 'line' | 'station' | 'city' | 'county',
-    diff: 'easy' | 'medium' | 'hard' | 'hell',
     city: string,
     province?: string,
     competitive = false,
   ) => {
     if (gameLoading || (gameState === 'playing' && isMinigameActiveRef.current)) return;
-    if (!competitive && (!(window as any).AMap || !mapInstance)) {
-      setGameDataError('地图尚未就绪，请稍后再开始模拟。');
-      return;
-    }
+    const tags = competitive ? contestTags : simulationTags;
+    const rules = contestRules(mode, tags);
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
     const launchId = ++gameSessionIdRef.current;
     gameRunRef.current = null;
@@ -742,10 +691,11 @@ export default function App() {
       if (!prevMapModeBeforeGameRef.current) prevMapModeBeforeGameRef.current = mapMode;
       clearMapStateForMinigame();
       setGameMode(mode);
-      setGameDifficulty(diff);
+      gameRulesRef.current = rules;
+      setSimulationDrawing(null);
       if (!run) setGameCity(city);
-      const timeLimit = getGameTimeLimit(mode, diff);
-      gameTimeRemainingMsRef.current = timeLimit === null ? null : timeLimit * 1000;
+      const timeLimit = rules.timeLimit;
+      gameTimeRemainingMsRef.current = timeLimit * 1000;
       gameDeadlineRef.current = null;
       gameTimedOutRef.current = false;
       setGameTimedOut(false);
@@ -754,11 +704,9 @@ export default function App() {
       gameScoreRef.current = 0;
       questionShownAtRef.current = null;
       setGameElapsedMs(0);
-      setPlayedContestTags(run
-        ? contestTagGroups(run.game).flatMap(group => group.tags.filter(tag => contestTags.includes(tag.id)))
-        : []);
+      setPlayedContestTags(contestTagGroups(mode).flatMap(group => group.tags.filter(tag => tags.includes(tag.id))));
       setGameScore(0);
-      setGameHints({ remaining: 7, usedOnQuestion: 0 });
+      setGameHints({ remaining: rules.hintLimit, usedOnQuestion: 0 });
       setGameQuestionNum(1);
       setGameFeedback(null);
       setGameUserInput('');
@@ -768,8 +716,8 @@ export default function App() {
       setReviewIndex(0);
       setReviewAutoPlay(false);
       setReviewHoveredStop(null);
-      setMapMode(!run && gameStage(mode, diff, 1).showBasemap ? 'normal' : 'blank');
-      void generateQuestion(mode, diff, city, 1, undefined, activeProv);
+      setMapMode('blank');
+      void generateQuestion(mode, city, 1, undefined, activeProv);
     };
 
     if (!competitive) {
@@ -783,7 +731,7 @@ export default function App() {
     }
     setGameLoading(true);
     const scope = mode === 'county' ? activeProv : mode === 'city' ? '全国' : city;
-    void startGameRun({ game: mode, scope }, gameAccessToken, contestTags)
+    void startGameRun({ game: mode, scope }, gameAccessToken, tags)
       .then(({ run }) => launch(run), (error: any) => {
         if (gameSessionIdRef.current !== launchId) return;
         if (error?.status === 401) {
@@ -797,11 +745,14 @@ export default function App() {
   };
 
   const generateQuestion = async (
-    mode: 'line' | 'station' | 'city' | 'county', diff: 'easy' | 'medium' | 'hard' | 'hell', city: string,
+    mode: 'line' | 'station' | 'city' | 'county', city: string,
     qNum: number, prevAnswer?: string, provinceOverride?: string
   ) => {
-    const AMap = (window as any).AMap;
-    if ((!AMap || !mapInstance) && !gameRunRef.current) return;
+    const rules = gameRulesRef.current;
+    if (!rules) return;
+    questionAbortRef.current?.abort();
+    const controller = new AbortController();
+    questionAbortRef.current = controller;
     const sessionId = ++gameSessionIdRef.current;
     setGameHints(prev => ({ ...prev, usedOnQuestion: 0 }));
     setConfirmQuitGame(false);setGameLoading(true);
@@ -829,61 +780,17 @@ export default function App() {
       }
       const catalog = await loadPublishedCities();
       if (gameSessionIdRef.current !== sessionId) return;
-      if (!catalog.length) throw Error('网站暂时没有可供出题的城市线路数据。');
       const province = provinceOverride ?? (mode === 'county' ? gameCountyProvince : gameProvince);
-      let question: ReturnType<typeof createOfflineQuestion>;
-      if (mode === 'county') {
-        const seats = catalog.filter(item=>item.province===province).flatMap(item=>item.countySeats);
-        const pool=shuffle(seats.filter(item=>seats.length===1||item.name!==prevAnswer));
-        let selected: ReturnType<typeof createOfflineQuestion> | undefined;
-        for (const seat of pool) {
-          const data=await loadGameCity(seat.city);
-          if (gameSessionIdRef.current !== sessionId) return;
-          try { selected=createOfflineQuestion(mode,diff,data,seats.map(item=>item.name),qNum,prevAnswer,seat);break; } catch { /* Try only other saved county anchors; never query a provider. */ }
-        }
-        if (!selected) throw Error('该省份暂无可出题的县政府站点周边线网，请选择其他省份。');
-        question=selected;
-      } else {
-        const pool=mode==='city'?catalog.filter(item=>catalog.length===1||item.city!==prevAnswer):catalog.filter(item=>item.city===city);
-        const chosen=shuffle(pool)[0];if(!chosen)throw Error('请选择网站已有线路图的城市。');
-        const data=await loadGameCity(chosen.city);
-        if (gameSessionIdRef.current !== sessionId) return;
-        question=createOfflineQuestion(mode,diff,data,catalog.map(item=>item.city),qNum,prevAnswer);
-      }
+      const question = await createSimulationQuestion(mode, city, province, rules, prevAnswer ?? '', catalog, loadGameCity, controller.signal);
       if (gameSessionIdRef.current !== sessionId) return;
-      setMapMode(question.showBasemap === false ? 'blank' : 'normal');
-      const paths=question.networkPaths||question.lineInfos?.map(line=>line.path)||[];
-      if (paths.length) {
-        const network = new AMap.Polyline({path:paths,strokeColor:'#52796F',strokeWeight:mode==='line'?7:lineThickness==='thin'?2:3.2,showDir:mode==='line',strokeOpacity:.85,lineJoin:'round',lineCap:'round',zIndex:45});
-        lineGroupRef.current?.addOverlay(network);
-        if (question.countyWindow) {
-          const {center,radius}=question.countyWindow,ring=radiusRing(center,radius);
-          mapInstance.setBounds(new AMap.Bounds([Math.min(...ring.map(p=>p[0])),Math.min(...ring.map(p=>p[1]))],[Math.max(...ring.map(p=>p[0])),Math.max(...ring.map(p=>p[1]))]));
-          setCountyGameMask(center,radius);
-        } else if(mode==='station'&&question.targetPoint)mapInstance.setZoomAndCenter(14,question.targetPoint.lngLat);
-        else mapInstance.setFitView([network],false,[48,150,36,36]);
-      }
-      if (question.showStops && (mode==='line'||mode==='station')) {
-        const markers=(question.networkStops||[]).map(stop=>new AMap.CircleMarker({center:stop.lngLat,radius:3.5,fillColor:'#52796F',strokeColor:'#fff',strokeWeight:1,zIndex:60,bubble:true}));
-        markerGroupRef.current?.addOverlays(markers);
-      }
-      if (mode==='line' && paths.length) {
-        const terminalMarkers=paths.filter(path=>path.length).flatMap(path=>{
-          const first=path[0],last=path[path.length-1];
-          return [new AMap.CircleMarker({center:first,radius:7,fillColor:'#16a34a',strokeColor:'#fff',strokeWeight:2,zIndex:90}),new AMap.CircleMarker({center:last,radius:5,fillColor:'#ef4444',strokeColor:'#fff',strokeWeight:2,zIndex:92})];
-        });
-        markerGroupRef.current?.addOverlays(terminalMarkers);
-      }
-      if(question.targetPoint)markerGroupRef.current?.addOverlay(new AMap.CircleMarker({center:question.targetPoint.lngLat,radius:9,fillColor:'#ef4444',strokeColor:'#fff',strokeWeight:2,zIndex:95}));
-      currentGameQuestionRef.current={...question,questionNum:qNum,mode,difficulty:diff,province};
-      if (mode === 'line' || mode === 'station') {
-        const timeLimit = getGameTimeLimit(mode, diff)!;
-        gameTimeRemainingMsRef.current = timeLimit * 1000;
-        gameDeadlineRef.current = null;
-        setGameTimeLeft(timeLimit);
-      }
+      const { contextPaths, ...review } = question;
+      setSimulationDrawing(drawContestQuestion(question, mode, rules.cycle));
+      currentGameQuestionRef.current = { ...review, questionNum: qNum, mode, province };
+      if (rules.perQuestion) gameTimeRemainingMsRef.current = rules.timeLimit * 1000;
+      setGameTimeLeft(Math.ceil((gameTimeRemainingMsRef.current ?? 0) / 1000));
       questionShownAtRef.current = Date.now();
-      setGameQuestionData({correctAnswer:question.correctAnswer,options:question.options,isFillIn:question.isFillIn,promptText:question.promptText});
+      setGameQuestionData({ correctAnswer: question.correctAnswer, options: question.options,
+        isFillIn: question.isFillIn, promptText: contestPrompts[mode] });
     } catch(error:any) {
       if(gameSessionIdRef.current===sessionId){gameRunRef.current=null;setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
     } finally {if(gameSessionIdRef.current===sessionId)setGameLoading(false);}
@@ -912,7 +819,7 @@ export default function App() {
       gameScoreRef.current = result.score;
       setGameScore(result.score);
       setGameHistory(previous => [...previous, {
-        ...result.question, questionNum: result.number, mode: run.game, difficulty: run.difficulty,
+        ...result.question, questionNum: result.number, mode: run.game,
         province: run.game === 'county' ? run.scope : undefined,
         userAnswer: result.answer, isCorrect: result.correct, timedOut: result.timedOut,
       }]);
@@ -928,7 +835,7 @@ export default function App() {
           setGameFeedback(null);
           setGameUserInput('');
           setGameQuestionNum(result.number + 1);
-          void generateQuestion(run.game, run.difficulty, gameCity, result.number + 1);
+          void generateQuestion(run.game, gameCity, result.number + 1);
         }, 900);
       }
     } catch (error: any) {
@@ -958,37 +865,22 @@ export default function App() {
 
     const recorded = recordGameAnswer(currentGameQuestionRef, rawUser, isCorrect);
     if (!recorded) return;
-    recordQuestionTime(Date.now(), gameDeadlineRef.current);
+    const submittedAt = Date.now();
+    if (gameDeadlineRef.current !== null) gameTimeRemainingMsRef.current = Math.max(0, gameDeadlineRef.current - submittedAt);
+    recordQuestionTime(submittedAt, gameDeadlineRef.current);
     setGameHistory(previous => [...previous, recorded]);
 
     if (isCorrect) {
-      const newScore = gameScoreRef.current + 1;
+      const newScore = gameScoreRef.current + (gameRulesRef.current?.multiplier ?? 1);
       gameScoreRef.current = newScore;
       setGameScore(newScore);
 
-      if (gameMode) {
-        const modeKey = gameMode;
-        const diffKey = gameDifficulty;
-        setBestRecords((prev: any) => {
-          const currentBest = (modeKey === 'city' || modeKey === 'county')
-            ? (prev[modeKey]?.hard || 0)
-            : (prev[modeKey]?.[diffKey] || 0);
-          if (newScore > currentBest) {
-            const updated = {
-              ...prev,
-              [modeKey]: { ...(prev[modeKey] || {}) }
-            };
-            if (modeKey === 'city' || modeKey === 'county') {
-              updated[modeKey].hard = newScore;
-            } else {
-              updated[modeKey][diffKey] = newScore;
-            }
-            localStorage.setItem('busline_minigame_records', JSON.stringify(updated));
-            return updated;
-          }
-          return prev;
-        });
-      }
+      setBestRecords(previous => {
+        if (newScore <= (previous[simulationKey] ?? 0)) return previous;
+        const updated = { ...previous, [simulationKey]: newScore };
+        try { localStorage.setItem('busline_simulation_tag_records', JSON.stringify(updated)); } catch {}
+        return updated;
+      });
 
       setGameFeedback({ correct: true, msg: '回答正确！即将进入下一题...' });
       setTimeout(() => {
@@ -997,7 +889,7 @@ export default function App() {
         setGameUserInput('');
         const nextNum = gameQuestionNum + 1;
         setGameQuestionNum(nextNum);
-        generateQuestion(gameMode!, gameDifficulty, gameCity, nextNum, rawCorrect);
+        generateQuestion(gameMode!, gameCity, nextNum, rawCorrect);
       }, 900);
     } else {
       setGameFeedback({ correct: false, msg: `回答错误！正确答案是：${gameQuestionData.correctAnswer}` });
@@ -9195,22 +9087,23 @@ export default function App() {
   );
   const launchSelectedGame = () => {
     if (gameDivision === 'contest') {
-      startMinigame(contest.game, contest.game === 'line' || contest.game === 'station' ? 'easy' : 'hard',
-        contest.scope, gameCountyProvince, true);
+      startMinigame(contest.game, contest.scope, gameCountyProvince, true);
     } else {
-      startMinigame(simulationMode, simulationDifficulty, gameCity);
+      startMinigame(simulationMode, gameCity);
     }
   };
+  const gameDrawing = rankedPuzzle?.drawing ?? simulationDrawing;
+  const gameHintLimit = gameRulesRef.current?.hintLimit ?? 7;
   return <div className="relative h-dvh w-full overflow-hidden bg-m3-surface-container-low">
-    <div ref={containerRef} aria-hidden={gameState === 'menu' || !!rankedPuzzle} className="relative isolate h-full w-full bg-white" id="amap-container" />
-    {isAnswering && rankedPuzzle && <RankedGameDrawing key={rankedPuzzle.id} drawing={rankedPuzzle.drawing} />}
+    <div ref={containerRef} aria-hidden={gameState === 'menu' || (isAnswering && !!gameDrawing)} className="relative isolate h-full w-full bg-white" id="amap-container" />
+    {isAnswering && gameDrawing && <RankedGameDrawing key={rankedPuzzle?.id ?? gameQuestionNum} drawing={gameDrawing} />}
     {gameState === 'menu' && <GameLobby
       division={gameDivision} onDivision={next => { setGameDivision(next); setGameDataError(''); }}
       contest={contest} onContest={next => { setContest(next); setContestTags([]); setGameDataError(''); }}
-      tags={contestTags} onTags={setContestTags}
-      mode={simulationMode} onMode={next => { setSimulationMode(next); setGameDataError(''); }}
-      difficulty={simulationDifficulty} onDifficulty={setSimulationDifficulty}
-      bestScore={simulationMode === 'line' || simulationMode === 'station' ? bestRecords[simulationMode][simulationDifficulty] : bestRecords[simulationMode].hard}
+      tags={gameDivision === 'contest' ? contestTags : simulationTags}
+      onTags={gameDivision === 'contest' ? setContestTags : setSimulationTags}
+      mode={simulationMode} onMode={next => { setSimulationMode(next); setSimulationTags([]); setGameDataError(''); }}
+      bestScore={bestRecords[simulationKey] ?? 0}
       province={gameProvince} provinces={gameProvinces} onProvince={setGameProvince}
       city={gameCity} cities={gameCities.map(city => city.city)} onCity={setGameCity}
       countyProvince={gameCountyProvince} countyProvinces={countyProvinces} onCountyProvince={setGameCountyProvince}
@@ -9330,8 +9223,8 @@ export default function App() {
                     </div>
                   )}
 
-                  {(rankedPuzzle?.hintLimit ?? 7) > 0 && <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <span className="text-[11px] font-medium text-slate-500">每局共 {rankedPuzzle?.hintLimit ?? 7} 次提示</span>
+                  {(gameHintLimit) > 0 && <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <span className="text-[11px] font-medium text-slate-500">每局共 {gameHintLimit} 次提示</span>
                     <motion.button
                       type="button"
                       onClick={handleGameHint}
@@ -9341,7 +9234,7 @@ export default function App() {
                     >
                       <Sparkles className="w-3.5 h-3.5" />
                       {gameHints.remaining === 0 ? '提示已用完' : (rankedPuzzle ? rankedHint?.complete : isGameHintComplete(gameQuestionData.correctAnswer, gameHints.usedOnQuestion)) ? '本题已全部揭示' : '提示'}
-                      <span className="tabular-nums">{gameHints.remaining}/{rankedPuzzle?.hintLimit ?? 7}</span>
+                      <span className="tabular-nums">{gameHints.remaining}/{gameHintLimit}</span>
                     </motion.button>
                   </div>}
                   <AnimatePresence>
@@ -9438,7 +9331,7 @@ export default function App() {
                   <div className="flex gap-2.5">
                     <button
                       type="button"
-                      onClick={() => generateQuestion(gameMode!, gameDifficulty, gameCity, gameQuestionNum)}
+                      onClick={() => generateQuestion(gameMode!, gameCity, gameQuestionNum)}
                       className="px-4 py-2 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-black shadow-sm"
                     >
                       重新出题
@@ -9478,7 +9371,7 @@ export default function App() {
                       <dt className="text-slate-600">总用时</dt>
                       <dd className="font-black tabular-nums text-slate-900">{formatGameTime(Math.floor(gameElapsedMs / 1000))}</dd>
                     </div>
-                    {gameRunRef.current && <div className="space-y-2">
+                    <div className="space-y-2">
                       <dt className="text-slate-600">本局标签</dt>
                       <dd className="flex flex-wrap gap-1.5">
                         {playedContestTags.length ? playedContestTags.map(tag => (
@@ -9487,18 +9380,8 @@ export default function App() {
                           </span>
                         )) : <span className="text-xs text-slate-500">未添加标签</span>}
                       </dd>
-                    </div>}
+                    </div>
                   </dl>
-
-                  {!gameRunRef.current && (() => {
-                    const rating = getRating(gameMode!, gameScore);
-                    return (
-                      <div className={`px-5 py-2 rounded-2xl border text-xs font-black shadow-sm flex items-center gap-2 ${rating.color}`}>
-                        <Award className="w-4 h-4" />
-                        获得段位评级：{rating.title}
-                      </div>
-                    );
-                  })()}
 
                   {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式已启用</p>}
                   {gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}

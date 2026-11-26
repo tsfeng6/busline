@@ -9,6 +9,11 @@ export const contests = [
   { id: 'county', game: 'county', scope: '', title: '看线网猜县城' },
 ] as const;
 
+export const contestPrompts = {
+  line: '请根据公交线网猜线路。', station: '请根据公交线网猜目标站。',
+  city: '请根据公交线网猜城市。', county: '请根据周边公交线网猜县城。',
+};
+
 type Tag = { id: string; label: string; factor: number };
 export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }[] {
   if (mode === 'city' || mode === 'county') {
@@ -56,7 +61,7 @@ export function contestRules(mode: GameMode, input: unknown) {
   const hints = tags.find(tag => tag.id.startsWith('hints-'));
   return {
     tags: tags.map(tag => tag.id),
-    multiplier: tags.reduce((product, tag) => product * tag.factor, local ? .5 : 1),
+    multiplier: tags.reduce((product, tag) => product * tag.factor, local ? .25 : 1),
     perQuestion: local,
     timeLimit: timed ? Number(timed.id.slice(5)) : local ? 120 : 180,
     hintLimit: hints ? Number(hints.id.slice(6)) : 7,

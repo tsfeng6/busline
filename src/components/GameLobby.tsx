@@ -2,6 +2,7 @@ import { ArrowLeft, Gamepad2, History, Trophy } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { contestRules, contestTagGroups, contests } from '../utils/contestRules';
 import { getContestLeaderboard, type LeaderboardEntry } from '../utils/gameAccount';
+import { hasContestDistricts } from '../utils/contestQuestions';
 import type { GameMode } from '../utils/offlineGame';
 import { GameLadderPanel } from './GameLadderPanel';
 import { GameModeVisual } from './GameModeVisual';
@@ -15,9 +16,7 @@ type LobbyProps = {
   onTags: (tags: string[]) => void;
   mode: GameMode;
   onMode: (mode: GameMode) => void;
-  difficulty: 'easy' | 'medium' | 'hard' | 'hell';
   bestScore: number;
-  onDifficulty: (difficulty: 'easy' | 'hell') => void;
   province: string;
   provinces: string[];
   onProvince: (province: string) => void;
@@ -78,7 +77,7 @@ export function GameLobby(props: LobbyProps) {
   const competitive = props.division === 'contest';
   const mode = competitive ? props.contest.game : props.mode;
   const scope = mode === 'county' ? props.countyProvince : props.contest.scope;
-  const rules = contestRules(props.contest.game, props.tags);
+  const rules = contestRules(mode, props.tags);
   const local = mode === 'line' || mode === 'station';
   const locked = competitive
     ? props.accountLoading || !props.accountEnabled || (mode === 'county' && !props.countyProvinces.includes(scope))
@@ -102,6 +101,9 @@ export function GameLobby(props: LobbyProps) {
           {division === 'contest' ? <><Trophy size={17} />竞赛</> : <><Gamepad2 size={17} />模拟</>}
         </button>)}
       </nav>
+      {competitive && props.accountEnabled && scope && <div className="mb-4">
+        <ContestBoard key={`${mode}:${scope}`} game={mode} scope={scope} accountName={props.accountName} />
+      </div>}
       <div className="grid items-start gap-4 lg:grid-cols-[250px_minmax(0,1fr)]">
         <section aria-label="选择项目" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
           {competitive ? contests.map(contest => <button key={contest.id} type="button" onClick={() => props.onContest(contest)}
@@ -116,10 +118,9 @@ export function GameLobby(props: LobbyProps) {
         <section className="space-y-4 rounded-2xl border border-m3-outline-variant/30 bg-m3-surface p-4 shadow-sm sm:p-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-black">{competitive ? props.contest.title : gameNames[mode]}</h2>
-            {competitive ? <strong className="rounded-lg bg-m3-primary-container px-2.5 py-1 tabular-nums text-m3-on-primary-container">积分 {rules.multiplier}×</strong>
-              : <span className="text-xs text-slate-600">本机最佳 {props.bestScore} 分</span>}
+            <strong className="rounded-lg bg-m3-primary-container px-2.5 py-1 tabular-nums text-m3-on-primary-container">积分 {rules.multiplier}×</strong>
           </div>
-          {competitive && local && <p className="text-xs text-slate-600">默认市区常规线路 · 显示底图和站点 · 7 次提示 · 每题 2 分钟 · 选择题</p>}
+          {local && <p className="text-xs text-slate-600">默认市区常规线路 · 显示底图和站点 · 7 次提示 · 每题 2 分钟 · 选择题</p>}
           {mode === 'county' && <label className="block max-w-xs text-xs font-bold">省份
             <select className={control} value={props.countyProvince} onChange={event => props.onCountyProvince(event.target.value)}>
               {props.countyProvinces.map(province => <option key={province} value={province}>{province}</option>)}
@@ -134,12 +135,10 @@ export function GameLobby(props: LobbyProps) {
                 {props.cities.map(city => <option key={city}>{city}</option>)}
               </select></label>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" aria-pressed={props.difficulty !== 'hell'} className={choice(props.difficulty !== 'hell')} onClick={() => props.onDifficulty('easy')}>标准（选择题）</button>
-              <button type="button" aria-pressed={props.difficulty === 'hell'} className={choice(props.difficulty === 'hell')} onClick={() => props.onDifficulty('hell')}>地狱（填空题）</button>
-            </div>
+            {props.city && !hasContestDistricts(props.city) && (rules.range === 'urban' || rules.range === 'special') &&
+              <p className="text-xs text-slate-600">市区范围按已收录站点密集区估算。</p>}
           </>}
-          {competitive && <div className="grid gap-3">
+          <div className="grid gap-3">
             {contestTagGroups(mode).map(group => <fieldset key={group.label} className="min-w-0">
               <legend className="mb-1.5 text-xs font-bold text-slate-600">{group.label}</legend>
               <div className="flex flex-wrap gap-1.5">
@@ -152,7 +151,8 @@ export function GameLobby(props: LobbyProps) {
                 })}
               </div>
             </fieldset>)}
-          </div>}
+          </div>
+          {!competitive && <p className="text-xs text-slate-600">本机最佳 {props.bestScore} 分</p>}
           {props.error && <p role="alert" className="text-sm text-m3-error">{props.error}</p>}
           {!competitive && props.catalogLoading && <p role="status" className="text-sm text-slate-600">正在读取城市…</p>}
           {competitive && !props.accountEnabled && <p role="status" className="text-sm text-slate-600">竞赛服务暂不可用。</p>}
@@ -165,7 +165,6 @@ export function GameLobby(props: LobbyProps) {
               <History size={16} />复盘上局
             </button>}
           </div>
-          {competitive && props.accountEnabled && scope && <ContestBoard key={`${mode}:${scope}`} game={mode} scope={scope} accountName={props.accountName} />}
         </section>
       </div>
       {competitive && <footer className="mt-4 space-y-1 px-1 pb-6 text-xs leading-relaxed text-slate-600">

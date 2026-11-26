@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
 import {regularGameRoute,eligibleGameLines,clipRouteToRadius,distanceMeters,nearbyLines,gpsToMap,claimDailyLocation,savedCountySeats,provinceForCity,radiusRing} from '../src/utils/localTransit';
-import {COUNTY_GAME_RADIUS_METERS,createOfflineQuestion,gameStage,nearbyStationChoices,shuffle} from '../src/utils/offlineGame';
+import {COUNTY_GAME_RADIUS_METERS,createOfflineQuestion,gameStage,nearbyStationChoices} from '../src/utils/offlineGame';
 import {getGameTimeLimit, recordGameAnswer} from '../src/utils/gameTimer';
 import {CityDataCache} from '../src/utils/cityDataCache';
 import {expandSavedStationCoverage} from '../src/utils/stationCoverage';
+import {contestRules, contestPrompts} from '../src/utils/contestRules';
+import {drawContestQuestion} from '../src/utils/contestDrawing';
+import {createSimulationQuestion} from '../src/utils/simulationQuestion';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
 const center:[number,number]=[116,39];
 const data=()=>normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',filtered:false,retrievalComplete:true,capturedAt:new Date().toISOString(),
@@ -91,24 +94,41 @@ test('actual game generation never invokes provider search services and accepts 
  const source=fs.readFileSync('src/App.tsx','utf8'),ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let declaration:ts.VariableDeclaration|undefined;
  const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='generateQuestion')declaration=node;ts.forEachChild(node,visit);};visit(ast);assert.ok(declaration);
  const code=ts.transpile(`const ${declaration.getText(ast)};`,{target:ts.ScriptTarget.ES2022}),snapshot=data(),seat=savedCountySeats(snapshot)[0];
- let calls=0,question:any;let basemap:string;let maskRadius:number;const ref=(current:any)=>({current});
- const forbidden=class{constructor(){calls++;throw Error('No provider query permitted');}};
- const scope:any={window:{AMap:{PlaceSearch:forbidden,LineSearch:forbidden,StationSearch:forbidden,DistrictSearch:forbidden,Geocoder:forbidden,
-  Polyline:class{},CircleMarker:class{},Bounds:class{}}},mapInstance:{setFitView(){},setZoomAndCenter(){},setBounds(){}},gameProvince:'北京市',gameCountyProvince:'北京市',gameSessionIdRef:ref(0),gameRunRef:ref(null),
-  loadPublishedCities:async()=>[{city:snapshot.city,province:'北京市',countySeats:[seat]}],loadGameCity:async(city:string)=>{assert.equal(city,snapshot.city);return snapshot;},
-  roadViewportCleanupRef:ref(null),activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),allMapStopsRef:ref(new Map()),roadStopsDataRef:ref(new Map()),
-  lineGroupRef:ref({clearOverlays(){},addOverlay(){}}),markerGroupRef:ref({clearOverlays(){},getOverlays(){return [];},addOverlay(){},addOverlays(){}}),clearStopMarkerGroup(){},
-  shuffle,createOfflineQuestion,getGameTimeLimit,radiusRing,lineThickness:'thin',gameTimeRemainingMsRef:ref(null),gameDeadlineRef:ref(null),questionShownAtRef:ref(null),currentGameQuestionRef:ref(null),setGameQuestionData:(value:any)=>question=value,
-  setMapMode:(mode:string)=>{basemap=mode;},setCountyGameMask:(_:unknown,radius:number)=>{maskRadius=radius;},
-  isMinigameActiveRef:ref(true),restoreMapAfterMinigame(){},setGameDataError:(message:string)=>{throw Error(message);}};
- const proxy=new Proxy(scope,{has:(target,key)=>key in target||(typeof key==='string'&&key.startsWith('set')),get:(target,key)=>key in target?target[key]:typeof key==='string'&&key.startsWith('set')?()=>{}:undefined});
+ let question: any;
+ let drawing: ReturnType<typeof drawContestQuestion> | undefined;
+ const ref = <T,>(current: T) => ({ current });
+ const scope = {
+  gameRulesRef: ref(contestRules('line', ['unusual', 'fill'])), questionAbortRef: ref<AbortController | null>(null),
+  gameProvince: '北京市', gameCountyProvince: '北京市', gameSessionIdRef: ref(0), gameRunRef: ref(null),
+  loadPublishedCities: async () => [{city: snapshot.city, province: '北京市', countySeats: [seat]}],
+  loadGameCity: async (city: string) => { assert.equal(city, snapshot.city); return snapshot; },
+  getRankedPuzzle: () => { throw Error('模拟不应请求竞赛服务'); },
+  roadViewportCleanupRef: ref(null), activeRawMarkersRef: ref([]), roadStopMarkersRef: ref([]),
+  allMapStopsRef: ref(new Map()), roadStopsDataRef: ref(new Map()), lineGroupRef: ref(null), markerGroupRef: ref(null),
+  clearStopMarkerGroup() {}, setCountyGameMask() {},
+  createSimulationQuestion, drawContestQuestion, contestPrompts,
+  gameTimeRemainingMsRef: ref(180000), questionShownAtRef: ref<number | null>(null), currentGameQuestionRef: ref(null),
+  setSimulationDrawing: (value: typeof drawing) => { drawing = value; }, setGameQuestionData: (value: unknown) => { question = value; },
+  isMinigameActiveRef: ref(true), restoreMapAfterMinigame() {}, setGameDataError: (message: string) => { throw Error(message); },
+ };
+ const proxy=new Proxy(scope,{has:(target,key)=>key in target||(typeof key==='string'&&key.startsWith('set')),get:(target,key)=>key in target?Reflect.get(target,key):typeof key==='string'&&key.startsWith('set')?()=>{}:undefined});
  const run=Function('scope',`with(scope){${code};return generateQuestion;}`)(proxy);
- for(const mode of ['line','station','city','county']){
-  question=null;scope.questionShownAtRef.current=null;await run(mode,'easy','北京市',1);assert.ok(question);assert.equal(typeof scope.questionShownAtRef.current,'number');
-  assert.equal(basemap,mode==='city'||mode==='county'?'blank':'normal');
-  if(mode==='county')assert.equal(maskRadius,10_000);
+ for (const mode of ['line', 'city', 'county'] as const) {
+  scope.gameRulesRef.current = contestRules(mode, mode === 'line' ? ['unusual','fill','time-5','no-base','no-stops'] : ['fill']);
+  scope.questionShownAtRef.current = null;
+  await run(mode,'北京市',12);
+  assert.ok(question?.isFillIn);
+  assert.deepEqual(question.options, []);
+  assert.ok(drawing?.path);
+  assert.equal(drawing?.county, mode === 'county');
+  assert.equal(drawing?.basemap, '');
+  assert.equal(typeof scope.questionShownAtRef.current,'number');
+  if (mode === 'line') {
+   assert.equal(scope.gameTimeRemainingMsRef.current, 5000);
+   assert.deepEqual(drawing?.stops, []);
+  }
  }
- assert.equal(calls,0);
+ await assert.rejects(run('line','未收录城市',1), /已有线路图/);
 });
 
 test('daily location effect waits for onboarding and runs only once across openings on the same day',()=>{

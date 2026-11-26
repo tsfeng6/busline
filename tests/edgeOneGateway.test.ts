@@ -235,8 +235,8 @@ test('ranked gateway exposes only the drawing until the server grades the answer
 
 test('contest labels are exclusive and only valid for their mode', async () => {
   const { contestRules } = await import('../src/utils/contestRules');
-  assert.equal(contestRules('line', []).multiplier, .5);
-  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 60000);
+  assert.equal(contestRules('line', []).multiplier, .25);
+  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 30000);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).hintLimit, 3);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).timeLimit, 10);
   assert.equal(contestRules('county', ['fill']).multiplier, 3);
@@ -247,8 +247,8 @@ test('contest labels are exclusive and only valid for their mode', async () => {
 
 test('contest question scope, nearby choices and diagram layers follow server rules', async () => {
   const { contestRules } = await import('../src/utils/contestRules');
-  const { createLocalContestQuestion } = await import('../edgeone/city-gateway/contestQuestions');
-  const { rankedDrawing } = await import('../edgeone/city-gateway/rankedGame');
+  const { createLocalContestQuestion } = await import('../src/utils/contestQuestions');
+  const { drawContestQuestion } = await import('../src/utils/contestDrawing');
   const line = (name: string, points: [number, number][]) => ({
     ...sample().lines[0], id: name, name, path: points,
     via_stops: points.map(([lng, lat], index) => ({ id: name + index,
@@ -263,17 +263,17 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   const question = createLocalContestQuestion('line', data, contestRules('line', ['nearby']), districts, '', random);
   assert.equal(question.correctAnswer, '1路');
   assert.deepEqual(question.options, ['1路','2路']);
-  assert.ok(rankedDrawing(question, 'line').arrows?.length);
-  assert.ok(rankedDrawing(question, 'line').basemap);
+  assert.ok(drawContestQuestion(question, 'line').arrows?.length);
+  assert.ok(drawContestQuestion(question, 'line').basemap);
 
   const unusual = { ...line('观光环线', [[116.7,39.8],[116.9,39.9]]), via_stops: [] };
   const unrestrictedData = { ...data, lines: [unusual, ...data.lines] };
   const unrestricted = createLocalContestQuestion('line', unrestrictedData, contestRules('line', ['unusual', 'nearby']), [], '', random);
   assert.equal(unrestricted.correctAnswer, '观光环线');
-  assert.ok(rankedDrawing(unrestricted, 'line').arrows?.length);
+  assert.ok(drawContestQuestion(unrestricted, 'line').arrows?.length);
 
   const station = createLocalContestQuestion('station', data, contestRules('station', ['cycle','no-stops','no-base']), districts, '', random);
-  const drawing = rankedDrawing(station, 'station', true);
+  const drawing = drawContestQuestion(station, 'station', true);
   assert.equal(station.correctAnswer, '中心站');
   assert.equal(drawing.frames?.length, 3);
   assert.ok(drawing.target);

@@ -1,15 +1,19 @@
-import type { BusLine } from '../../src/types';
-import type { CityDataset } from '../../src/utils/cityDataset';
-import type { ContestRules } from '../../src/utils/contestRules';
-import { distanceMeters, routeName, type Point } from '../../src/utils/localTransit';
-import { shuffle, type OfflineQuestion } from '../../src/utils/offlineGame';
+import type { BusLine } from '../types';
+import type { CityDataset } from './cityDataset';
+import type { ContestRules } from './contestRules';
+import { distanceMeters, radiusRing, routeName, type CountySeat, type Point } from './localTransit';
+import { createOfflineQuestion, shuffle, type OfflineQuestion } from './offlineGame';
 
 type Ring = Point[];
 type Polygon = Ring[];
 const districts: Record<string, { code: string; names: string[] }> = {
   北京市: { code: '110000', names: ['东城', '西城', '海淀', '朝阳', '丰台', '石景山'] },
   上海市: { code: '310000', names: ['黄浦', '静安', '徐汇', '长宁', '普陀', '虹口', '杨浦'] },
+  保定市: { code: '130600', names: ['莲池', '竞秀'] },
+  乌鲁木齐市: { code: '650100', names: ['天山', '沙依巴克'] },
+  宜昌市: { code: '420500', names: ['西陵', '伍家岗'] },
 };
+export const hasContestDistricts = (city: string) => Object.hasOwn(districts, city);
 const districtReads = new Map<string, Promise<Polygon[]>>();
 
 export function loadContestDistricts(city: string, read: typeof fetch): Promise<Polygon[]> {
@@ -52,8 +56,35 @@ const routeStops = (line: BusLine) => (line.via_stops ?? []).flatMap(stop => {
 const options = (answer: string, candidates: string[], random: () => number) =>
   shuffle([answer, ...[...new Set(candidates.filter(name => name !== answer))].slice(0, 3)], random);
 
+export function createNetworkContestQuestion(
+  mode: 'city' | 'county', data: CityDataset, rules: ContestRules, candidates: string[], previous: string,
+  seat?: CountySeat, random = Math.random,
+): OfflineQuestion {
+  const question = createOfflineQuestion(mode, 'hard', data, candidates, 1, previous, seat, random);
+  if (!rules.fill && question.options.length < 2) throw Error('题库暂无足够的选择题选项。');
+  return { ...question, isFillIn: rules.fill, options: rules.fill ? [] : question.options };
+}
+
+export function estimateUrbanDistrict(data: CityDataset): Polygon[] {
+  type Cell = { count: number; lng: number; lat: number };
+  const cells = new Map<string, Cell>();
+  for (const { location } of data.stops) {
+    if (!Number.isFinite(location?.lng) || !Number.isFinite(location?.lat)) continue;
+    const { lng, lat } = location;
+    const key = Math.floor(lng / 0.04) + ':' + Math.floor(lat / 0.04);
+    const cell = cells.get(key) ?? { count: 0, lng: 0, lat: 0 };
+    cell.count++;
+    cell.lng += lng;
+    cell.lat += lat;
+    cells.set(key, cell);
+  }
+  const center = [...cells.values()].reduce<Cell | undefined>(
+    (best, cell) => !best || cell.count > best.count ? cell : best, undefined);
+  return center ? [[radiusRing([center.lng / center.count, center.lat / center.count], 12000)]] : [];
+}
+
 export function createLocalContestQuestion(
-  mode: 'line' | 'station', data: CityDataset, rules: ContestRules, polygons: Polygon[], previous: string, random: () => number,
+  mode: 'line' | 'station', data: CityDataset, rules: ContestRules, polygons: Polygon[], previous: string, random = Math.random,
 ): OfflineQuestion {
   const checks = polygons.map(([ring, ...holes]) => {
     const bounds = ring.reduce(([w,s,e,n], [x,y]) => [Math.min(w,x), Math.min(s,y), Math.max(e,x), Math.max(n,y)],
@@ -84,7 +115,7 @@ export function createLocalContestQuestion(
     const pool = eligible.filter(entry => unrestricted ||
       (entry.stops.length >= 2 && (citywide || entry.stops.every(stop => urban(stop.lngLat)))));
     const picked = shuffle(pool.filter(entry => routeName(entry.line.name) !== previous), random)[0] ?? pool[0];
-    if (!picked || (!rules.fill && new Set(pool.map(entry => routeName(entry.line.name))).size < 2)) throw Error('所选标签下暂无足够的计分线路。');
+    if (!picked || (!rules.fill && new Set(pool.map(entry => routeName(entry.line.name))).size < 2)) throw Error('所选标签下暂无足够的线路。');
     const answer = routeName(picked.line.name);
     const middleStop = picked.stops[Math.floor(picked.stops.length / 2)];
     const target = middleStop?.lngLat ?? picked.line.path[Math.floor(picked.line.path.length / 2)];
@@ -107,7 +138,7 @@ export function createLocalContestQuestion(
   const all = [...stations.values()].flat();
   const candidates = all.filter(station => new Set(station.routes.map(route => routeName(route.line.name))).size >= 2);
   const picked = shuffle(candidates.filter(station => station.name !== previous), random)[0] ?? candidates[0];
-  if (!picked || (!rules.fill && stations.size < 2)) throw Error('所选标签下暂无足够的计分站点。');
+  if (!picked || (!rules.fill && stations.size < 2)) throw Error('所选标签下暂无足够的站点。');
   const names = rules.fill ? [] : rules.nearby ? [...all].sort((a,b) => distanceMeters(a.lngLat,picked.lngLat)-distanceMeters(b.lngLat,picked.lngLat)) : shuffle(all,random);
   return { ...shared, correctAnswer: picked.name, options: rules.fill ? [] : options(picked.name, names.map(station => station.name), random),
     targetPoint: { name: picked.name, lngLat: picked.lngLat }, fallbackCenter: picked.lngLat,
