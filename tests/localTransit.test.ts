@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import ts from 'typescript';
 import {regularGameRoute,eligibleGameLines,clipRouteToRadius,distanceMeters,nearbyLines,gpsToMap,claimDailyLocation,savedCountySeats,provinceForCity,radiusRing} from '../src/utils/localTransit';
-import {createOfflineQuestion,gameStage,nearbyStationChoices,shuffle} from '../src/utils/offlineGame';
+import {COUNTY_GAME_RADIUS_METERS,createOfflineQuestion,gameStage,nearbyStationChoices,shuffle} from '../src/utils/offlineGame';
 import {getGameTimeLimit, recordGameAnswer} from '../src/utils/gameTimer';
 import {CityDataCache} from '../src/utils/cityDataCache';
 import {expandSavedStationCoverage} from '../src/utils/stationCoverage';
@@ -54,7 +54,14 @@ test('all offline modes use real saved answers and the chosen city; county windo
   const county=savedCountySeats(snapshot)[0],question=createOfflineQuestion(mode,'medium',snapshot,mode==='county'?[county.name]:['北京市'],1,'',county,random);
   assert.ok(question.correctAnswer);assert.ok(question.options.includes(question.correctAnswer));
   if(mode==='line'||mode==='station')assert.ok(question.lineInfos?.every(line=>regularGameRoute(line.name)));
-  if(mode==='county'){assert.equal(question.countyWindow?.radius,3000);assert.ok(question.networkPaths?.every(path=>path.every(point=>distanceMeters(point,county.center)<=3000.0001)));}
+  if(mode==='city'||mode==='county')assert.equal(question.showBasemap,false);
+  if(mode==='county'){
+   assert.equal(question.countyWindow?.radius,10_000);
+   assert.match(question.promptText,/10公里/);
+   const distances=question.networkPaths!.flat().map(point=>distanceMeters(point,county.center));
+   assert.ok(distances.some(distance=>distance>3000));
+   assert.ok(distances.every(distance=>distance<=10_000.0001));
+  }
  }
  const station=createOfflineQuestion('station','hell',snapshot,[],1);assert.ok(station.lineInfos?.every(line=>regularGameRoute(line.name)));
 });
@@ -84,7 +91,7 @@ test('actual game generation never invokes provider search services and accepts 
  const source=fs.readFileSync('src/App.tsx','utf8'),ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let declaration:ts.VariableDeclaration|undefined;
  const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='generateQuestion')declaration=node;ts.forEachChild(node,visit);};visit(ast);assert.ok(declaration);
  const code=ts.transpile(`const ${declaration.getText(ast)};`,{target:ts.ScriptTarget.ES2022}),snapshot=data(),seat=savedCountySeats(snapshot)[0];
- let calls=0,question:any;const ref=(current:any)=>({current});
+ let calls=0,question:any;let basemap:string;let maskRadius:number;const ref=(current:any)=>({current});
  const forbidden=class{constructor(){calls++;throw Error('No provider query permitted');}};
  const scope:any={window:{AMap:{PlaceSearch:forbidden,LineSearch:forbidden,StationSearch:forbidden,DistrictSearch:forbidden,Geocoder:forbidden,
   Polyline:class{},CircleMarker:class{},Bounds:class{}}},mapInstance:{setFitView(){},setZoomAndCenter(){},setBounds(){}},gameProvince:'北京市',gameCountyProvince:'北京市',gameSessionIdRef:ref(0),
@@ -92,10 +99,15 @@ test('actual game generation never invokes provider search services and accepts 
   roadViewportCleanupRef:ref(null),activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),allMapStopsRef:ref(new Map()),roadStopsDataRef:ref(new Map()),
   lineGroupRef:ref({clearOverlays(){},addOverlay(){}}),markerGroupRef:ref({clearOverlays(){},getOverlays(){return [];},addOverlay(){},addOverlays(){}}),clearStopMarkerGroup(){},
   shuffle,createOfflineQuestion,getGameTimeLimit,radiusRing,lineThickness:'thin',gameTimeRemainingMsRef:ref(null),gameDeadlineRef:ref(null),currentGameQuestionRef:ref(null),setGameQuestionData:(value:any)=>question=value,
+  setMapMode:(mode:string)=>{basemap=mode;},setCountyGameMask:(_:unknown,radius:number)=>{maskRadius=radius;},
   isMinigameActiveRef:ref(true),restoreMapAfterMinigame(){},setGameDataError:(message:string)=>{throw Error(message);}};
  const proxy=new Proxy(scope,{has:(target,key)=>key in target||(typeof key==='string'&&key.startsWith('set')),get:(target,key)=>key in target?target[key]:typeof key==='string'&&key.startsWith('set')?()=>{}:undefined});
  const run=Function('scope',`with(scope){${code};return generateQuestion;}`)(proxy);
- for(const mode of ['line','station','city','county']){question=null;await run(mode,'easy','北京市',1);assert.ok(question);}
+ for(const mode of ['line','station','city','county']){
+  question=null;await run(mode,'easy','北京市',1);assert.ok(question);
+  assert.equal(basemap,mode==='city'||mode==='county'?'blank':'normal');
+  if(mode==='county')assert.equal(maskRadius,10_000);
+ }
  assert.equal(calls,0);
 });
 
@@ -115,9 +127,9 @@ test('county mask replacement and removal do not leave overlays on the normal ma
  const source=fs.readFileSync('src/App.tsx','utf8'),ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let declaration:ts.VariableDeclaration|undefined;
  const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='setCountyGameMask')declaration=node;ts.forEachChild(node,visit);};visit(ast);assert.ok(declaration);
  const code=ts.transpile(`const ${declaration.getText(ast)};`,{target:ts.ScriptTarget.ES2022});let added=0,removed=0;
- const scope={window:{AMap:{Polygon:class{constructor(public options:any){assert.equal(options.path.length,2);assert.equal(options.fillOpacity,1);}}}},mapRef:{current:{add(){added++;},remove(){removed++;}}},countyMaskRef:{current:null},radiusRing};
+ const scope={window:{AMap:{Polygon:class{constructor(public options:any){assert.equal(options.path.length,2);assert.equal(options.fillOpacity,1);}}}},mapRef:{current:{add(){added++;},remove(){removed++;}}},countyMaskRef:{current:null},radiusRing,COUNTY_GAME_RADIUS_METERS};
  const run=Function('scope',`with(scope){${code};return setCountyGameMask;}`)(scope);
- run(center,3000);run([116.01,39],3000);assert.equal(added,2);assert.equal(removed,1);run();assert.equal(removed,2);assert.equal(scope.countyMaskRef.current,null);
+ run(center);run([116.01,39],10_000);assert.equal(added,2);assert.equal(removed,1);run();assert.equal(removed,2);assert.equal(scope.countyMaskRef.current,null);
 });
 
 test('box and station connectivity draw complete priority routes without changing camera or zoom', async () => {

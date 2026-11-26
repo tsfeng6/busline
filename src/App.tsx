@@ -1,7 +1,7 @@
 import {NearbyRoutes,type NearbyState} from './components/NearbyRoutes';
 import { loadNearbyTransitTiles } from './utils/nearbyTransitTiles';
 import {loadPublishedCities,loadGameCity} from './utils/publishedTransit';
-import {createOfflineQuestion,shuffle} from './utils/offlineGame';
+import {COUNTY_GAME_RADIUS_METERS,createOfflineQuestion,gameStage,shuffle} from './utils/offlineGame';
 import {DAILY_LOCATION_KEY,claimDailyLocation,gpsToMap,nearbyLines,cityTouchesRadius,radiusRing,type PublishedCity,type Point} from './utils/localTransit';
 import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
@@ -411,7 +411,7 @@ export default function App() {
   },[showMinigameModal]);
   useEffect(()=>{if(gameCities.length&&!gameCities.some(item=>item.city===gameCity))setGameCity(gameCities[0].city);},[gameCatalog,gameProvince,gameCity]);
   const countyMaskRef=useRef<any>(null);
-  const setCountyGameMask=(center?:Point,radius=3000)=>{
+  const setCountyGameMask=(center?:Point,radius=COUNTY_GAME_RADIUS_METERS)=>{
     const map=mapRef.current,AMap=(window as any).AMap;
     if(countyMaskRef.current){map?.remove(countyMaskRef.current);countyMaskRef.current=null;}
     if(!center||!map||!AMap?.Polygon)return;
@@ -785,7 +785,7 @@ export default function App() {
       setReviewIndex(0);
       setReviewAutoPlay(false);
       setReviewHoveredStop(null);
-      setMapMode('normal');
+      setMapMode(gameStage(mode, diff, 1).showBasemap ? 'normal' : 'blank');
       void generateQuestion(mode, diff, city, 1, undefined, activeProv);
     };
 

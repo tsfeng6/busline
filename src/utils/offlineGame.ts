@@ -1,6 +1,7 @@
 import type {BusLine} from '../types';
 import type {CityDataset} from './cityDataset';
 import {clipRouteToRadius,distanceMeters,eligibleGameLines,regularGameRoute,routeName,type CountySeat,type Point} from './localTransit';
+export const COUNTY_GAME_RADIUS_METERS = 10_000;
 export type GameMode='line'|'station'|'city'|'county';
 export type GameDifficulty='easy'|'medium'|'hard'|'hell';
 export type GameStage={showBasemap:boolean;showStops:boolean;isFillIn:boolean;confusing?:boolean};
@@ -36,7 +37,7 @@ function confusingLineChoices(answer:string,pool:BusLine[],random:()=>number){
  const best=ranked.filter(item=>item.score>0).map(item=>item.name);return choices(answer,best.length>=3?best:ranked.map(item=>item.name),random);
 }
 export function gameStage(mode:GameMode,difficulty:GameDifficulty,number:number):GameStage{
- if(mode!=='line'&&mode!=='station')return {showBasemap:true,showStops:true,isFillIn:number>10};
+ if(mode!=='line'&&mode!=='station')return {showBasemap:false,showStops:true,isFillIn:number>10};
  const hell=difficulty==='hell';
  // Ranges are inclusive: questions 6–10 still retain the basemap in the
  // standard ladder; only the distractors become deliberately similar.
@@ -67,12 +68,12 @@ export function createOfflineQuestion(mode:GameMode,difficulty:GameDifficulty,da
  }
  if(mode==='county'){
   if(!county)throw Error('该省份暂无已保存的县政府站点定位信息。');
-  const radius=3000,paths=data.lines.flatMap(line=>clipRouteToRadius(line.path,county.center,radius)).map(compact);
+  const radius=COUNTY_GAME_RADIUS_METERS,paths=data.lines.flatMap(line=>clipRouteToRadius(line.path,county.center,radius)).map(compact);
   if(!paths.length)throw Error('此县政府站点周边暂无已保存线网，请重试其他县城。');
   const options=choices(county.name,candidates,random);
-  return {targetCity:county.name,correctAnswer:county.name,promptText:'以已保存的县政府站点为近似中心，仅显示周边3公里线网，请猜县城。',options,isFillIn:number>10||options.length<2,networkPaths:paths,
+  return {targetCity:county.name,correctAnswer:county.name,promptText:`以已保存的县政府站点为近似中心，仅显示周边${radius / 1000}公里线网，请猜县城。`,showBasemap:gameStage(mode,difficulty,number).showBasemap,options,isFillIn:number>10||options.length<2,networkPaths:paths,
    networkStops:stops(data.lines).filter(stop=>distanceMeters(stop.lngLat,county.center)<=radius),fallbackCenter:county.center,countyWindow:{center:county.center,radius}};
  }
  const options=choices(data.city,candidates,random);
- return {targetCity:data.city,correctAnswer:data.city,promptText:'根据网站已有的公交线网，猜一猜这是哪个城市？',options,isFillIn:number>5||options.length<2,networkPaths:data.lines.map(line=>compact(line.path)),networkStops:stops(data.lines)};
+ return {targetCity:data.city,correctAnswer:data.city,promptText:'根据网站已有的公交线网，猜一猜这是哪个城市？',showBasemap:gameStage(mode,difficulty,number).showBasemap,options,isFillIn:number>5||options.length<2,networkPaths:data.lines.map(line=>compact(line.path)),networkStops:stops(data.lines)};
 }
