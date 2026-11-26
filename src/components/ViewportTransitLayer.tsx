@@ -118,7 +118,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
         context.clearRect(0, 0, width, height);
         const settings = options.current;
         context.globalAlpha = settings.subdued ? .24 : .93;
-        context.strokeStyle = '#52796f';
+        context.strokeStyle = '#346DB3';
         context.lineCap = 'round';
         context.lineJoin = 'round';
         const routes = new Set<string>(), stops = new Map<string, ViewportStop>();
@@ -143,7 +143,7 @@ export function ViewportTransitLayer({ map, enabled, selection, ...style }: Opti
             active += running;
             context.beginPath();
             context.arc(pixel.x, pixel.y, Math.min(9, 3 + Math.sqrt(running) / 4), 0, 2 * Math.PI);
-            context.fillStyle = running ? '#52796f' : '#a9b1ad';
+            context.fillStyle = running ? '#346DB3' : '#a9b1ad';
             context.fill();
           }
           visibleStops = [];

@@ -5,48 +5,50 @@
 @source "./components";
 
 @theme {
-  --color-m3-primary: #52796F;
+  --color-m3-primary: #346DB3;
   --color-m3-on-primary: #FFFFFF;
-  --color-m3-primary-container: #D7E6DD;
-  --color-m3-on-primary-container: #1C332B;
+  --color-m3-primary-container: #DCEAFF;
+  --color-m3-on-primary-container: #193B69;
 
-  --color-m3-secondary: #5C766B;
+  --color-m3-secondary: #506785;
   --color-m3-on-secondary: #FFFFFF;
-  --color-m3-secondary-container: #DFEBE3;
-  --color-m3-on-secondary-container: #1A3127;
+  --color-m3-secondary-container: #E3ECF9;
+  --color-m3-on-secondary-container: #233D60;
 
-  --color-m3-tertiary: #5E7480;
+  --color-m3-tertiary: #655C83;
   --color-m3-on-tertiary: #FFFFFF;
-  --color-m3-tertiary-container: #DCE7EC;
-  --color-m3-on-tertiary-container: #1A2E38;
+  --color-m3-tertiary-container: #EAE5F6;
+  --color-m3-on-tertiary-container: #382D54;
 
   --color-m3-error: #B56666;
   --color-m3-on-error: #FFFFFF;
   --color-m3-error-container: #F8DFDF;
   --color-m3-on-error-container: #471D1D;
 
-  --color-m3-surface: #FAFBF9;
-  --color-m3-surface-dim: #E8EFEA;
+  --color-m3-background: #F9F7E9;
+  --color-m3-on-surface: #162743;
+  --color-m3-surface: #FFFDF3;
+  --color-m3-surface-dim: #EDE7D4;
   --color-m3-surface-bright: #FFFFFF;
   --color-m3-surface-container-lowest: #FFFFFF;
-  --color-m3-surface-container-low: #F3F6F4;
-  --color-m3-surface-container: #EDF2EE;
-  --color-m3-surface-container-high: #E6ECE7;
-  --color-m3-surface-container-highest: #DEE6E0;
+  --color-m3-surface-container-low: #F9F7E9;
+  --color-m3-surface-container: #F4EFDE;
+  --color-m3-surface-container-high: #F0EAD6;
+  --color-m3-surface-container-highest: #E9E2CD;
 
-  --color-m3-outline: #72857A;
-  --color-m3-outline-variant: #D3DCD6;
+  --color-m3-outline: #747889;
+  --color-m3-outline-variant: #DDD9CB;
 
-  --color-morandi-50: #F6F8F6;
-  --color-morandi-100: #EBF0EC;
-  --color-morandi-200: #D8E3DC;
-  --color-morandi-300: #BED1C5;
-  --color-morandi-400: #9BB8A6;
-  --color-morandi-500: #749983;
-  --color-morandi-600: #52796F;
-  --color-morandi-700: #426159;
-  --color-morandi-800: #334B45;
-  --color-morandi-900: #243530;
+  --color-morandi-50: #F3F7FF;
+  --color-morandi-100: #E8F1FE;
+  --color-morandi-200: #DCEAFF;
+  --color-morandi-300: #C3DAFA;
+  --color-morandi-400: #9ABDE8;
+  --color-morandi-500: #6F9AD2;
+  --color-morandi-600: #346DB3;
+  --color-morandi-700: #285489;
+  --color-morandi-800: #1C3D67;
+  --color-morandi-900: #142A4A;
 }
 
 @layer base {
@@ -54,8 +56,8 @@
     margin: 0;
     padding: 0;
     overflow: hidden;
-    background-color: #F4F6F4;
-    color: #1C2F27;
+    background-color: var(--color-m3-background);
+    color: var(--color-m3-on-surface);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
 }
@@ -80,7 +82,7 @@
   .dialog-enter { animation: none; }
 }
 
-/* Custom subtle scrollbar in Morandi sage tone */
+/* Custom scrollbar */
 .custom-scrollbar::-webkit-scrollbar {
   width: 5px;
   height: 5px;
@@ -89,10 +91,68 @@
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #C4D2C9;
+  background: #C4CEE0;
   border-radius: 9999px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #A0B6AA;
+  background: #9CACC9;
 }
 
+
+.contest-card {
+  background: var(--color-m3-primary);
+  box-shadow: 0 8px 24px -14px rgb(20 54 100 / 65%);
+}
+
+.contest-preview {
+  transition: box-shadow .22s, background-color .22s;
+}
+
+.contest-preview:hover {
+  background-color: #2c60a3;
+  box-shadow: 0 13px 28px -15px rgb(20 54 100 / 75%);
+}
+
+.contest-network {
+  position: relative;
+  min-height: 100%;
+  overflow: hidden;
+  background-color: rgb(14 47 93 / 28%);
+  background-image: linear-gradient(rgb(245 248 255 / 9%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(245 248 255 / 9%) 1px, transparent 1px);
+  background-position: center;
+  background-size: 24px 24px;
+}
+
+.contest-network image {
+  filter: brightness(0) invert(95%) sepia(12%) saturate(360%);
+}
+
+.contest-region-map {
+  height: clamp(12rem, 55vw, 36rem);
+}
+
+.contest-multiplier {
+  display: inline-flex;
+  border-radius: .75rem;
+  padding: .375rem .625rem;
+  font-size: .875rem;
+  font-variant-numeric: tabular-nums;
+}
+.contest-multiplier-blue { background: #e2edff; color: #194d93; }
+.contest-multiplier-yellow { background: #fff0bd; color: #765100; }
+.contest-multiplier-red { background: #ffe5df; color: #aa2a20; }
+.contest-multiplier-purple { background: #f1e5ff; color: #662c98; }
+.contest-multiplier-rainbow {
+  background: linear-gradient(110deg, #ffe6e5, #fff0c1, #e6f5df, #e4eeff, #f1e4ff);
+  color: #51349a;
+}
+.contest-multiplier-rainbow strong {
+  background: linear-gradient(100deg, #ad2c35, #825400, #216632, #2357a5, #78379c);
+  background-clip: text;
+  color: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .contest-preview { transition: none; }
+}

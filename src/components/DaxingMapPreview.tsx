@@ -88,6 +88,6 @@ export function DaxingMapPreview({ thickness, searchMode, replay, showCampusArro
 function AnimateCampusArrow({ show, reduced }: { show: boolean; reduced: boolean }) {
   return show ? <motion.g aria-label="公共API提供者：北京建筑大学大兴校区" initial={{ opacity: 0 }} animate={{ opacity: 1, y: reduced ? 0 : [0, -9, 0] }} transition={{ opacity: { duration: 0.2 }, y: { duration: 1.1, repeat: Infinity, ease: 'easeInOut' } }}>
     <path d="M484 244 V303 M464 285 L484 306 L504 285" fill="none" stroke="#FFFFFF" strokeWidth="20" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M484 244 V303 M464 285 L484 306 L504 285" fill="none" stroke="#52796F" strokeWidth="11" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M484 244 V303 M464 285 L484 306 L504 285" fill="none" stroke="#346DB3" strokeWidth="11" strokeLinecap="round" strokeLinejoin="round" />
   </motion.g> : null;
 }

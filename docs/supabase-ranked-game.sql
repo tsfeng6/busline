@@ -79,7 +79,7 @@ declare
 begin
   if p_user is null then raise exception '请先登录'; end if;
   if exists (select 1 from public.game_contest_suspensions where user_id = p_user) then
-    raise exception using errcode = '42501', message = '此账号暂无法参加巴士竞猜竞赛。';
+    raise exception using errcode = '42501', message = '此账号暂无法参加巴士猜线竞赛。';
   end if;
   if p_action = 'start' then
     perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(p_user::text));

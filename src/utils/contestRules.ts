@@ -1,12 +1,21 @@
 import type { GameMode } from './offlineGame';
 
+export const contestSeason = 'S1';
+
 export const contests = [
   { id: 'line-beijing', game: 'line', scope: '北京市', title: '看图猜线路·北京' },
   { id: 'line-shanghai', game: 'line', scope: '上海市', title: '看图猜线路·上海' },
   { id: 'station-beijing', game: 'station', scope: '北京市', title: '看通达度猜站名·北京' },
   { id: 'station-shanghai', game: 'station', scope: '上海市', title: '看通达度猜站名·上海' },
   { id: 'city', game: 'city', scope: '全国', title: '看线网猜城市' },
-  { id: 'county', game: 'county', scope: '', title: '看线网猜县城' },
+  { id: 'county', game: 'county', scope: '河北省', title: '看线网猜县城' },
+] as const;
+
+export const contestRegions = [
+  { id: 'beijing', title: '北京', cityScope: '北京市', contests: ['line-beijing', 'station-beijing'] },
+  { id: 'shanghai', title: '上海', cityScope: '上海市', contests: ['line-shanghai', 'station-shanghai'] },
+  { id: 'nationwide', title: '全国', contests: ['city'] },
+  { id: 'hebei', title: '河北', provinceScope: '河北省', contests: ['county'] },
 ] as const;
 
 export const contestPrompts = {

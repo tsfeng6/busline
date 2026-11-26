@@ -93,9 +93,11 @@ export function hintRankedPuzzle(run: string, id: string, step: number, accessTo
     method: 'POST', body: JSON.stringify({ id, step }),
   }, accessToken);
 }
-export function getContestLeaderboard(game: GameLeaderboardKey['game'], scope: string, accessToken?: string) {
+export async function getContestLeaderboard(game: GameLeaderboardKey['game'], scope: string, accessToken?: string) {
   const query = new URLSearchParams({ game, scope });
-  return request<{ entries: LeaderboardEntry[] }>(`/contest-leaderboards?${query}`, {}, accessToken);
+  const result = await request<{ entries?: LeaderboardEntry[] }>(`/contest-leaderboards?${query}`, {}, accessToken);
+  if (!Array.isArray(result?.entries)) throw Error('排行榜返回格式无效。');
+  return { entries: result.entries };
 }
 
 export async function compressAvatar(file: File): Promise<string> {
