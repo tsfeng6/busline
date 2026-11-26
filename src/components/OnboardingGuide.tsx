@@ -75,7 +75,7 @@ export function OnboardingGuide({step,setStep,useCustomApiKey,onSelectCustomApiK
      </div>
      <p role="status" className="text-[11px] text-slate-500">{readToEnd?'已阅读至末尾，请勾选同意后继续。':'请向下滑动阅读全部条款，阅读至末尾后可勾选同意。'}</p>
      <label className={`flex gap-2.5 items-start text-xs font-bold leading-relaxed ${readToEnd?'text-slate-700 cursor-pointer':'text-slate-400'}`}>
-      <input type="checkbox" disabled={!readToEnd} checked={agreed} onChange={event=>setAgreed(event.target.checked)} className="mt-0.5 accent-[#52796F] w-4 h-4 shrink-0"/>
+      <input type="checkbox" disabled={!readToEnd} checked={agreed} onChange={event=>setAgreed(event.target.checked)} className="mt-0.5 accent-[#346DB3] w-4 h-4 shrink-0"/>
       我已阅读并同意以上条款
      </label>
     </>}
@@ -83,7 +83,7 @@ export function OnboardingGuide({step,setStep,useCustomApiKey,onSelectCustomApiK
      <div className="w-10 h-10 rounded-2xl bg-m3-primary-container text-m3-primary flex items-center justify-center"><KeyRound className="w-5 h-5"/></div>
      <h2 id="onboarding-title" className="text-lg font-bold text-slate-900">是否填写高德 API？</h2>
      <p className="text-xs leading-relaxed text-slate-600">填写高德 API 后，地图加载、线路检索与全市检索都会使用你的 Key；不填写则使用公共 API。查看已有共享线路无需填写；您也可稍后在设置中填写。</p>
-     <fieldset className="grid grid-cols-2 gap-2"><legend className="sr-only">高德 API 配置选择</legend>{[{enabled:false,label:'暂不填写'},{enabled:true,label:'现在填写'}].map(option=><label key={option.label} className={`rounded-2xl p-3 border cursor-pointer text-xs font-bold flex gap-2 items-center ${useCustomApiKey===option.enabled?'border-m3-primary bg-m3-primary-container/40 text-m3-primary':'border-m3-outline-variant/40 text-slate-600'}`}><input type="radio" name="onboarding-api" checked={useCustomApiKey===option.enabled} onChange={()=>{setApiError('');onSelectCustomApiKey(option.enabled);}} className="accent-[#52796F]"/>{option.label}</label>)}</fieldset>
+     <fieldset className="grid grid-cols-2 gap-2"><legend className="sr-only">高德 API 配置选择</legend>{[{enabled:false,label:'暂不填写'},{enabled:true,label:'现在填写'}].map(option=><label key={option.label} className={`rounded-2xl p-3 border cursor-pointer text-xs font-bold flex gap-2 items-center ${useCustomApiKey===option.enabled?'border-m3-primary bg-m3-primary-container/40 text-m3-primary':'border-m3-outline-variant/40 text-slate-600'}`}><input type="radio" name="onboarding-api" checked={useCustomApiKey===option.enabled} onChange={()=>{setApiError('');onSelectCustomApiKey(option.enabled);}} className="accent-[#346DB3]"/>{option.label}</label>)}</fieldset>
      {useCustomApiKey&&<div className="space-y-3">
       <label className="block text-xs font-bold text-slate-600">高德 Web端 API Key<input type="password" autoComplete="off" value={customApiKey} onChange={event=>{setApiError('');setCustomApiKey(event.target.value);}} placeholder="请输入您的 API Key" className="block w-full mt-1.5 px-3 py-2.5 rounded-xl bg-m3-surface-container border border-m3-outline-variant outline-none focus:border-m3-primary"/></label>
       <label className="block text-xs font-bold text-slate-600">高德安全密钥 Security Code<input type="password" autoComplete="off" value={customApiSecurityCode} onChange={event=>{setApiError('');setCustomApiSecurityCode(event.target.value);}} placeholder="请输入您的 Security Code" className="block w-full mt-1.5 px-3 py-2.5 rounded-xl bg-m3-surface-container border border-m3-outline-variant outline-none focus:border-m3-primary"/></label>

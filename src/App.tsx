@@ -37,7 +37,6 @@ import { isLineOperating, updateTimelineVisibility, type TimelineOverlayEntry } 
 import { discoverCityStops, searchCityLine } from './utils/citySearch';
 import { getOperatingHours, SCHEDULE_DATA_VERSION } from './utils/operatingHours';
 import { OperatingHours } from './components/OperatingHours';
-import { BuslineAI, type AIRegionContext } from './components/BuslineAI';
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import AMapLoader from '@amap/amap-jsapi-loader';
 import { BusStop, BusLine, LineSegment } from './types';
@@ -60,7 +59,7 @@ import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { formatGameTime } from './utils/gameTimer';
 import { establishGameSession, gameAccountEnabled, answerRankedPuzzle, getRankedPack, getRankedPuzzle, hintRankedPuzzle, getGameAccount, startGameRun, type GameAccount, type GameRun } from './utils/gameAccount';
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
-import { GameLobby } from './components/GameLobby';
+import { GameLobby, type ContestRegionId } from './components/GameLobby';
 import { RankedGameDrawing } from './components/RankedGameDrawing';
 import { contests, contestTagGroups, contestRules, contestPrompts, type ContestRules } from './utils/contestRules';
 import { openLocalQuestion, sealLocalQuestion, type SealedQuestion } from './utils/localQuestionCipher';
@@ -278,12 +277,13 @@ const parseDataSourceImages = (val: string | null | undefined): string[] => {
 export default function App() {
   const gamePage = /^\/game(?:\/index\.html|\/)?$/.test(window.location.pathname);
   const [gameDivision, setGameDivision] = useState<'contest' | 'simulation'>('contest');
+  const [contestRegion, setContestRegion] = useState<ContestRegionId | null>(null);
   const [contest, setContest] = useState<(typeof contests)[number]>(contests[0]);
   const [contestTags, setContestTags] = useState<string[]>([]);
   const [simulationMode, setSimulationMode] = useState<'line' | 'station' | 'city' | 'county'>('line');
   const [simulationTags, setSimulationTags] = useState<string[]>([]);
   useEffect(() => {
-    if (gamePage) document.title = '巴士竞猜';
+    if (gamePage) document.title = '巴士猜线';
   }, [gamePage]);
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -315,7 +315,7 @@ export default function App() {
 
   const getStopColor = useCallback((count: number, defaultColor: string) => {
     if (!stationLineStatsRef.current || count === 0) return defaultColor;
-    if (count <= 2) return '#5E8271'; // Morandi Sage Green
+    if (count <= 2) return '#557EB3'; // Blue for stops served by a few lines
     if (count <= 6) return '#C29B63'; // Morandi Warm Ochre
     return '#B56666'; // Morandi Dusty Terracotta
   }, []);
@@ -429,7 +429,7 @@ export default function App() {
     if(countyMaskRef.current){map?.remove(countyMaskRef.current);countyMaskRef.current=null;}
     if(!center||!map||!AMap?.Polygon)return;
     const outer=[[60,-5],[150,-5],[150,65],[60,65],[60,-5]];
-    const polygon=new AMap.Polygon({path:[outer,radiusRing(center,radius).reverse()],fillColor:'#f5f5f3',fillOpacity:1,strokeWeight:0,strokeOpacity:0,zIndex:950,bubble:true});
+    const polygon=new AMap.Polygon({path:[outer,radiusRing(center,radius).reverse()],fillColor:'#F9F7E9',fillOpacity:1,strokeWeight:0,strokeOpacity:0,zIndex:950,bubble:true});
     map.add(polygon);countyMaskRef.current=polygon;
   };
 
@@ -1102,7 +1102,6 @@ export default function App() {
   const stopCountCacheRef = useRef<Map<string, number>>(new Map());
 
   const [showSettings, setShowSettings] = useState(() => Boolean(getWechatRegistrationToken()));
-  const [showBuslineAI, setShowBuslineAI] = useState(false);
   const [showBusPlanner, setShowBusPlanner] = useState(false);
   const [plannerPreloading, setPlannerPreloading] = useState(false);
   const [plannerRouteVisible, setPlannerRouteVisible] = useState(false);
@@ -1194,8 +1193,6 @@ export default function App() {
   const timelineActiveCount = timelineSchedules.reduce((count, schedule) =>
     count + (isLineOperating(schedule.line, timelineMinute) === true ? schedule.count : 0), 0);
 
-  const [aiSearchProgress, setAISearchProgress] = useState('');
-  const [aiRegionContext, setAIRegionContext] = useState<AIRegionContext | null>(null);
   const [settingsTab, setSettingsTab] = useState<'profile' | 'general' | 'about'>('profile');
   const appSettingsVisible = showSettings && settingsTab === 'general';
 
@@ -1398,7 +1395,7 @@ export default function App() {
       const chosenLine = item.lineInfos[0];
       if (chosenLine.path?.length > 1) {
         lineGroupRef.current?.addOverlay(new AMap.Polyline({
-          path: chosenLine.path, strokeColor: '#52796F', strokeWeight: 7, showDir: true, lineJoin: 'round', lineCap: 'round', zIndex: 45,
+          path: chosenLine.path, strokeColor: '#346DB3', strokeWeight: 7, showDir: true, lineJoin: 'round', lineCap: 'round', zIndex: 45,
         }));
       }
       const validStops = (chosenLine.via_stops || []).filter((st: any) => st?.location);
@@ -1492,7 +1489,7 @@ export default function App() {
           const m = new AMap.CircleMarker({
             center: st.lngLat,
             radius: 4.5,
-            fillColor: '#52796F',
+            fillColor: '#346DB3',
             strokeColor: '#ffffff',
             strokeWeight: 1.5,
             bubble: true,
@@ -1530,7 +1527,7 @@ export default function App() {
       if (item.networkPaths && item.networkPaths.length > 0 && lineGroupRef.current) {
         const netOverlay = new AMap.Polyline({
           path: item.networkPaths,
-          strokeColor: '#52796F',
+          strokeColor: '#346DB3',
           strokeWeight: lineThickness === 'thin' ? (item.mode === 'city' ? 2 : 2.5) : (item.mode === 'city' ? 3.2 : 3.8),
           strokeOpacity: 0.85,
           lineJoin: 'round',
@@ -2085,7 +2082,7 @@ export default function App() {
           if (o.setZIndex) o.setZIndex(100);
         } else {
           const count = stopCountCacheRef.current.get(ext.key) || 0;
-          const originalColor = stationLineStatsRef.current ? getStopColor(count, '#52796F') : '#52796F';
+          const originalColor = stationLineStatsRef.current ? getStopColor(count, '#346DB3') : '#346DB3';
           o.setOptions({
             strokeColor: '#fff',
             strokeWeight: 2,
@@ -2516,127 +2513,7 @@ export default function App() {
   },[mapInstance,loading,onboardingStep,showMinigameModal]);
   useEffect(()=>()=>{locationRequestRef.current++;nearbyRequestRef.current?.abort();},[]);
 
-  const clipSegmentToBox = (
-    p1: [number, number],
-    p2: [number, number],
-    minLng: number,
-    maxLng: number,
-    minLat: number,
-    maxLat: number
-  ): [[number, number], [number, number]] | null => {
-    let [x1, y1] = p1;
-    let [x2, y2] = p2;
 
-    let t0 = 0.0;
-    let t1 = 1.0;
-    const dx = x2 - x1;
-    const dy = y2 - y1;
-
-    const boundaries = [
-      { p: -dx, q: x1 - minLng }, // minLng (left)
-      { p: dx, q: maxLng - x1 },  // maxLng (right)
-      { p: -dy, q: y1 - minLat }, // minLat (bottom)
-      { p: dy, q: maxLat - y1 }   // maxLat (top)
-    ];
-
-    for (let i = 0; i < 4; i++) {
-      const { p, q } = boundaries[i];
-      if (p === 0) {
-        if (q < 0) return null; // Parallel and outside
-      } else {
-        const t = q / p;
-        if (p < 0) {
-          if (t > t1) return null;
-          if (t > t0) t0 = t;
-        } else {
-          if (t < t0) return null;
-          if (t < t1) t1 = t;
-        }
-      }
-    }
-
-    if (t0 > t1) return null;
-
-    return [
-      [x1 + t0 * dx, y1 + t0 * dy],
-      [x1 + t1 * dx, y1 + t1 * dy]
-    ];
-  };
-
-  const clipPathToBox = (
-    path: [number, number][],
-    minLng: number,
-    maxLng: number,
-    minLat: number,
-    maxLat: number
-  ): [number, number][][] => {
-    const clippedPaths: [number, number][][] = [];
-    let currentSegment: [number, number][] = [];
-
-    for (let i = 0; i < path.length - 1; i++) {
-      const p1 = path[i];
-      const p2 = path[i + 1];
-      const clipped = clipSegmentToBox(p1, p2, minLng, maxLng, minLat, maxLat);
-      if (clipped) {
-        const [cp1, cp2] = clipped;
-        if (currentSegment.length === 0) {
-          currentSegment.push(cp1);
-        } else {
-          const last = currentSegment[currentSegment.length - 1];
-          const distSq = Math.pow(last[0] - cp1[0], 2) + Math.pow(last[1] - cp1[1], 2);
-          if (distSq > 1e-10) {
-            clippedPaths.push(currentSegment);
-            currentSegment = [cp1];
-          }
-        }
-        currentSegment.push(cp2);
-      } else {
-        if (currentSegment.length > 0) {
-          clippedPaths.push(currentSegment);
-          currentSegment = [];
-        }
-      }
-    }
-    if (currentSegment.length > 0) {
-      clippedPaths.push(currentSegment);
-    }
-    return clippedPaths;
-  };
-
-  const getBoxForStops = (stops: any[]) => {
-    let minLng = Infinity;
-    let maxLng = -Infinity;
-    let minLat = Infinity;
-    let maxLat = -Infinity;
-
-    stops.forEach((stop: any) => {
-      if (stop && stop.location) {
-        const lng = stop.location.lng;
-        const lat = stop.location.lat;
-        if (typeof lng === 'number' && typeof lat === 'number') {
-          if (lng < minLng) minLng = lng;
-          if (lng > maxLng) maxLng = lng;
-          if (lat < minLat) minLat = lat;
-          if (lat > maxLat) maxLat = lat;
-        }
-      }
-    });
-
-    if (minLng === Infinity) return null;
-
-    const lngDiff = maxLng - minLng;
-    const latDiff = maxLat - minLat;
-    // Increased padding margin slightly to ensure comfortable gap between box borders and the outermost bus stops
-    const lngPadding = Math.max(lngDiff * 0.12, 0.003);
-    const latPadding = Math.max(latDiff * 0.12, 0.003);
-
-    return {
-      minLng: minLng - lngPadding,
-      maxLng: maxLng + lngPadding,
-      minLat: minLat - latPadding,
-      maxLat: maxLat + latPadding
-    };
-  };
 
   const stopNameNormalizeCache = useMemo(() => new Map<string, string>(), []);
   const normalizeStopName = useCallback((name: string): string => {
@@ -5170,7 +5047,6 @@ export default function App() {
       return;
     }
 
-    setAIRegionContext(null);
     setPendingCityUpload(null);
     setCityUploadError('');
     setShowEmptySearchNotice(false);
@@ -5706,18 +5582,6 @@ export default function App() {
           roadStopsDataRef.current = new Map(allMapStopsRef.current);
         }
 
-        const aiBox = getBoxForStops(Array.from(roadStopsDataRef.current.values())) || targetSearchBox;
-        const areaLines = Array.from(fetchedLinesCache.current.values() as Iterable<BusLine>)
-          .filter(line => (!line.city || line.city === currentCity) && line.path?.length > 1 &&
-            clipPathToBox(line.path, aiBox.minLng, aiBox.maxLng, aiBox.minLat, aiBox.maxLat).length > 0)
-          .map(line => ({ name: line.name, start: line.start_stop || '', end: line.end_stop || '',
-            stopsInArea: (line.via_stops || []).filter(stop => {
-              const [lng, lat] = getLatLng(stop.location);
-              return lng >= aiBox.minLng && lng <= aiBox.maxLng && lat >= aiBox.minLat && lat <= aiBox.maxLat;
-            }).map(stop => stop.name) }));
-        if (areaLines.length) setAIRegionContext({ city: currentCity, bounds: { ...aiBox }, lines: areaLines });
-
-
         if (enableLineCacheRef.current && !usedRegionCache) {
           const linesToSave: BusLine[] = [];
           for (const lineVal of fetchedLinesCache.current.values()) {
@@ -5905,7 +5769,7 @@ export default function App() {
     setShowTimeline(false);
     setTimelineAvailable(false);
     displayedLineNamesRef.current = [];
-    setAIRegionContext(null);
+
     setShowEmptySearchNotice(false);
     isClearedRef.current = true;
     searchVersionRef.current++;
@@ -5972,59 +5836,6 @@ export default function App() {
     activeRawMarkersRef.current = [];
     roadStopsDataRef.current.clear();
     activeBusLinePolylineRef.current = null;
-  };
-
-  const applyAILines = async (city: string, names: string[]): Promise<string> => {
-    const map = mapRef.current;
-    const AMap = (window as any).AMap;
-    if (!map || !AMap || isMinigameActiveRef.current || isSearching) throw new Error('请先等待地图就绪并结束其他检索。');
-    handleClear();
-    isClearedRef.current = false;
-    const version = ++searchVersionRef.current;
-    setIsSearching(true);
-    const matched: string[] = [];
-    const missing: string[] = [];
-    const lines: BusLine[] = [];
-    const normalize = (name: string) => name.split(/[（(]/)[0].replace(/\s+/g, '');
-    try {
-      for (let i = 0; i < names.length; i++) {
-        if (searchVersionRef.current !== version || isClearedRef.current || isMinigameActiveRef.current) throw new Error('地图检索已取消。');
-        const name = names[i];
-        setAISearchProgress(`正在检索 ${i + 1}/${names.length}：${name}`);
-        const found = await new Promise<BusLine[]>(resolve => {
-          let settled = false;
-          const finish = (result: BusLine[]) => { if (!settled) { settled = true; clearTimeout(timer); resolve(result); } };
-          const timer = setTimeout(() => finish([]), 8000);
-          try {
-            const search = new AMap.LineSearch({ city, pageSize: 100, extensions: 'all' });
-            search.search(name, (status: string, result: any) => {
-              if (settled || searchVersionRef.current !== version) { finish([]); return; }
-              checkAmapQuotaError(status, result);
-              const found = status === 'complete' ? (result?.lineInfo || []).filter((line: any) => normalize(line.name || '') === normalize(name) && line.path?.length > 1) : [];
-              finish(found.map((line: any) => ({ id: line.id, name: line.name, city, path: line.path.map((point: any) => getLatLng(point)),
-                ...getOperatingHours(line), start_stop: line.start_stop, end_stop: line.end_stop, via_stops: line.via_stops || [], stops: [] })));
-            });
-          } catch { finish([]); }
-        });
-        if (searchVersionRef.current !== version || isClearedRef.current || isMinigameActiveRef.current) throw new Error('地图检索已取消。');
-        if (found.length) { matched.push(name); lines.push(...found); } else missing.push(name);
-      }
-      lines.forEach(line => fetchedLinesCache.current.set(line.name, line));
-      const points = lines.flatMap(line => line.path);
-      if (points.length) {
-        const lngs = points.map(point => point[0]);
-        const lats = points.map(point => point[1]);
-        const bounds = new AMap.Bounds(
-          [lngs.reduce((a, b) => Math.min(a, b)), lats.reduce((a, b) => Math.min(a, b))],
-          [lngs.reduce((a, b) => Math.max(a, b)), lats.reduce((a, b) => Math.max(a, b))]
-        );
-        map.setBounds(bounds);
-        const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
-
-        aggregateAndVisualize(Array.from(new Set(lines.map(line => line.name))), map, AMap);
-      }
-      return `共 ${names.length} 条候选线路，成功检索 ${matched.length} 条，已显示到地图。${missing.length ? '\n未找到或请求失败：' + missing.join('、') : ''}`;
-    } finally { setAISearchProgress(''); if (searchVersionRef.current === version) setIsSearching(false); }
   };
 
   const aggregateAndVisualize = async (activeLineSet: string[], map: any, AMap: any) => {
@@ -6104,7 +5915,7 @@ export default function App() {
       if (!line || line.path.length < 2) continue;
       const displayPath = offsetRoutePath(line.path);
       renderRoutes.push({ name, path: line.path, displayPath });
-      const color = line.isUserSubmitted ? '#9C7A97' : '#52796F';
+      const color = line.isUserSubmitted ? '#9C7A97' : '#346DB3';
       if (!colorGroups.has(color)) colorGroups.set(color, []);
       colorGroups.get(color)!.push(displayPath);
     }
@@ -6123,7 +5934,7 @@ export default function App() {
       const visible = hitIndex.visiblePaths({minLng:sw.lng-padX,maxLng:ne.lng+padX,minLat:sw.lat-padY,maxLat:ne.lat+padY});
       const groups = new Map<string, [number,number][][]>();
       for (const [name, paths] of visible) {
-        const color = fetchedLinesCache.current.get(name)?.isUserSubmitted ? '#9C7A97' : '#52796F';
+        const color = fetchedLinesCache.current.get(name)?.isUserSubmitted ? '#9C7A97' : '#346DB3';
         if (!groups.has(color)) groups.set(color, []);
         for (const path of paths) {
           const clipped = [path];
@@ -6467,7 +6278,7 @@ export default function App() {
           let entry = entries.get(name);
           if (!entry) {
             const overlay = lazyTimelineRoute(map, AMap, {
-              strokeColor: line.isUserSubmitted ? '#BA55D3' : '#52796F',
+              strokeColor: line.isUserSubmitted ? '#BA55D3' : '#346DB3',
               strokeWeight: lineThickness === 'thin' ? 3 : 6,
               strokeOpacity: 0.9, lineJoin: 'round', lineCap: 'round',
               isOutline: true, outlineColor: '#ffffff',
@@ -6854,7 +6665,7 @@ export default function App() {
   const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
   const isAnswering = showMinigameModal && gameState === 'playing';
   if (!gamePage) return (
-    <div className="flex flex-col h-screen w-full bg-[#F4F6F4] font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
+    <div className="flex flex-col h-screen w-full bg-m3-surface-container-low font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
       {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
       {/* Global API Quota / Error Banner */}
       <AnimatePresence>
@@ -6913,20 +6724,15 @@ export default function App() {
           }} onDraw={drawBusPlan} />}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {showBuslineAI && <BuslineAI onClose={() => setShowBuslineAI(false)} context={aiRegionContext}
-          disabled={isSearching || (showMinigameModal && gameState !== 'menu')} searchProgress={aiSearchProgress} onApply={applyAILines} />}
-      </AnimatePresence>
-
       <header className="fixed top-0 left-0 right-0 z-20 px-4 pt-5 pb-0 pointer-events-none">
         {!isAnswering && !isDrawingMode && (
-          <div className="flex items-start justify-between gap-4 w-full h-[46px]">
+          <div className="flex items-start justify-between gap-2 w-full h-[46px]">
             {/* Pure Material 3 Search Bar (without logo, slightly narrower) */}
-            <div ref={searchContainerRef} className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative w-[180px] sm:w-[240px] md:w-[280px] rounded-full'}`}>
+            <div ref={searchContainerRef} className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative min-w-0 flex-1 sm:max-w-[260px] md:max-w-[320px] rounded-full'}`}>
 
               {/* Search Lead Icon */}
               <div className="flex items-center justify-center pl-4 pr-1.5 shrink-0 text-m3-primary">
-                <Search className="w-4.5 h-4.5 text-[#52796F]" />
+                <Search className="w-4.5 h-4.5 text-[#346DB3]" />
               </div>
 
               {/* Input Field Area */}
@@ -6934,7 +6740,7 @@ export default function App() {
                 <input 
                   type="text" 
                   placeholder={(!enableCityWideSearch && zoomLevel < 12) ? t('searchHint') : t('searchPlaceholder')} 
-                  className="bg-transparent border-none outline-none text-xs sm:text-sm font-medium text-slate-800 w-full placeholder:text-[#7A8E83] h-full"
+                  className="bg-transparent border-none outline-none text-xs sm:text-sm font-medium text-slate-800 w-full placeholder:text-[#66768D] h-full"
                   value={searchQuery}
                   onChange={(e) => onSearchInputChange(e.target.value)}
                   role="combobox"
@@ -6965,7 +6771,7 @@ export default function App() {
                       e.preventDefault();
                       handleClear();
                     }} 
-                    className="px-1.5 shrink-0 h-full flex items-center text-[#7A8E83] hover:text-slate-800"
+                    className="px-1.5 shrink-0 h-full flex items-center text-[#66768D] hover:text-slate-800"
                     title="清空搜索"
                   >
                     <X className="w-4 h-4" />
@@ -6980,7 +6786,6 @@ export default function App() {
                   const openingPlanner = !showBusPlanner || showTimeline;
                   setShowBusPlanner(openingPlanner);
                   setShowTimeline(false);
-                  setShowBuslineAI(false);
                   if (!openingPlanner) clearBusPlan();
                 }}
                 className={`mr-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${showBusPlanner ? 'bg-m3-primary text-white' : 'bg-m3-primary-container/70 text-m3-primary hover:bg-m3-primary-container'}`}>
@@ -7035,7 +6840,7 @@ export default function App() {
             </div>
 
             {/* Quick Actions Container - Material Design 3 (Stations and Basemap moved to bottom hub) */}
-            <div className={`mr-16 flex items-center gap-2 transition-opacity duration-300 ${isMobileSearchOpen ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
+            <div className={`mr-12 flex shrink-0 items-center gap-1.5 transition-opacity sm:mr-16 sm:gap-2 duration-300 ${isMobileSearchOpen ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
 
               {/* Custom Draw Mode Paintbrush FAB - hidden when showUserSubmittedData is disabled */}
               {showUserSubmittedData && (
@@ -7094,28 +6899,17 @@ export default function App() {
                 </>
               )}
 
-              {/* Minigame FAB */}
-              <div className="pointer-events-auto shrink-0">
-                <button 
-                  onClick={() => window.location.assign('/game')}
-                  className="backdrop-blur-md bg-m3-surface/90 border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center text-slate-700 hover:bg-m3-surface-container-high hover:text-m3-primary hover:scale-105 transition-all duration-200 active:scale-90 group"
-                  title="巴士竞猜" aria-label="巴士竞猜"
-                >
-                  <Gamepad2 className="w-4.5 h-4.5 transition-transform group-hover:rotate-12 duration-300" />
-                </button>
-              </div>
+              <a href="/game"
+                className="pointer-events-auto inline-flex h-[42px] shrink-0 items-center justify-center gap-2 rounded-full bg-m3-primary px-3 text-[13px] font-extrabold text-white shadow-sm transition hover:bg-[#285489] active:scale-95 sm:px-4 sm:text-sm">
+                <Gamepad2 className="hidden h-4.5 w-4.5 min-[420px]:block" aria-hidden="true" />
+                巴士猜线
+              </a>
 
               {(timelineAvailable || viewportStats.lines > 0 || showTimeline) && !isSearching && !loading && !isDrawingMode && !showMinigameModal && (
                 <button type="button" aria-pressed={showTimeline} aria-label="时间轴" title="时间轴" onClick={() => void openTimeline()} className={`pointer-events-auto shrink-0 w-[42px] h-[42px] rounded-2xl border border-m3-outline-variant/40 shadow-sm flex items-center justify-center transition-all active:scale-95 ${showTimeline ? 'bg-m3-primary text-white' : 'bg-m3-surface/95 text-m3-primary'}`}>
                   <Clock className="w-4.5 h-4.5" />
                 </button>
               )}
-              <div className="pointer-events-auto shrink-0">
-                <button onClick={() => { setShowBuslineAI(prev => !prev); setShowBusPlanner(false); clearBusPlan(); }} title="Busline AI" aria-label="打开 Busline AI"
-                  className="backdrop-blur-md bg-m3-primary-container/95 text-m3-on-primary-container border border-m3-outline-variant/40 w-[42px] h-[42px] rounded-2xl shadow-sm flex items-center justify-center hover:scale-105 transition-all duration-200 active:scale-95">
-                  <Sparkles className="w-4.5 h-4.5" />
-                </button>
-              </div>
             </div>
           </div>
         )}
@@ -8743,7 +8537,7 @@ export default function App() {
               {/* Legend Row */}
               <div className="hidden md:flex items-center justify-between px-1 select-none">
                 <div className="flex items-center gap-1.5">
-                  <div className="w-2 h-2 rounded-full bg-[#5E8271] shadow-sm" />
+                  <div className="w-2 h-2 rounded-full bg-[#557EB3] shadow-sm" />
                   <span className="text-[10px] font-bold text-slate-500">1-3</span>
                 </div>
                 <div className="flex items-center gap-1.5">
@@ -8923,7 +8717,7 @@ export default function App() {
                             {start !== '-' ? (
                               <>
                                 <div className="flex items-center gap-2">
-                                  <div className="w-1.5 h-1.5 rounded-full bg-[#5E8271] shrink-0" />
+                                  <div className="w-1.5 h-1.5 rounded-full bg-[#557EB3] shrink-0" />
                                   <span className="text-[11px] font-bold text-slate-700 truncate leading-none">{start}</span>
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -9084,7 +8878,7 @@ export default function App() {
                     {(activeBusLine.via_stops || []).map((stop: any, idx: number) => {
                       const isSelected = selectedStop?.name === stop.name;
                       const count = stopCountCacheRef.current.get(`${stop.location.lng},${stop.location.lat}`) || 0;
-                      const iconColor = getStopColor(count, '#52796F');
+                      const iconColor = getStopColor(count, '#346DB3');
                       return (
                         <div 
                           key={idx} 
@@ -9190,7 +8984,7 @@ export default function App() {
   );
   const launchSelectedGame = () => {
     if (gameDivision === 'contest') {
-      startMinigame(contest.game, contest.scope, gameCountyProvince, true);
+      startMinigame(contest.game, contest.scope, contest.scope, true);
     } else {
       startMinigame(simulationMode, gameCity);
     }
@@ -9202,7 +8996,8 @@ export default function App() {
     {isAnswering && gameDrawing && <RankedGameDrawing key={rankedPuzzle?.id ?? gameQuestionNum} drawing={gameDrawing} />}
     {gameState === 'menu' && <GameLobby
       division={gameDivision} onDivision={next => { setGameDivision(next); setGameDataError(''); }}
-      contest={contest} onContest={next => { setContest(next); setContestTags([]); setGameDataError(''); }}
+      regionId={contestRegion} onRegion={setContestRegion}
+      contest={contest} onContest={next => { if (next.id !== contest.id) { setContest(next); setContestTags([]); } setGameDataError(''); }}
       tags={gameDivision === 'contest' ? contestTags : simulationTags}
       onTags={gameDivision === 'contest' ? setContestTags : setSimulationTags}
       mode={simulationMode} onMode={next => { setSimulationMode(next); setSimulationTags([]); setGameDataError(''); }}
@@ -9210,7 +9005,7 @@ export default function App() {
       province={gameProvince} provinces={gameProvinces} onProvince={setGameProvince}
       city={gameCity} cities={gameCities.map(city => city.city)} onCity={setGameCity}
       countyProvince={gameCountyProvince} countyProvinces={countyProvinces} onCountyProvince={setGameCountyProvince}
-      catalogLoading={gameCatalogLoading} catalogAvailable={!!gameCatalog.length}
+      catalog={gameCatalog} catalogLoading={gameCatalogLoading} catalogAvailable={!!gameCatalog.length}
       error={gameDataError || ((gameDivision === 'simulation' || contest.game === 'county') ? gameCatalogError : '')}
       accountName={gameAccount?.displayName} accountLoading={gameAuthLoading} accountEnabled={gameAccountEnabled}
       onAccount={() => { setSettingsTab('profile'); setShowSettings(true); }}

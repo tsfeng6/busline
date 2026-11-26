@@ -285,6 +285,22 @@ test('ranked gateway exposes only the drawing until the server grades the answer
  assert.equal((await post('/game-runs/' + run + '/finish', {score:999})).status, 410);
 });
 
+test('S1 county standings use the Hebei contest scope', async () => {
+ const {store} = fixture();
+ const accountEnv = {...env, SUPABASE_URL:'https://project.supabase.co', SUPABASE_ANON_KEY:'test-key'};
+ const calls: unknown[] = [];
+ const upstream: typeof fetch = async (_input, init) => {
+   calls.push(JSON.parse(String(init?.body)));
+   return Response.json([]);
+ };
+ const board = (scope: string) => handleEdgeOneGateway(new Request(
+   'https://gateway.example/contest-leaderboards?' + new URLSearchParams({game:'county', scope}),
+ ), accountEnv, store, upstream);
+ assert.equal((await board('河南省')).status, 400);
+ assert.deepEqual(await (await board('河北省')).json(), {entries:[]});
+ assert.deepEqual(calls, [{p_game:'county', p_scope:'河北省'}]);
+});
+
 test('contest labels are exclusive and only valid for their mode', async () => {
   const { contestRules } = await import('../src/utils/contestRules');
   assert.equal(contestRules('line', []).multiplier, .25);

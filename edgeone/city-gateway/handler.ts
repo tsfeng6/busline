@@ -24,8 +24,7 @@ const equal=(a:string,b:string)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&ti
 export const gatewaySignature=(secret:string,text:string)=>createHmac('sha256',secret).update(text).digest('hex');
 type GameName='line'|'station'|'city'|'county';
 const validContest = (game: unknown, scope: string): game is GameName =>
-  scope.length <= 64 && contests.some(contest => contest.game === game
-    && (contest.game === 'county' ? scope.length > 0 : contest.scope === scope));
+  contests.some(contest => contest.game === game && contest.scope === scope);
 const gameAccount=(user:any,profile?:any):{id:string;displayName:string;avatarUrl?:string}=>({id:String(user?.id||profile?.id||''),displayName:String(profile?.display_name||'巴士玩家').slice(0,24),avatarUrl:profile?.avatar_url||profile?.avatar_path?String(profile?.avatar_url||profile?.avatar_path):undefined});
 const xmlEscape=(value:string)=>value.replace(/[<>&'\"]/g,char=>({"<":'&lt;',">":'&gt;','&':'&amp;',"'":'&apos;','\"':'&quot;'}[char]!));
 const xmlValue=(xml:string,name:string)=>{const found=new RegExp(`<${name}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${name}>|<${name}>([\\s\\S]*?)<\\/${name}>`).exec(xml);return (found?.[1]||found?.[2]||'').trim();};
@@ -311,7 +310,7 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
         body: JSON.stringify({ p_user: user, p_action: operation, p_run: runId, p_input: payload }),
       });
       const body = await response.json().catch(() => null);
-      if (body?.code === '42501' && body?.message === '此账号暂无法参加巴士竞猜竞赛。') throw fail(403, body.message);
+      if (body?.code === '42501' && /^此账号暂无法参加巴士(?:竞猜|猜线)竞赛。$/.test(body?.message ?? '')) throw fail(403, '此账号暂无法参加巴士猜线竞赛。');
       if (!response.ok) throw fail(409, response.status === 404 ? '服务端计分数据库尚未升级。' : '计分请求暂时无法完成，请重试。');
       return body;
     };
