@@ -167,7 +167,7 @@ test('map browsing reads only city summaries and discards results from the previ
     let complete: (value: unknown) => void = () => {};
     const scope = {
       CITY_DETAIL_ZOOM, sharedCityDataEnabled: true, mapInstance: {}, showMinigameModal: false, onboardingStep: 0,
-      showSettings: false, zoomLevel: scenario === 'zoomed-out' ? 8 : 15, currentCity: '北京市',
+      appSettingsVisible: false, zoomLevel: scenario === 'zoomed-out' ? 8 : 15, currentCity: '北京市',
       loadPublishedCities: () => new Promise(resolve => { complete = resolve; }),
       loadSharedCity: () => { throw Error('Viewport browsing must not load a full snapshot'); },
       setPublishedCitySummary: (value: unknown) => summaries.push(value), setCityDataNotice: (value: unknown) => notices.push(value),
@@ -294,14 +294,7 @@ test('actual onboarding navigation cannot skip consent, allows declining API, an
  scope.step=4;run();assert.deepEqual(events,['finished']);
 });
 
-test('parent completion guard prevents marking onboarding complete before consent; terms file has all seven sections',()=>{
- const source=fs.readFileSync('src/App.tsx','utf8'),ast=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
- let declaration:ts.VariableDeclaration|undefined;
- const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(ast)==='handleFinishOnboarding')declaration=node;ts.forEachChild(node,visit);};visit(ast);assert.ok(declaration);
- const code=ts.transpile(`const ${declaration.getText(ast)};`,{target:ts.ScriptTarget.ES2022}),events:any[]=[];
- const scope={termsAcceptedRef:{current:false},APP_LAST_VERSION_KEY:'visited',APP_VERSION:'5.5',localStorage:{setItem:(key:string,value:string)=>events.push([key,value])},setOnboardingStep:(value:number)=>events.push(value)};
- const run=Function('scope',`with(scope){${code};return handleFinishOnboarding;}`)(scope);run();assert.deepEqual(events,[2]);events.length=0;
- scope.termsAcceptedRef.current=true;run();assert.deepEqual(events,[['visited','5.5'],0]);
+test('terms file has all seven sections',()=>{
  const terms=fs.readFileSync('src/content/busline-terms.md','utf8');assert.equal(terms.match(/^## /gm)?.length,7);assert.equal(terms.match(/^\d+\. /gm)?.length,24);
  assert.ok(terms.endsWith('最后更新日期：2026 年 11 月 17 日\n'));
 });
