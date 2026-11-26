@@ -501,6 +501,7 @@ export default function App() {
   const activeContestRef = useRef<{
     game: GameHistoryItem['mode']; scope: string; tags: string[]; correctCount: number; submitting: boolean; saved: boolean;
   } | null>(null);
+  const contestResultLocked = gameState === 'gameover' && activeContestRef.current !== null && !activeContestRef.current.saved;
   const [contestSubmissionFailed, setContestSubmissionFailed] = useState(false);
   const [contestBoardRevision, setContestBoardRevision] = useState(0);
   const isMinigameActiveRef = useRef(false);
@@ -607,6 +608,7 @@ export default function App() {
   };
 
   const returnToMinigameMenu = () => {
+    if (contestResultLocked) return;
     questionAbortRef.current?.abort();
     currentGameQuestionRef.current = null;
     setAdminQuizAnswer('');
@@ -627,7 +629,7 @@ export default function App() {
   };
 
   const startMinigameReview = () => {
-    if (gameHistory.length === 0) return;
+    if (contestResultLocked || gameHistory.length === 0) return;
     isMinigameActiveRef.current = true;
     clearMapStateForMinigame();
     if (!prevMapModeBeforeGameRef.current) {
@@ -662,7 +664,7 @@ export default function App() {
     province?: string,
     competitive = false,
   ) => {
-    if (gameLoading || (gameState === 'playing' && isMinigameActiveRef.current)) return;
+    if (contestResultLocked || gameLoading || (gameState === 'playing' && isMinigameActiveRef.current)) return;
     const tags = competitive ? contestTags : simulationTags;
     const rules = contestRules(mode, tags);
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
@@ -8838,11 +8840,7 @@ export default function App() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                onClick={() => {
-                  if (!gameLoading) {
-                    returnToMinigameMenu();
-                  }
-                }}
+                onClick={gameLoading || contestResultLocked ? undefined : returnToMinigameMenu}
                 className="fixed inset-0 z-[120] bg-slate-950/80 backdrop-blur-md pointer-events-auto flex flex-col items-center justify-center text-white gap-3"
               >
                 {gameLoading && (
@@ -9072,7 +9070,8 @@ export default function App() {
                   <button
                     type="button"
                     onClick={returnToMinigameMenu} aria-label="返回游戏大厅"
-                    className="absolute top-5 right-5 w-8 h-8 flex items-center justify-center rounded-full bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-500 hover:text-slate-800 transition-colors"
+                    disabled={contestResultLocked}
+                    className="absolute top-5 right-5 w-8 h-8 flex items-center justify-center rounded-full bg-m3-surface-container enabled:hover:bg-m3-surface-container-high text-slate-500 enabled:hover:text-slate-800 transition-colors disabled:opacity-45"
                   >
                     <X className="w-5 h-5" />
                   </button>
@@ -9104,7 +9103,9 @@ export default function App() {
                   </dl>
 
                   {isAdminVerified && <p className="text-xs font-bold text-m3-primary">管理员模式已启用</p>}
-                  {gameAuthMessage && <p role="status" className="text-xs text-slate-500">{gameAuthMessage}</p>}
+                  {(gameAuthMessage || contestResultLocked) && <p role="status" className="text-xs text-slate-500">
+                    {gameAuthMessage || '正在记录排行榜成绩…'}
+                  </p>}
                   {contestSubmissionFailed && <button type="button" onClick={saveContestResult}
                     className="rounded-xl bg-m3-primary-container px-3 py-2 text-xs font-bold text-m3-primary">重试提交成绩</button>}
                   <div className="flex gap-2.5 w-full pt-2">
@@ -9112,7 +9113,8 @@ export default function App() {
                       <button
                         type="button"
                         onClick={startMinigameReview}
-                        className="flex-1 py-3 rounded-2xl bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 font-black text-xs transition-all flex items-center justify-center gap-1.5"
+                        disabled={contestResultLocked}
+                        className="flex-1 py-3 rounded-2xl bg-amber-50 enabled:hover:bg-amber-100 border border-amber-200 text-amber-800 font-black text-xs transition-all flex items-center justify-center gap-1.5 disabled:opacity-45"
                       >
                         <History className="w-4 h-4" />
                         复盘本局 ({gameHistory.length}题)
@@ -9120,16 +9122,17 @@ export default function App() {
                     )}
                     <button
                       type="button"
-
                       onClick={launchSelectedGame}
-                      className="flex-1 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-md hover:opacity-95 transition-all"
+                      disabled={contestResultLocked}
+                      className="flex-1 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-black text-xs shadow-md enabled:hover:opacity-95 transition-all disabled:opacity-45"
                     >
                       再玩一次
                     </button>
                     <button
                       type="button"
                       onClick={returnToMinigameMenu}
-                      className="flex-1 py-3 rounded-2xl bg-m3-surface-container hover:bg-m3-surface-container-high text-slate-700 font-black text-xs transition-all"
+                      disabled={contestResultLocked}
+                      className="flex-1 py-3 rounded-2xl bg-m3-surface-container enabled:hover:bg-m3-surface-container-high text-slate-700 font-black text-xs transition-all disabled:opacity-45"
                     >
                       返回菜单
                     </button>
