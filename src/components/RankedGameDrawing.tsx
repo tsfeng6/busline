@@ -12,6 +12,7 @@ export function RankedGameDrawing({ drawing }: { drawing: RankedPuzzle['drawing'
   const frame = drawing.frames?.[route] ?? drawing;
   return <div className="absolute inset-0 z-20 flex justify-center bg-[#f5f5f3] px-4 pb-[min(31dvh,14rem)] pt-3">
     <svg viewBox="0 0 1000 1000" className="h-full w-full" aria-label="公交线网题面" role="img">
+      {drawing.raster && <image href={`data:image/png;base64,${drawing.raster}`} x="35" y="35" width="930" height="930" />}
       {drawing.county && <circle cx="500" cy="500" r="465" fill="none" stroke="#ccd9d4" strokeWidth="2" />}
       {drawing.basemap && <path d={drawing.basemap} fill="none" stroke="#d4dbd6" strokeWidth="2" strokeLinecap="round" />}
       <path d={frame.path} fill="none" stroke="#52796f" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />

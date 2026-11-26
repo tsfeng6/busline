@@ -58,13 +58,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
 import { formatGameTime, recordGameAnswer } from './utils/gameTimer';
-import { establishGameSession, gameAccountEnabled, answerRankedPuzzle, getRankedPuzzle, hintRankedPuzzle, getGameAccount, startGameRun, type GameAccount, type GameRun } from './utils/gameAccount';
+import { establishGameSession, gameAccountEnabled, answerRankedPuzzle, getRankedPack, getRankedPuzzle, hintRankedPuzzle, getGameAccount, startGameRun, type GameAccount, type GameRun } from './utils/gameAccount';
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
 import { GameLobby } from './components/GameLobby';
 import { RankedGameDrawing } from './components/RankedGameDrawing';
 import { contests, contestTagGroups, contestRules, contestPrompts, type ContestRules } from './utils/contestRules';
 import { createSimulationQuestion } from './utils/simulationQuestion';
 import { drawContestQuestion } from './utils/contestDrawing';
+import { createNetworkContestQuestion } from './utils/contestQuestions';
 
 const isFirebaseEnabled = () => true;
 
@@ -450,6 +451,13 @@ export default function App() {
   const [gameHints, setGameHints] = useState({ remaining: 7, usedOnQuestion: 0 });
   const gameRulesRef = useRef<ContestRules | null>(null);
   const questionAbortRef = useRef<AbortController | null>(null);
+  const nextRankedPackRef = useRef<{
+    run: string; number: number; controller: AbortController; pending: Promise<string | null>;
+  } | null>(null);
+  const stopRankedPreload = () => {
+    nextRankedPackRef.current?.controller.abort();
+    nextRankedPackRef.current = null;
+  };
   const [simulationDrawing, setSimulationDrawing] = useState<RankedPuzzle['drawing'] | null>(null);
   const [rankedPuzzle, setRankedPuzzle] = useState<RankedPuzzle | null>(null);
   const [rankedHint, setRankedHint] = useState<{ text: string; complete: boolean } | null>(null);
@@ -527,6 +535,7 @@ export default function App() {
   const [reviewShowBasemap, setReviewShowBasemap] = useState(true);
   const [reviewShowStops, setReviewShowStops] = useState(true);
   const [reviewAutoPlay, setReviewAutoPlay] = useState(false);
+  const [reviewNetworkStatus, setReviewNetworkStatus] = useState('');
   const [reviewHoveredStop, setReviewHoveredStop] = useState<string | null>(null);
   const prevMapModeBeforeGameRef = useRef<'normal' | 'satellite' | 'blank' | null>(null);
   const gameSessionIdRef = useRef(0);
@@ -619,6 +628,7 @@ export default function App() {
 
   const returnToMinigameMenu = () => {
     questionAbortRef.current?.abort();
+    stopRankedPreload();
     setSimulationDrawing(null);
     gameSessionIdRef.current++;
     gameRunRef.current = null;
@@ -676,6 +686,7 @@ export default function App() {
     const rules = contestRules(mode, tags);
     const activeProv = province ?? (mode === 'county' ? gameCountyProvince : gameProvince);
     const launchId = ++gameSessionIdRef.current;
+    stopRankedPreload();
     gameRunRef.current = null;
     setGameDataError('');
     setGameAuthMessage('');
@@ -765,7 +776,19 @@ export default function App() {
       const run = gameRunRef.current;
       if (run) {
         clearRankedPuzzle();
-        const puzzle = await getRankedPuzzle(run.id, qNum, gameAccessToken);
+        const next = nextRankedPackRef.current;
+        const prefetched = next?.run === run.id && next.number === qNum ? await next.pending : null;
+        if (gameSessionIdRef.current !== sessionId) return;
+        let ticket = prefetched;
+        if (!ticket) {
+          try {
+            ticket = (await getRankedPack(run.id, qNum, gameAccessToken, controller.signal)).ticket;
+          } catch (error: any) {
+            if (error?.status !== 404) throw error;
+          }
+        }
+        if (gameSessionIdRef.current !== sessionId) return;
+        const puzzle = await getRankedPuzzle(run.id, qNum, gameAccessToken, ticket ?? undefined);
         if (gameSessionIdRef.current !== sessionId) return;
         rankedPuzzleRef.current = puzzle;
         questionShownAtRef.current = Date.now();
@@ -776,6 +799,13 @@ export default function App() {
         setRankedPuzzle(puzzle);
         setMapMode('blank');
         setGameQuestionData({ correctAnswer: '', options: puzzle.options, isFillIn: puzzle.isFillIn, promptText: puzzle.promptText });
+        stopRankedPreload();
+        if (ticket) {
+          const nextController = new AbortController();
+          const pending = getRankedPack(run.id, qNum + 1, gameAccessToken, nextController.signal)
+            .then(pack => pack.ticket, () => null);
+          nextRankedPackRef.current = { run: run.id, number: qNum + 1, controller: nextController, pending };
+        }
         return;
       }
       const catalog = await loadPublishedCities();
@@ -792,7 +822,7 @@ export default function App() {
       setGameQuestionData({ correctAnswer: question.correctAnswer, options: question.options,
         isFillIn: question.isFillIn, promptText: contestPrompts[mode] });
     } catch(error:any) {
-      if(gameSessionIdRef.current===sessionId){gameRunRef.current=null;setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
+      if(gameSessionIdRef.current===sessionId){stopRankedPreload();gameRunRef.current=null;setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
     } finally {if(gameSessionIdRef.current===sessionId)setGameLoading(false);}
   };
 
@@ -824,6 +854,7 @@ export default function App() {
         userAnswer: result.answer, isCorrect: result.correct, timedOut: result.timedOut,
       }]);
       if (result.finished) {
+        stopRankedPreload();
         setGameTimedOut(result.timedOut);
         gameTimedOutRef.current = result.timedOut;
         setGameState('gameover');
@@ -1270,6 +1301,22 @@ export default function App() {
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [activeBusLine, setActiveBusLine] = useState<any | null>(null);
   const [topCard, setTopCard] = useState<'stop' | 'line'>('stop');
+
+  const reviewItem = gameHistory[reviewIndex];
+  useEffect(() => {
+    setReviewNetworkStatus('');
+    if (gameState !== 'review' || reviewItem?.mode !== 'city' || reviewItem.networkPaths) return;
+    let active = true;
+    setReviewNetworkStatus('正在读取复盘线网…');
+    void loadGameCity(reviewItem.targetCity).then(data => {
+      if (!active) return;
+      const { networkPaths, networkStops } = createNetworkContestQuestion('city', data, contestRules('city', ['fill']), [], '');
+      setGameHistory(items => items.map(item => item === reviewItem ? { ...item, networkPaths, networkStops } : item));
+    }).catch(() => {
+      if (active) setReviewNetworkStatus('暂时无法读取复盘线网。');
+    });
+    return () => { active = false; };
+  }, [gameState, reviewItem]);
 
   useEffect(() => {
     if (!showMinigameModal || gameState !== 'review') return;
@@ -9430,6 +9477,7 @@ export default function App() {
 
                 return (
                   <div className="px-4 py-3 flex flex-col gap-2.5 bg-m3-surface">
+                    {reviewNetworkStatus && <p role="status" className="text-xs text-slate-500">{reviewNetworkStatus}</p>}
                     {/* Top Header */}
                     <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
                       <div className="flex items-center gap-2 min-w-0 flex-wrap">

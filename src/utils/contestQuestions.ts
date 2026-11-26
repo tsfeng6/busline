@@ -34,6 +34,13 @@ const routeStops = (line: BusLine) => (line.via_stops ?? []).flatMap(stop => {
 const options = (answer: string, candidates: string[], random: () => number) =>
   shuffle([answer, ...[...new Set(candidates.filter(name => name !== answer))].slice(0, 3)], random);
 
+export function createCityContestQuestion(city: string, rules: ContestRules, candidates: string[], random = Math.random): OfflineQuestion {
+  const choices = rules.fill ? [] : options(city, shuffle(candidates, random), random);
+  if (!rules.fill && choices.length < 2) throw Error('题库暂无足够的选择题选项。');
+  return { correctAnswer: city, targetCity: city, isFillIn: rules.fill, options: choices,
+    promptText: '请根据公交线网猜城市。', showBasemap: false, showStops: false };
+}
+
 export function createNetworkContestQuestion(
   mode: 'city' | 'county', data: CityDataset, rules: ContestRules, candidates: string[], previous: string,
   seat?: CountySeat, random = Math.random,
