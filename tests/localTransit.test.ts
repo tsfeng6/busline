@@ -98,13 +98,13 @@ test('actual game generation never invokes provider search services and accepts 
   loadPublishedCities:async()=>[{city:snapshot.city,province:'北京市',countySeats:[seat]}],loadGameCity:async(city:string)=>{assert.equal(city,snapshot.city);return snapshot;},
   roadViewportCleanupRef:ref(null),activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),allMapStopsRef:ref(new Map()),roadStopsDataRef:ref(new Map()),
   lineGroupRef:ref({clearOverlays(){},addOverlay(){}}),markerGroupRef:ref({clearOverlays(){},getOverlays(){return [];},addOverlay(){},addOverlays(){}}),clearStopMarkerGroup(){},
-  shuffle,createOfflineQuestion,getGameTimeLimit,radiusRing,lineThickness:'thin',gameTimeRemainingMsRef:ref(null),gameDeadlineRef:ref(null),currentGameQuestionRef:ref(null),setGameQuestionData:(value:any)=>question=value,
+  shuffle,createOfflineQuestion,getGameTimeLimit,radiusRing,lineThickness:'thin',gameTimeRemainingMsRef:ref(null),gameDeadlineRef:ref(null),questionShownAtRef:ref(null),currentGameQuestionRef:ref(null),setGameQuestionData:(value:any)=>question=value,
   setMapMode:(mode:string)=>{basemap=mode;},setCountyGameMask:(_:unknown,radius:number)=>{maskRadius=radius;},
   isMinigameActiveRef:ref(true),restoreMapAfterMinigame(){},setGameDataError:(message:string)=>{throw Error(message);}};
  const proxy=new Proxy(scope,{has:(target,key)=>key in target||(typeof key==='string'&&key.startsWith('set')),get:(target,key)=>key in target?target[key]:typeof key==='string'&&key.startsWith('set')?()=>{}:undefined});
  const run=Function('scope',`with(scope){${code};return generateQuestion;}`)(proxy);
  for(const mode of ['line','station','city','county']){
-  question=null;await run(mode,'easy','北京市',1);assert.ok(question);
+  question=null;scope.questionShownAtRef.current=null;await run(mode,'easy','北京市',1);assert.ok(question);assert.equal(typeof scope.questionShownAtRef.current,'number');
   assert.equal(basemap,mode==='city'||mode==='county'?'blank':'normal');
   if(mode==='county')assert.equal(maskRadius,10_000);
  }

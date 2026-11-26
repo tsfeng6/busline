@@ -62,7 +62,7 @@ import { establishGameSession, gameAccountEnabled, answerRankedPuzzle, getRanked
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
 import { GameLobby } from './components/GameLobby';
 import { RankedGameDrawing } from './components/RankedGameDrawing';
-import { contests } from './utils/contestRules';
+import { contests, contestTagGroups } from './utils/contestRules';
 
 const isFirebaseEnabled = () => true;
 
@@ -435,6 +435,16 @@ export default function App() {
   const gameTimeRemainingMsRef = useRef<number | null>(null);
   const gameDeadlineRef = useRef<number | null>(null);
   const gameTimedOutRef = useRef(false);
+  const questionShownAtRef = useRef<number | null>(null);
+  const [gameElapsedMs, setGameElapsedMs] = useState(0);
+  const [playedContestTags, setPlayedContestTags] = useState<ReturnType<typeof contestTagGroups>[number]['tags']>([]);
+  const recordQuestionTime = useCallback((submittedAt: number, deadline: number | null) => {
+    const shownAt = questionShownAtRef.current;
+    if (shownAt === null) return;
+    questionShownAtRef.current = null;
+    const elapsed = Math.max(0, Math.min(submittedAt, deadline ?? submittedAt) - shownAt);
+    setGameElapsedMs(total => total + elapsed);
+  }, []);
   const gameScoreRef = useRef(0);
   const [gameHints, setGameHints] = useState({ remaining: 7, usedOnQuestion: 0 });
   const [rankedPuzzle, setRankedPuzzle] = useState<RankedPuzzle | null>(null);
@@ -527,7 +537,10 @@ export default function App() {
     }
     const missed = recordGameAnswer(currentGameQuestionRef, '', false, true);
     if (!missed && (gameMode === 'line' || gameMode === 'station')) return;
-    if (missed) setGameHistory(previous => [...previous, missed]);
+    if (missed) {
+      recordQuestionTime(Date.now(), gameDeadlineRef.current);
+      setGameHistory(previous => [...previous, missed]);
+    }
     gameTimedOutRef.current = true;
     gameTimeRemainingMsRef.current = 0;
     gameDeadlineRef.current = null;
@@ -538,7 +551,7 @@ export default function App() {
     setGameFeedback(null);
     setConfirmQuitGame(false);
     setGameState('gameover');
-  }, [gameMode]);
+  }, [gameMode, recordQuestionTime]);
 
   // Use a deadline so background-tab throttling cannot extend the challenge.
   // Loading questions pauses the clock; each new question keeps the same budget.
@@ -739,6 +752,11 @@ export default function App() {
       setGameTimeLeft(timeLimit);
       setGameState('playing');
       gameScoreRef.current = 0;
+      questionShownAtRef.current = null;
+      setGameElapsedMs(0);
+      setPlayedContestTags(run
+        ? contestTagGroups(run.game).flatMap(group => group.tags.filter(tag => contestTags.includes(tag.id)))
+        : []);
       setGameScore(0);
       setGameHints({ remaining: 7, usedOnQuestion: 0 });
       setGameQuestionNum(1);
@@ -799,7 +817,8 @@ export default function App() {
         const puzzle = await getRankedPuzzle(run.id, qNum, gameAccessToken);
         if (gameSessionIdRef.current !== sessionId) return;
         rankedPuzzleRef.current = puzzle;
-        rankedDeadlineRef.current = Date.now() + puzzle.remainingMs;
+        questionShownAtRef.current = Date.now();
+        rankedDeadlineRef.current = questionShownAtRef.current + puzzle.remainingMs;
         gameTimeRemainingMsRef.current = puzzle.remainingMs;
         setGameTimeLeft(Math.ceil(puzzle.remainingMs / 1000));
         setGameHints({ remaining: puzzle.hints, usedOnQuestion: 0 });
@@ -863,6 +882,7 @@ export default function App() {
         gameDeadlineRef.current = null;
         setGameTimeLeft(timeLimit);
       }
+      questionShownAtRef.current = Date.now();
       setGameQuestionData({correctAnswer:question.correctAnswer,options:question.options,isFillIn:question.isFillIn,promptText:question.promptText});
     } catch(error:any) {
       if(gameSessionIdRef.current===sessionId){gameRunRef.current=null;setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
@@ -877,6 +897,8 @@ export default function App() {
     setRankedWaiting(true);
     setGameDataError('');
     const session = gameSessionIdRef.current;
+    const submittedAt = Date.now();
+    const deadline = rankedDeadlineRef.current;
     try {
       const result = await answerRankedPuzzle(run.id, puzzle.id, answer.trim().slice(0, 150), timeout, gameAccessToken);
       if (gameSessionIdRef.current !== session) return;
@@ -884,6 +906,7 @@ export default function App() {
         rankedDeadlineRef.current = Date.now() + result.pendingMs;
         return;
       }
+      recordQuestionTime(submittedAt, deadline);
       rankedPuzzleRef.current = null;
       rankedDeadlineRef.current = null;
       gameScoreRef.current = result.score;
@@ -935,6 +958,7 @@ export default function App() {
 
     const recorded = recordGameAnswer(currentGameQuestionRef, rawUser, isCorrect);
     if (!recorded) return;
+    recordQuestionTime(Date.now(), gameDeadlineRef.current);
     setGameHistory(previous => [...previous, recorded]);
 
     if (isCorrect) {
@@ -9448,6 +9472,23 @@ export default function App() {
                     <p className="text-xs text-slate-500 font-medium mt-1">本次挑战最终得分</p>
                     <div className="text-4xl font-black text-m3-primary mt-2">{gameScore} <span className="text-sm font-bold text-slate-400">分</span></div>
                   </div>
+
+                  <dl className="w-full space-y-3 rounded-2xl bg-m3-surface p-4 text-left text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-600">总用时</dt>
+                      <dd className="font-black tabular-nums text-slate-900">{formatGameTime(Math.floor(gameElapsedMs / 1000))}</dd>
+                    </div>
+                    {gameRunRef.current && <div className="space-y-2">
+                      <dt className="text-slate-600">本局标签</dt>
+                      <dd className="flex flex-wrap gap-1.5">
+                        {playedContestTags.length ? playedContestTags.map(tag => (
+                          <span key={tag.id} className="rounded-lg bg-m3-primary-container px-2 py-1 text-xs font-bold text-m3-on-primary-container">
+                            {tag.label} {tag.factor}×
+                          </span>
+                        )) : <span className="text-xs text-slate-500">未添加标签</span>}
+                      </dd>
+                    </div>}
+                  </dl>
 
                   {!gameRunRef.current && (() => {
                     const rating = getRating(gameMode!, gameScore);
