@@ -103,6 +103,7 @@ test('actual game generation never invokes provider search services and accepts 
   loadPublishedCities: async () => [{city: snapshot.city, province: '北京市', countySeats: [seat]}],
   loadGameCity: async (city: string) => { assert.equal(city, snapshot.city); return snapshot; },
   getRankedPuzzle: () => { throw Error('模拟不应请求竞赛服务'); },
+  getRankedPack: () => { throw Error('模拟不应请求竞赛题包'); }, stopRankedPreload() {},
   roadViewportCleanupRef: ref(null), activeRawMarkersRef: ref([]), roadStopMarkersRef: ref([]),
   allMapStopsRef: ref(new Map()), roadStopsDataRef: ref(new Map()), lineGroupRef: ref(null), markerGroupRef: ref(null),
   clearStopMarkerGroup() {}, setCountyGameMask() {},

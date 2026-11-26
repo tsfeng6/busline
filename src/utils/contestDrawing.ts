@@ -3,6 +3,9 @@ import type { GameMode, OfflineQuestion } from './offlineGame';
 import type { RankedPuzzle } from './rankedGame';
 
 export function drawContestQuestion(question: OfflineQuestion, mode: GameMode, cycle = false): RankedPuzzle['drawing'] {
+  if (question.networkImage) return {
+    path: '', raster: question.networkImage, stops: [], terminals: [], county: false,
+  };
   const lines = question.lineInfos ?? [];
   const paths = question.networkPaths ?? lines.map(line => line.path);
   if (mode === 'line') {

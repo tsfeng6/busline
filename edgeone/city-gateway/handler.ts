@@ -1,6 +1,7 @@
 import { contestRules, contests, contestPrompts } from '../../src/utils/contestRules';
 import { createRankedQuestion } from './rankedGame';
 import { drawContestQuestion } from '../../src/utils/contestDrawing';
+import { openQuestion, QUESTION_TICKET_LIMIT, sealQuestion } from './questionTicket';
 import { isGameAnswerCorrect } from '../../src/utils/gameAnswers';
 import { getGameHint, isGameHintComplete } from '../../src/utils/gameHint';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
@@ -150,6 +151,8 @@ async function handleWechatGateway(request:Request,env:Env,json:(data:unknown,st
     message=purpose==='login'?`请在 15 分钟内打开此免密登录链接：${link}\n请勿转发给他人。`:`请在 15 分钟内打开链接${purpose==='bind'?'验证现有账号后完成绑定':'注册或验证账号后完成绑定'}：${link}\n请勿转发给他人。`;}
   return xml(wechatReply(from,to,message));
 }
+const preparingRankedPacks = new Map<string, Promise<string>>();
+
 async function handleGameGateway(request:Request,env:Env,json:(data:unknown,status?:number)=>Response,transport:typeof fetch){
   const url=new URL(request.url),path=url.pathname;
   const configured=!!env.SUPABASE_URL&&!!env.SUPABASE_ANON_KEY;
@@ -293,13 +296,13 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
       avatarUrl: item.avatar_url || (item.avatar_path ? base + '/storage/v1/object/public/game-avatars/' + item.avatar_path : undefined),
     })) });
   }
-  const rankedPath = /^\/ranked-game-runs(?:\/([a-f0-9-]{36})\/(question|answer|hint))?$/.exec(path);
+  const rankedPath = /^\/ranked-game-runs(?:\/([a-f0-9-]{36})\/(pack|question|answer|hint))?$/.exec(path);
   if (rankedPath && request.method === 'POST') {
     const serviceKey = env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY;
     const appOrigin = publicUrl(env.PUBLIC_APP_URL);
     if (!serviceKey || !appOrigin) throw fail(503, '服务端计分尚未配置。');
     const { id: user } = await authenticatedProfile(bearer);
-    const input = await jsonBody(request, 2048);
+    const input = await jsonBody(request, rankedPath[2] === 'question' ? QUESTION_TICKET_LIMIT : 2048);
     const runId = rankedPath[1] ?? null;
     const action = async (operation: string, payload = {}) => {
       const response = await transport(base + '/rest/v1/rpc/ranked_game_action', {
@@ -328,6 +331,29 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
       return reply({ run }, 201);
     }
     const current = await action('read');
+    const prepare = async (previous: string, useCityThumbnail = false) => {
+      try {
+        const question = await createRankedQuestion(appOrigin, transport, current.game, current.scope, previous, current.rules, useCityThumbnail);
+        const drawing = drawContestQuestion(question, current.game, current.rules.cycle);
+        const { contextPaths, networkImage, ...review } = question;
+        return { question: review, drawing };
+      } catch {
+        throw fail(409, '暂时无法准备计分题目，请稍后重试。');
+      }
+    };
+    if (rankedPath[2] === 'pack') {
+      const number = input.number;
+      if (current.finished || !Number.isSafeInteger(number) || number !== current.number + 1) throw fail(409, '题目顺序无效。');
+      const key = runId + ':' + number;
+      let pending = preparingRankedPacks.get(key);
+      if (!pending) {
+        pending = prepare(current.question?.correctAnswer ?? current.previousAnswer, true)
+          .then(prepared => sealQuestion(prepared, serviceKey, runId, number))
+          .finally(() => preparingRankedPacks.delete(key));
+        preparingRankedPacks.set(key, pending);
+      }
+      return reply({ number, ticket: await pending });
+    }
     if (rankedPath[2] === 'answer') {
       if (!uuid.test(input.id || '') || typeof input.answer !== 'string' || input.answer.length > 150) throw fail(400, '答案格式无效。');
       const question = current.id === input.id ? current.question : null;
@@ -347,11 +373,18 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     if (current.finished || !Number.isSafeInteger(number) || number !== current.number + (current.question ? 0 : 1)) throw fail(409, '题目顺序无效。');
     let issued = current;
     if (!current.question) {
-      const question = await createRankedQuestion(appOrigin, transport, current.game, current.scope, current.previousAnswer, current.rules)
-        .catch(() => { throw fail(409, '暂时无法读取计分题目，请稍后重试。'); });
-      const drawing = drawContestQuestion(question, current.game, current.rules.cycle);
-      const { contextPaths, ...review } = question;
-      issued = await action('issue', { number, question: review, drawing });
+      let prepared;
+      if (typeof input.ticket === 'string') {
+        try {
+          prepared = openQuestion(input.ticket, serviceKey, runId, number);
+        } catch {
+          throw fail(400, '竞赛题包无效，请重新出题。');
+        }
+      } else {
+        // Previously opened clients may still use the original request.
+        prepared = await prepare(current.previousAnswer);
+      }
+      issued = await action('issue', { number, ...prepared });
     }
     const question = issued.question;
     const promptText = contestPrompts[current.game as GameName];

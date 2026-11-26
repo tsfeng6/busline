@@ -185,11 +185,14 @@ test('ranked gateway exposes only the drawing until the server grades the answer
  const accountEnv = {...env, SUPABASE_URL:'https://project.supabase.co', SUPABASE_ANON_KEY:'anon-test-key',
   SUPABASE_SECRET_KEY:'sb_secret_test', PUBLIC_APP_URL:'https://busline.cc'};
  const state: Record<string, any> = { game:'city', difficulty:'hard', scope:'全国', number:0, previousAnswer:'', hints:0, remainingMs:180000 };
+ let cityReads = 0;
  const upstream: typeof fetch = async (input, init) => {
    const url = new URL(String(input));
    if (url.pathname === '/rest/v1/rpc/current_game_profile') return Response.json([{id, display_name:'测试用户'}]);
    if (url.hostname === 'busline.cc') {
+     cityReads++;
      assert.equal(new Headers(init?.headers).has('Authorization'), false);
+     if (url.pathname.endsWith('.png')) return new Response(Uint8Array.from([137,80,78,71,13,10,26,10]));
      return Response.json(url.pathname.endsWith('overview.json') ?
        { cities:[{city:'北京市', bounds:[115,38,117,41], thumbnail:'thumbnails/北京.png'}] } : sample());
    }
@@ -222,14 +225,36 @@ test('ranked gateway exposes only the drawing until the server grades the answer
  assert.equal((await post('/ranked-game-runs', { game:'line', scope:'广州市' })).status, 400);
  assert.equal((await post('/ranked-game-runs', { game:'station', scope:'上海市', tags:['fill','nearby'] })).status, 400);
  assert.equal((await post('/ranked-game-runs', { game:'city', tags:['fill'], multiplier:999 })).status, 201);
- const response = await post('/ranked-game-runs/' + run + '/question', {number:1});
+ const prefix = '/ranked-game-runs/' + run;
+ const packed = await post(prefix + '/pack', {number:1});
+ assert.equal(packed.status, 200);
+ assert.equal(packed.headers.get('cache-control'), 'no-store');
+ const textOfPack = await packed.text();
+ assert.doesNotMatch(textOfPack, /correctAnswer|targetCity|北京市/);
+ const { ticket } = JSON.parse(textOfPack);
+ const readsAfterPrepare = cityReads;
+ assert.ok(readsAfterPrepare > 0);
+ assert.equal((await post(prefix + '/question', {number:1, ticket:(ticket[0] === 'A' ? 'B' : 'A') + ticket.slice(1)})).status, 400);
+ const response = await post(prefix + '/question', {number:1, ticket});
+ assert.equal(cityReads, readsAfterPrepare);
+
  assert.equal(response.status, 200);
  assert.equal(response.headers.get('cache-control'), 'no-store');
  const text = await response.text();
  assert.doesNotMatch(text, /correctAnswer|targetCity|fallbackCenter|116\.123456789123|北京市/);
- assert.match(JSON.parse(text).drawing.path, /^M/);
+ assert.match(JSON.parse(text).drawing.raster, /^iVBORw0KGgo/);
+ const next = await post(prefix + '/pack', {number:2});
+ assert.equal(next.status, 200);
+ assert.equal(state.number, 1);
+ assert.equal(state.id, questionId);
  const settled = await post('/ranked-game-runs/' + run + '/answer', {id:questionId, answer:'北京市', score:999});
  assert.equal((await settled.json()).score, 3);
+ Object.assign(state, { number: 10, question: null, previousAnswer: '北京市' });
+ const latePack = await post(prefix + '/pack', {number:11});
+ assert.equal(latePack.status, 200);
+ const late = await latePack.json();
+ assert.equal((await post(prefix + '/question', {number:11, ticket})).status, 400);
+ assert.equal((await post(prefix + '/question', {number:11, ticket:late.ticket})).status, 200);
  assert.equal((await post('/game-runs/' + run + '/finish', {score:999})).status, 410);
 });
 

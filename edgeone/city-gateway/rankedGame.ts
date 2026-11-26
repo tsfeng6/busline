@@ -5,12 +5,12 @@ import { cityDataKey, normalizeCityDataset } from '../../src/utils/cityDataset';
 import { validCityOverview } from '../../src/utils/cityOverview';
 import type { PublishedCity } from '../../src/utils/localTransit';
 import { shuffle, type GameMode, type OfflineQuestion } from '../../src/utils/offlineGame';
-import { createLocalContestQuestion, createNetworkContestQuestion, contestDistrictPolygons } from '../../src/utils/contestQuestions';
+import { createCityContestQuestion, createLocalContestQuestion, createNetworkContestQuestion, contestDistrictPolygons } from '../../src/utils/contestQuestions';
 import type { ContestRules } from '../../src/utils/contestRules';
 
 export async function createRankedQuestion(
   appOrigin: string, fetcher: typeof fetch, mode: GameMode,
-  scope: string, previous: string, rules: ContestRules,
+  scope: string, previous: string, rules: ContestRules, useCityThumbnail = false,
 ): Promise<OfflineQuestion> {
   const app = new URL(appOrigin);
   const deadline = Date.now() + 32000;
@@ -26,7 +26,7 @@ export async function createRankedQuestion(
   };
   const index = await (await read('overview.json')).json();
   if (!Array.isArray(index.cities)) throw Error('题库目录无效。');
-  const catalog = index.cities.filter(validCityOverview) as PublishedCity[];
+  const catalog = index.cities.filter(validCityOverview) as (PublishedCity & { thumbnail: string })[];
   const random = () => randomInt(0, 2 ** 32) / 2 ** 32;
   const seats = mode === 'county' ? catalog.filter(item => item.province === scope).flatMap(item => item.countySeats ?? []) : [];
   const cities = mode === 'city' ? catalog : catalog.filter(item => item.city === scope);
@@ -37,6 +37,15 @@ export async function createRankedQuestion(
   // the chosen snapshot stay in the gateway, away from the player's browser.
   for (const candidate of shuffle(remaining.length ? remaining : pool, random)) {
     try {
+      if (mode === 'city' && useCityThumbnail) {
+        const thumbnail = catalog.find(city => city.city === candidate.city)?.thumbnail;
+        if (!thumbnail?.endsWith('.png')) continue;
+        const response = await read(thumbnail);
+        const png = Buffer.from(await response.arrayBuffer());
+        if (png.length > 2 * 1024 * 1024 || !png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) continue;
+        return { ...createCityContestQuestion(candidate.city, rules, catalog.map(city => city.city), random),
+          networkImage: png.toString('base64') };
+      }
       const folder = `${encodeURIComponent(cityDataKey(candidate.city))}/`;
       const manifest = await (await read(folder + 'latest.json')).json();
       const data = normalizeCityDataset(await resolveCityStorage(manifest,
@@ -67,7 +76,7 @@ export async function createRankedQuestion(
       return createNetworkContestQuestion(mode, data, rules,
         mode === 'county' ? seats.map(seat => seat.name) : catalog.map(city => city.city), previous, candidate.seat, random);
     } catch (error) {
-      if (mode !== 'county' || Date.now() >= deadline) throw error;
+      if (!(mode === 'county' || (mode === 'city' && useCityThumbnail)) || Date.now() >= deadline) throw error;
     }
   }
   throw Error('这个榜单暂无可用的已收录题目。');

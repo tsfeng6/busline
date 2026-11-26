@@ -72,9 +72,15 @@ export async function updateGameProfile(displayName: string, avatar?: File, acce
 export async function startGameRun(key: Pick<GameLeaderboardKey, 'game' | 'scope'>, accessToken: string, tags: string[]) {
   return request<{ run: GameRun }>('/ranked-game-runs', { method: 'POST', body: JSON.stringify({ ...key, tags }) }, accessToken);
 }
-export function getRankedPuzzle(run: string, number: number, accessToken: string) {
+export function getRankedPack(run: string, number: number, accessToken: string, signal?: AbortSignal) {
+  return request<{ number: number; ticket: string }>(`/ranked-game-runs/${encodeURIComponent(run)}/pack`, {
+    method: 'POST', body: JSON.stringify({ number }),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000),
+  }, accessToken);
+}
+export function getRankedPuzzle(run: string, number: number, accessToken: string, ticket?: string) {
   return request<RankedPuzzle>(`/ranked-game-runs/${encodeURIComponent(run)}/question`, {
-    method: 'POST', body: JSON.stringify({ number }), signal: AbortSignal.timeout(45000),
+    method: 'POST', body: JSON.stringify({ number, ticket }), signal: AbortSignal.timeout(45000),
   }, accessToken);
 }
 export function answerRankedPuzzle(run: string, id: string, answer: string, timeout: boolean, accessToken: string) {
