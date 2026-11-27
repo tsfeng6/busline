@@ -553,6 +553,16 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   const networkOnly = createLocalContestQuestion('station', data, contestRules('station', ['network-only', 'all-stops']), districts, '', random);
   assert.equal(networkOnly.showBasemap, false);
   assert.ok(drawContestQuestion(networkOnly, 'station').basemap);
+  const [lng, lat] = networkOnly.targetPoint!.lngLat;
+  const widerNetwork = drawContestQuestion({
+    ...networkOnly,
+    contextPaths: [
+      [[lng - .001, lat + .025], [lng + .001, lat + .025]],
+      [[lng - .001, lat + .035], [lng + .001, lat + .035]],
+    ],
+  }, 'station');
+  assert.deepEqual(widerNetwork.target, [500, 500]);
+  assert.equal(widerNetwork.basemap?.match(/M/g)?.length, 1);
 
   const { basemap } = drawContestQuestion({
     ...question, networkPaths: [[[0, 0], [1, 0]]],

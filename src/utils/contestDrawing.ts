@@ -3,6 +3,8 @@ import type { GameMode, OfflineQuestion } from './offlineGame';
 import type { RankedPuzzle } from './rankedGame';
 import { contestRouteColors } from './contestRouteColors';
 
+const STATION_NETWORK_HALF_WIDTH_METERS = 3000;
+
 function clipToQuestionFrame(a: Point, b: Point): [Point, Point] | undefined {
   const [x, y] = a;
   const dx = b[0] - x, dy = b[1] - y;
@@ -52,7 +54,7 @@ export function drawContestQuestion(question: OfflineQuestion, mode: GameMode, c
     south = Math.min(south, y); north = Math.max(north, y);
   }
   if (question.countyWindow || mode === 'station') {
-    const delta = (question.countyWindow?.radius ?? 1200) / 111320;
+    const delta = (question.countyWindow?.radius ?? STATION_NETWORK_HALF_WIDTH_METERS) / 111320;
     west = south = -delta; east = north = delta;
   }
   const scale = 930 / Math.max(east - west, north - south, 1e-9);
