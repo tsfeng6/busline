@@ -415,6 +415,20 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   assert.equal(guess('unusual').correctAnswer, '观光环线');
   assert.equal(guess('unusual').contextPaths?.length, mixed.lines.length - rail.length);
 
+  const variants = ['631快', '密25（河西）', '840区间', '840路区间车(甲--乙)', '41A', '31路支线'];
+  const loopData = { ...data, lines: [
+    ...variants.map(name => line(name, core)),
+    line('环一线外环', core),
+    line('1路(甲(东门)--乙)', core),
+  ] };
+  for (const range of [[], ['special'], ['all-city'], ['niche'], ['unusual']]) {
+    const result = createLocalContestQuestion('line', loopData, contestRules('line', range), districts, '', random);
+    assert.equal(result.correctAnswer, '环一线外环');
+    assert.deepEqual(result.options, ['环一线外环', '1路']);
+    assert.equal(result.contextPaths?.length, 2);
+  }
+  const loopStation = createLocalContestQuestion('station', loopData, contestRules('station', ['fill']), districts, '', random);
+  assert.deepEqual(loopStation.lineInfos?.map(item => item.name), ['环一线外环', '1路(甲(东门)--乙)']);
 
   const station = createLocalContestQuestion('station', data, contestRules('station', ['cycle','no-stops','no-base']), districts, '', random);
   const drawing = drawContestQuestion(station, 'station', true);

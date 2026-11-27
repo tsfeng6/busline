@@ -88,11 +88,11 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
     上海市: '上海市区（黄浦、静安、徐汇、长宁、普陀、虹口、杨浦）',
   } as Record<string, string>)[city] ?? `${city.replace(/市$/, '')}市区`;
   const rangeDescription = {
-    urban: '纯数字编号的常规公交',
-    special: '常规公交及常见带前后缀的编号线路（排除偏门线路）',
-    'all-city': '常规公交及常见带前后缀的编号线路（排除偏门线路）',
-    niche: '所有线路名含阿拉伯数字的公交，包括带数字的偏门线路',
-    unusual: '所有已收录公交，包括无数字名称的偏门线路',
+    urban: '纯数字编号的常规公交和内外环线',
+    special: '常规公交、内外环线及常见带前缀的编号线路',
+    'all-city': '常规公交、内外环线及常见带前缀的编号线路',
+    niche: '内外环线及线路名含阿拉伯数字的公交，包括带数字的偏门线路',
+    unusual: '公交，包括无数字名称的偏门线路',
   }[rules.range];
   const locked = props.catalogLoading || !props.catalogAvailable
     || (competitive && (props.accountLoading || !props.accountEnabled))

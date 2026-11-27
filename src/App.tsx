@@ -9037,7 +9037,7 @@ export default function App() {
                             ? '输入城市名称（如：北京 / 北京市）'
                             : gameMode === 'station'
                             ? '输入站点名称（如：西单）'
-                            : '输入线路名称（如：1路 / 919快）'
+                            : '输入线路名称（如：1路 / 环一线外环）'
                         }
                         value={gameUserInput}
                         onChange={(e) => setGameUserInput(e.target.value)}

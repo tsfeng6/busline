@@ -24,7 +24,31 @@ function contains(ring: Ring, [lng, lat]: Point) {
   return inside;
 }
 
-const regular = (name: string) => /^\d+路?(?:内环|外环)?$/.test(routeName(name).normalize('NFKC'));
+const regular = (name: string) => /^\d+路?(?:内环|外环|环线)?$/.test(routeName(name).normalize('NFKC'));
+const loopDirection = /(?:内环|外环)$/;
+
+function hasRouteVariant(name: string) {
+  const normalized = name.normalize('NFKC');
+  let depth = 0;
+  let start = 0;
+  for (const { 0: bracket, index } of normalized.matchAll(/[()]/g)) {
+    if (bracket === '(') {
+      if (depth++ === 0) start = index + 1;
+      continue;
+    }
+    if (depth === 0) return true;
+    if (--depth !== 0) continue;
+    const detail = normalized.slice(start, index).trim();
+    // Published names append the origin and destination as direction metadata.
+    if (!/^(?:内环|外环|环线)$/.test(detail) && !/^.+?(?:--+|—+|→|↔).+$/.test(detail)) return true;
+  }
+  if (depth !== 0) return true;
+  const label = routeName(normalized).replace(/\s+/g, '').replace(loopDirection, '').replace(/(\d[路线]?)环线$/, '$1');
+  if (/(?:区间(?:快车?|慢车?|车|线)?|快车?|慢车?|支(?:线|路)?|短线|加班车?|延长线)(?:路)?$/.test(label)) return true;
+  const numberedSuffix = label.match(/^(?:[A-Za-z\p{Script=Han}]{0,4})\d+(.*)$/u)?.[1];
+  return numberedSuffix !== undefined && !/^(?:号?[路线])?$/.test(numberedSuffix);
+}
+
 function isRailRoute(name: string) {
   const label = routeName(name).normalize('NFKC').replace(/\s/g, '');
   if (/(?:接驳|公交|摆渡|替代|巴士)/.test(label)) return false;
@@ -93,9 +117,13 @@ export function createLocalContestQuestion(
     return included;
   };
   const citywide = isCitywideContest(rules.range);
-  const entries = data.lines.filter(line => line.path?.length >= 2 && !isRailRoute(line.name))
+  const entries = data.lines.filter(line =>
+    line.path?.length >= 2 && !isRailRoute(line.name) && !hasRouteVariant(line.name))
     .map(line => ({ line, stops: routeStops(line) }));
   const eligible = entries.filter(({ line }) => {
+    const normalized = line.name.normalize('NFKC');
+    const label = routeName(normalized);
+    if (loopDirection.test(label) || /\d[路线]?环线$/.test(label) || /\((?:内环|外环|环线)\)/.test(normalized)) return true;
     if (mode === 'station' || rules.range === 'urban') return regular(line.name);
     if (rules.range === 'unusual') return true;
     if (rules.range === 'niche') return /[0-9０-９]/.test(routeName(line.name));
