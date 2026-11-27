@@ -344,27 +344,28 @@ test('local contest results save the best score for the authenticated player', a
  assert.equal((await submit(4, '')).status, 401);
  assert.equal((await submit(-1)).status, 400);
  assert.deepEqual(await (await submit(4)).json(), {saved:true});
- assert.equal(best, 3);
+ assert.equal(best, 6);
  assert.equal((await submit(2)).status, 200);
- assert.equal(best, 3);
+ assert.equal(best, 6);
  assert.equal((await submit(5)).status, 200);
- assert.equal(best, 3.75);
+ assert.equal(best, 7.5);
  suspended = true;
  assert.equal((await submit(8)).status, 403);
- assert.equal(best, 3.75);
+ assert.equal(best, 7.5);
 });
 
 test('contest labels are exclusive and only valid for their mode', async () => {
   const { contestRules } = await import('../src/utils/contestRules');
-  assert.equal(contestRules('line', []).multiplier, .25);
-  assert.equal(contestRules('line', ['special']).multiplier, .5);
-  assert.equal(contestRules('line', ['niche']).multiplier, 1);
-  assert.equal(contestRules('line', ['unusual']).multiplier, 1.25);
+  assert.equal(contestRules('line', []).multiplier, 0.5);
+  assert.equal(contestRules('station', []).multiplier, 0.5);
+  assert.equal(contestRules('line', ['special']).multiplier, 1);
+  assert.equal(contestRules('line', ['niche']).multiplier, 2);
+  assert.equal(contestRules('line', ['unusual']).multiplier, 2.5);
   assert.equal(contestRules('line', []).showBasemap, true);
   assert.equal(contestRules('line', ['network-only']).showBasemap, false);
-  assert.equal(contestRules('line', ['network-only']).multiplier, .75);
+  assert.equal(contestRules('line', ['network-only']).multiplier, 1.5);
   assert.equal(contestRules('line', ['no-base']).showBasemap, false);
-  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 6750);
+  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 13500);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).hintLimit, 3);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).timeLimit, 10);
   assert.equal(contestRules('county', ['fill']).multiplier, 5);

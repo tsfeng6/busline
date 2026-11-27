@@ -76,7 +76,7 @@ export function contestRules(mode: GameMode, input: unknown) {
   const hints = tags.find(tag => tag.id.startsWith('hints-'));
   return {
     tags: tags.map(tag => tag.id),
-    multiplier: tags.reduce((product, tag) => product * tag.factor, local ? .25 : 1),
+    multiplier: tags.reduce((product, tag) => product * tag.factor, local ? 0.5 : 1),
     perQuestion: local,
     timeLimit: timed ? Number(timed.id.slice(5)) : local ? 120 : 180,
     hintLimit: hints ? Number(hints.id.slice(6)) : 7,
