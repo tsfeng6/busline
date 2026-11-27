@@ -3,6 +3,7 @@ import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
 import { contestRegions, contestRules, contestSeason, contestTagGroups, contests, isCitywideContest } from '../utils/contestRules';
 import { getContestLeaderboard, type LeaderboardEntry } from '../utils/gameAccount';
+import { CONTEST_TOTAL_LIMIT_SECONDS } from '../utils/gameTimer';
 import { hasContestDistricts } from '../utils/contestQuestions';
 import type { PublishedCity } from '../utils/localTransit';
 import type { GameMode } from '../utils/offlineGame';
@@ -110,6 +111,7 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
       <span className={`contest-multiplier contest-multiplier-${tier}`}><strong>积分倍率 {rules.multiplier}×</strong></span>
     </div>
     {local && <p className="text-xs text-slate-600">默认显示高德底图和站点 · 7 次提示 · 每题 2 分钟 · 选择题</p>}
+    {competitive && <p className="text-xs text-slate-600">整局限时 {CONTEST_TOTAL_LIMIT_SECONDS / 60} 分钟</p>}
     {!competitive && mode === 'county' && <label className="block max-w-xs text-xs font-bold">省份
       <select className={control} value={props.countyProvince} onChange={event => props.onCountyProvince(event.target.value)}>
         {props.countyProvinces.map(province => <option key={province} value={province}>{province}</option>)}

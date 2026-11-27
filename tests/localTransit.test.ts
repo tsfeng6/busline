@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import ts from 'typescript';
 import {regularGameRoute,eligibleGameLines,clipRouteToRadius,distanceMeters,nearbyLines,gpsToMap,claimDailyLocation,savedCountySeats,provinceForCity,radiusRing} from '../src/utils/localTransit';
 import {COUNTY_GAME_RADIUS_METERS,createOfflineQuestion,gameStage,nearbyStationChoices} from '../src/utils/offlineGame';
-import {getGameTimeLimit, recordGameAnswer} from '../src/utils/gameTimer';
+import {CONTEST_TOTAL_LIMIT_SECONDS, getGameTimeLimit, recordGameAnswer} from '../src/utils/gameTimer';
 import {CityDataCache} from '../src/utils/cityDataCache';
 import {expandSavedStationCoverage} from '../src/utils/stationCoverage';
 import {contestRules, contestPrompts} from '../src/utils/contestRules';
@@ -96,6 +96,7 @@ test('actual game generation never invokes provider search services and accepts 
  const code=ts.transpile(`const ${declaration.getText(ast)};`,{target:ts.ScriptTarget.ES2022}),snapshot=data(),seat=savedCountySeats(snapshot)[0];
  let question: any;
  let drawing: ReturnType<typeof drawContestQuestion> | undefined;
+ let contestExpired = false;
  const ref = <T,>(current: T) => ({ current });
  const scope = {
   gameRulesRef: ref(contestRules('line', ['unusual', 'fill'])), questionAbortRef: ref<AbortController | null>(null),
@@ -108,6 +109,8 @@ test('actual game generation never invokes provider search services and accepts 
   clearStopMarkerGroup() {}, setCountyGameMask() {},
   createSimulationQuestion, drawContestQuestion, contestPrompts,
   gameTimeRemainingMsRef: ref(180000), questionShownAtRef: ref<number | null>(null), currentGameQuestionRef: ref<{correctAnswer:string} | null>(null),
+  contestDeadlineRef: ref<number | null>(null), CONTEST_TOTAL_LIMIT_SECONDS,
+  finishGameOnTimeout: (wholeContest: boolean) => { contestExpired = wholeContest; },
   setLocalGameDrawing: (value: typeof drawing) => { drawing = value; }, setGameQuestionData: (value: unknown) => { question = value; },
   isMinigameActiveRef: ref(true), restoreMapAfterMinigame() {}, setGameDataError: (message: string) => { throw Error(message); },
  };
@@ -135,7 +138,16 @@ test('actual game generation never invokes provider search services and accepts 
  scope.activeContestRef.current = {scope:'北京市'};
  await run('line','未收录城市',1);
  assert.ok(scope.currentGameQuestionRef.current?.correctAnswer);
+ const deadline = scope.contestDeadlineRef.current;
+ assert.equal(deadline, scope.questionShownAtRef.current! + CONTEST_TOTAL_LIMIT_SECONDS * 1000);
+ assert.equal(scope.gameTimeRemainingMsRef.current, 120000);
+ await run('line','未收录城市',2);
+ assert.equal(scope.contestDeadlineRef.current, deadline);
+ scope.contestDeadlineRef.current = Date.now() - 1;
+ await run('line','未收录城市',3);
+ assert.equal(contestExpired, true);
  scope.activeContestRef.current = null;
+ scope.contestDeadlineRef.current = null;
  await assert.rejects(run('line','未收录城市',1), /已有线路图/);
 });
 

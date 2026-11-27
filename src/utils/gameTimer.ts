@@ -1,3 +1,5 @@
+export const CONTEST_TOTAL_LIMIT_SECONDS = 20 * 60;
+
 export function getGameTimeLimit(mode: 'line' | 'station' | 'city' | 'county', difficulty: 'easy' | 'medium' | 'hard' | 'hell'): number | null {
   if (mode === 'city' || mode === 'county') return 180;
   // The two redesigned ladder modes are per-question challenges.  A new

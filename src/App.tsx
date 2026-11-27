@@ -56,7 +56,7 @@ import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Ey
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
-import { formatGameTime } from './utils/gameTimer';
+import { CONTEST_TOTAL_LIMIT_SECONDS, formatGameTime } from './utils/gameTimer';
 import { establishGameSession, gameAccountEnabled, getGameAccount, submitContestResult, type GameAccount } from './utils/gameAccount';
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
 import { GameLobby, type ContestRegionId } from './components/GameLobby';
@@ -435,17 +435,25 @@ export default function App() {
   };
 
   const [gameTimeLeft, setGameTimeLeft] = useState<number | null>(null);
+  const [contestTimeLeft, setContestTimeLeft] = useState<number | null>(null);
   const [gameTimedOut, setGameTimedOut] = useState(false);
   const gameTimeRemainingMsRef = useRef<number | null>(null);
   const gameDeadlineRef = useRef<number | null>(null);
+  const contestDeadlineRef = useRef<number | null>(null);
   const gameTimedOutRef = useRef(false);
   const questionShownAtRef = useRef<number | null>(null);
   const [gameElapsedMs, setGameElapsedMs] = useState(0);
   const [playedContestTags, setPlayedContestTags] = useState<ReturnType<typeof contestTagGroups>[number]['tags']>([]);
   const recordQuestionTime = useCallback((submittedAt: number, deadline: number | null) => {
     const shownAt = questionShownAtRef.current;
-    if (shownAt === null) return;
     questionShownAtRef.current = null;
+    const contestDeadline = contestDeadlineRef.current;
+    if (contestDeadline !== null) {
+      const endedAt = Math.min(submittedAt, deadline ?? submittedAt, contestDeadline);
+      setGameElapsedMs(Math.max(0, endedAt - (contestDeadline - CONTEST_TOTAL_LIMIT_SECONDS * 1000)));
+      return;
+    }
+    if (shownAt === null) return;
     const elapsed = Math.max(0, Math.min(submittedAt, deadline ?? submittedAt) - shownAt);
     setGameElapsedMs(total => total + elapsed);
   }, []);
@@ -531,18 +539,20 @@ export default function App() {
     if (gameState === 'gameover') saveContestResult();
   }, [gameState, saveContestResult]);
 
-  const finishGameOnTimeout = useCallback(() => {
+  const finishGameOnTimeout = useCallback((contestExpired = false) => {
     if (gameTimedOutRef.current) return;
     const question = currentGameQuestionRef.current;
-    if (!question) return;
+    if (!question && !contestExpired) return;
     currentGameQuestionRef.current = null;
-    recordQuestionTime(Date.now(), gameDeadlineRef.current);
-    setGameHistory(previous => [...previous, { ...question, userAnswer: '', isCorrect: false, timedOut: true }]);
+    recordQuestionTime(Date.now(), contestExpired ? contestDeadlineRef.current : gameDeadlineRef.current);
+    if (question) setGameHistory(previous => [...previous, { ...question, userAnswer: '', isCorrect: false, timedOut: true }]);
     gameTimedOutRef.current = true;
+    questionAbortRef.current?.abort();
     gameTimeRemainingMsRef.current = 0;
     gameDeadlineRef.current = null;
     gameSessionIdRef.current++;
     setGameTimeLeft(0);
+    if (contestExpired) setContestTimeLeft(0);
     setGameTimedOut(true);
     setGameLoading(false);
     setGameFeedback(null);
@@ -550,12 +560,26 @@ export default function App() {
     setGameState('gameover');
   }, [recordQuestionTime]);
 
+  useEffect(() => {
+    if (gameState !== 'playing' || !activeContestRef.current || gameFeedback?.correct === false) return;
+    const tick = () => {
+      const deadline = contestDeadlineRef.current;
+      if (deadline === null || gameTimedOutRef.current) return;
+      const remaining = Math.max(0, deadline - Date.now());
+      setContestTimeLeft(Math.ceil(remaining / 1000));
+      if (remaining === 0) finishGameOnTimeout(true);
+    };
+    tick();
+    const interval = window.setInterval(tick, 200);
+    return () => window.clearInterval(interval);
+  }, [gameState, gameFeedback?.correct, finishGameOnTimeout]);
+
   // Use a deadline so background-tab throttling cannot extend the challenge.
   // Loading questions pauses the clock; each new question keeps the same budget.
   useEffect(() => {
     const budget = gameTimeRemainingMsRef.current;
     if (gameState !== 'playing' || gameLoading || !gameQuestionData || budget === null || gameTimedOutRef.current) return;
-    const deadline = Date.now() + budget;
+    const deadline = (questionShownAtRef.current ?? Date.now()) + budget;
     gameDeadlineRef.current = deadline;
     const tick = () => {
       if (questionShownAtRef.current === null) return;
@@ -619,6 +643,7 @@ export default function App() {
     setLocalGameDrawing(null);
     gameSessionIdRef.current++;
     activeContestRef.current = null;
+    contestDeadlineRef.current = null;
     setGameHint(null);
     isMinigameActiveRef.current = false;
     setConfirmQuitGame(false);
@@ -696,11 +721,13 @@ export default function App() {
     setLocalGameDrawing(null);
     if (!competitive) setGameCity(city);
     const timeLimit = rules.timeLimit;
-    gameTimeRemainingMsRef.current = timeLimit * 1000;
+    contestDeadlineRef.current = null;
+    setContestTimeLeft(competitive ? CONTEST_TOTAL_LIMIT_SECONDS : null);
+    gameTimeRemainingMsRef.current = competitive && !rules.perQuestion ? null : timeLimit * 1000;
     gameDeadlineRef.current = null;
     gameTimedOutRef.current = false;
     setGameTimedOut(false);
-    setGameTimeLeft(timeLimit);
+    setGameTimeLeft(gameTimeRemainingMsRef.current === null ? null : timeLimit);
     setGameState('playing');
     gameScoreRef.current = 0;
     questionShownAtRef.current = null;
@@ -727,6 +754,11 @@ export default function App() {
   ) => {
     const rules = gameRulesRef.current;
     if (!rules) return;
+    const contestExpired = () => contestDeadlineRef.current !== null && Date.now() >= contestDeadlineRef.current;
+    if (contestExpired()) {
+      finishGameOnTimeout(true);
+      return;
+    }
     questionAbortRef.current?.abort();
     const controller = new AbortController();
     questionAbortRef.current = controller;
@@ -750,20 +782,45 @@ export default function App() {
         mode === 'city' ? item => loadGameCityImage(item, controller.signal) : undefined);
       if (gameSessionIdRef.current !== sessionId) return;
       const { contextPaths, networkImage, sourceRevision, options, isFillIn, ...review } = question;
-      setLocalGameDrawing(drawContestQuestion(question, mode, rules.cycle));
+      const drawing = drawContestQuestion(question, mode, rules.cycle);
+      if (contestExpired()) {
+        finishGameOnTimeout(true);
+        return;
+      }
+      const shownAt = Date.now();
+      if (contest && contestDeadlineRef.current === null) {
+        contestDeadlineRef.current = shownAt + CONTEST_TOTAL_LIMIT_SECONDS * 1000;
+      }
+      setLocalGameDrawing(drawing);
       currentGameQuestionRef.current = { ...review, questionNum: qNum, mode, province };
       if (rules.perQuestion) gameTimeRemainingMsRef.current = rules.timeLimit * 1000;
-      setGameTimeLeft(Math.ceil((gameTimeRemainingMsRef.current ?? 0) / 1000));
-      questionShownAtRef.current = Date.now();
+      const budget = gameTimeRemainingMsRef.current;
+      setGameTimeLeft(budget === null ? null : Math.ceil(budget / 1000));
+      questionShownAtRef.current = shownAt;
       setGameQuestionData({ options, isFillIn, promptText: contestPrompts[mode] });
     } catch(error:any) {
-      if(gameSessionIdRef.current===sessionId){controller.abort();activeContestRef.current=null;setGameState('menu');isMinigameActiveRef.current=false;restoreMapAfterMinigame();setGameDataError(error.message||'读取题目失败，请稍后重试。');}
+      if (gameSessionIdRef.current === sessionId) {
+        if (contestExpired()) finishGameOnTimeout(true);
+        else {
+          controller.abort();
+          activeContestRef.current = null;
+          contestDeadlineRef.current = null;
+          setGameState('menu');
+          isMinigameActiveRef.current = false;
+          restoreMapAfterMinigame();
+          setGameDataError(error.message || '读取题目失败，请稍后重试。');
+        }
+      }
     } finally {if(gameSessionIdRef.current===sessionId)setGameLoading(false);}
   };
 
   const handleMinigameSubmit = (answer: string) => {
     if (!gameQuestionData || gameState !== 'playing' || gameLoading || gameFeedback !== null || gameTimedOutRef.current) return;
     const submittedAt = Date.now();
+    if (contestDeadlineRef.current !== null && submittedAt >= contestDeadlineRef.current) {
+      finishGameOnTimeout(true);
+      return;
+    }
     if (gameDeadlineRef.current !== null && submittedAt >= gameDeadlineRef.current) {
       finishGameOnTimeout();
       return;
@@ -8866,6 +8923,9 @@ export default function App() {
                   <>
                     {gameLaunchAnimation ? <motion.div initial={{ scale: 0.4, opacity: 0, rotate: -40 }} animate={{ scale: 1, opacity: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 320, damping: 18 }} className="relative flex h-24 w-24 items-center justify-center rounded-[30px] bg-m3-primary text-white shadow-[0_0_70px_rgba(82,121,111,0.8)]"><motion.div animate={{ scale: [1, 1.28, 1], opacity: [0.8, 0.15, 0.8] }} transition={{ duration: 1.05, repeat: Infinity }} className="absolute inset-[-18px] rounded-[40px] border-2 border-m3-primary" /><Route className="h-10 w-10" /></motion.div> : <Loader2 className="w-10 h-10 animate-spin text-m3-primary" />}
                     <motion.p key="loading" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-sm font-black tracking-wide">正在出题</motion.p>
+                    {contestTimeLeft !== null && contestDeadlineRef.current !== null && (
+                      <span role="timer" className="text-xs font-bold tabular-nums">整局 {formatGameTime(contestTimeLeft)}</span>
+                    )}
                     <button type="button" onClick={returnToMinigameMenu} className="mt-2 rounded-xl border border-white/35 px-4 py-2 text-xs font-black text-white transition-colors hover:bg-white/10">取消并返回菜单</button>
                   </>
                 )}
@@ -8907,13 +8967,21 @@ export default function App() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2.5 shrink-0 ml-auto">
-                      <span
+                      {contestTimeLeft !== null && <span
                         role="timer"
-                        aria-label={gameTimeLeft === null ? '无时间限制' : `剩余时间 ${formatGameTime(gameTimeLeft)}`}
+                        aria-label={`整局剩余时间 ${formatGameTime(contestTimeLeft)}`}
+                        className={`px-2.5 py-1 rounded-full text-xs font-black tabular-nums ${contestTimeLeft <= 30 ? 'bg-red-50 text-red-600' : 'bg-m3-primary-container text-m3-on-primary-container'}`}
+                      >
+                        整局 {formatGameTime(contestTimeLeft)}
+                      </span>}
+                      {(contestTimeLeft === null || gameTimeLeft !== null) && <span
+                        role="timer"
+                        aria-label={gameTimeLeft === null ? '无时间限制' : `${contestTimeLeft === null ? '' : '本题'}剩余时间 ${formatGameTime(gameTimeLeft)}`}
                         className={`px-2.5 py-1 rounded-full text-xs font-black tabular-nums ${gameTimeLeft !== null && gameTimeLeft <= 30 ? 'bg-red-50 text-red-600' : 'bg-m3-primary-container text-m3-on-primary-container'}`}
                       >
+                        {contestTimeLeft !== null && '本题 '}
                         {gameTimeLeft === null ? '不限时' : formatGameTime(gameTimeLeft)}
-                      </span>
+                      </span>}
                       <span className="text-xs font-extrabold text-slate-700">得分: <strong className="text-m3-primary">{gameScore}</strong></span>
                       {confirmQuitGame ? (
                         <div className="flex items-center gap-1.5">
