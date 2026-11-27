@@ -2642,7 +2642,7 @@ export default function App() {
       if (displayPaths.length > 0) {
         polyline = new AMap.Polyline({
           path: displayPaths,
-          strokeColor: line.isUserSubmitted ? '#BA55D3' : (clear ? '#3b82f6' : getRandomPastelColor()),
+          strokeColor: line.isUserSubmitted ? '#BA55D3' : (clear ? '#39FF14' : getRandomPastelColor()),
           strokeWeight: lineThickness === 'thin' ? 2.5 : 5,
           strokeOpacity: 0.8,
           lineJoin: 'round',
