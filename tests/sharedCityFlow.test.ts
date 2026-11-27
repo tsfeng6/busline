@@ -48,6 +48,7 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
     activeRawMarkersRef:ref([]),roadStopMarkersRef:ref([]),roadStopsDataRef:ref(new Map()),
     filterIntervalBusRef:ref(false),filterAirportBusRef:ref(false),blockedKeywordsRef:ref([]),searchFilterVersionRef:ref(1),
     getCitySearchServices:async(key:string,code:string)=>{assert.equal(key,'a'.repeat(32));assert.equal(code,'b'.repeat(32));return scope.window.AMap;},
+    cocomapServices:null as object | null,amapSearch:(sdk:any)=>sdk,
     citySearchApiStatus,useCustomApiKey:false,customApiKey:'a'.repeat(32),customApiSecurityCode:'b'.repeat(32),initialAmapConfig:{isCustom:true,key:'a'.repeat(32),securityCode:'b'.repeat(32)},focusCustomApiRef:ref(false),
     CITY_DETAIL_ZOOM,enableCityWideSearch:true,sharedCityDataEnabled:true,actionsCityUpdatesEnabled:false,loadSharedCity:async()=>{sharedReads++;return snapshot;},
     loadPublishedCities:async()=>[{city:'北京市'}],
@@ -115,6 +116,20 @@ test('fresh shared data draws directly and a remote cache miss starts browser se
   await run();
   assert.equal(started,0);assert.equal(watched,0);assert.equal(apiRequests,1);assert.deepEqual(rendered,[]);
   assert.ok(errors.some(args=>String(args).includes('Unexpected POI request')));
+  const originalDiscovery = scope.discoverCityStops;
+  const cocomapServices = {};
+  let cocomapRequests = 0;
+  scope.cocomapServices = cocomapServices;
+  scope.customApiSecurityCode = '';
+  Object.assign(scope, { discoverCityStops: async (services: unknown) => {
+    assert.equal(services, cocomapServices);
+    cocomapRequests++;
+    throw Error('Stop after verifying the Cocomap search entry point');
+  } });
+  await run();
+  assert.equal(cocomapRequests, 1);
+  scope.cocomapServices = null;
+  scope.discoverCityStops = originalDiscovery;
   // Missing or edited-but-not-loaded visitor credentials must block all live POI/line queries.
   for(const mode of ['missing','incomplete','expired']) {
     errors.length=0;apiRequests=0;

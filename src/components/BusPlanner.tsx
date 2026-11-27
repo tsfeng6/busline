@@ -1,3 +1,4 @@
+import type { createCocomapSearchServices } from '../utils/cocomap';
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { motion } from 'motion/react';
 import { X, ArrowDownUp, Copy, Plus, Loader2, Footprints, Bus, Search, ChevronUp, ChevronDown } from 'lucide-react';
@@ -13,6 +14,7 @@ import type { BusLine } from '../types';
 interface Props {
   onClose: () => void;
   hidden?: boolean;
+  searchServices?: ReturnType<typeof createCocomapSearchServices> | null;
   disabled: boolean;
   showDetails: boolean;
   currentCity: string;
@@ -25,7 +27,7 @@ interface Props {
   onDraw: (plan: BusPlan) => void;
   onClear: () => void;
 }
-export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity, onMapPick, onPreload, onSearchStart, mapSelection, onDetailSelection, onDiscard, onDraw, onClear }: Props) {
+export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity, onMapPick, onPreload, onSearchStart, mapSelection, onDetailSelection, onDiscard, onDraw, onClear, searchServices }: Props) {
   const initialCity = currentCity && currentCity !== '全国' ? currentCity : '北京市';
   const [origin, setOrigin] = useState<PlannerStationInput>({ city: initialCity, name: '' });
   const [destination, setDestination] = useState<PlannerStationInput>({ city: initialCity, name: '' });
@@ -133,7 +135,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
   };
   const search = async () => {
     if (busy || disabled || hidden || picking !== null || !canSearch) return;
-    const AMap = (window as any).AMap;
+    const AMap = searchServices ?? (window as any).AMap;
     if (!AMap) { setError('地图服务尚未就绪，请稍后重试。'); return; }
     const session = ++sessionRef.current;
     const isCurrent = () => session === sessionRef.current;

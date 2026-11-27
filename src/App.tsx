@@ -8,6 +8,7 @@ import {DAILY_LOCATION_KEY,claimDailyLocation,gpsToMap,nearbyLines,cityTouchesRa
 import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
 import { resolveAmapCredentials } from './utils/amapCredentials';
+import { AMAP_PROVIDER_STORAGE, COCOMAP_KEY_STORAGE, createCocomapSearchServices, isCocomapKey, readCocomapKey } from './utils/cocomap';
 import {MapActivityIndicator} from './components/MapActivityIndicator';
 import { CityOverviewLayer } from './components/CityOverviewLayer';
 import { ViewportTransitLayer, type ViewportTransitSelection, type ViewportRoute, type ViewportStop } from './components/ViewportTransitLayer';
@@ -154,6 +155,15 @@ const AMAP_KEY = initialAmapConfig.key;
 const SECURITY_CODE = initialAmapConfig.securityCode;
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '';
 const ADMIN_GATEWAY_URL = (import.meta.env.VITE_GAME_GATEWAY_URL || import.meta.env.VITE_CITY_UPDATE_GATEWAY_URL || API_BASE_URL || '').replace(/\/$/, '');
+const cocomapGateway = gatewayBase || ADMIN_GATEWAY_URL;
+const getSavedCocomapKey = () => {
+  try { return readCocomapKey(typeof window === 'undefined' ? undefined : window.localStorage); }
+  catch { return ''; }
+};
+const savedCocomapKey = getSavedCocomapKey();
+const cocomapServices = savedCocomapKey ? createCocomapSearchServices(cocomapGateway, savedCocomapKey) : null;
+const amapSearch = (AMap: any) => cocomapServices ?? AMap;
+
 const APP_VERSION = '5.5';
 const APP_LAST_VERSION_KEY = 'app_last_visited_version';
 
@@ -1671,6 +1681,9 @@ export default function App() {
     return () => cancelAnimationFrame(frame);
   }, [showSettings, settingsTab, useCustomApiKey]);
 
+  const [amapApiProvider, setAmapApiProvider] = useState<'official' | 'cocomap'>(() =>
+    localStorage.getItem(AMAP_PROVIDER_STORAGE) === 'cocomap' ? 'cocomap' : 'official');
+  const [cocomapKey, setCocomapKey] = useState(() => localStorage.getItem(COCOMAP_KEY_STORAGE) || '');
   const [customApiKey, setCustomApiKey] = useState(() => {
     return localStorage.getItem('app_custom_api_key') || '';
   });
@@ -1741,6 +1754,14 @@ export default function App() {
     if (status === 'error' || (result && result.info && result.info !== 'OK' && result.info !== 'NO_DATA')) {
       const info = String(typeof result === 'string' ? result : result?.info || '').toUpperCase();
       const infocode = String(result?.infocode || '');
+      if (info.startsWith('COCOMAP_')) {
+        setApiErrorNotification(info === 'COCOMAP_INVALID_KEY'
+          ? '可可地图 API Key 无效，请在设置中检查。'
+          : info === 'COCOMAP_OVER_LIMIT' || info === 'COCOMAP_QPS'
+            ? '可可地图请求超过限额，请检查配额或稍后重试。'
+            : '可可地图查询暂时不可用，请稍后重试。');
+        return true;
+      }
 
       if (
         info.includes('INVALID_USER_KEY') ||
@@ -2783,7 +2804,7 @@ export default function App() {
                }
             }
 
-            const geocoder = new AMap.Geocoder({ radius: 30, extensions: 'all' });
+            const geocoder = new (amapSearch(AMap).Geocoder)({ radius: 30, extensions: 'all' });
             geocoder.getAddress(queryLngLat as [number, number], (status: string, result: any) => {
               if (status === 'complete' && result.info === 'OK') {
                 const comp = result.regeocode.addressComponent;
@@ -3011,7 +3032,7 @@ export default function App() {
     if (publishedOnly || (savedCity?.retrievalComplete && localLines.size)) {
       return localLines.size ? { name, address: '', lines: [...localLines], isBusStop: true, publishedRoutes } : null;
     }
-    const stationSupplement = discoverStationLines(AMap, city || currentCity,
+    const stationSupplement = discoverStationLines(amapSearch(AMap), city || currentCity,
       [{ name, location: { lng: location[0], lat: location[1] } }], () => false);
     return new Promise((resolve) => {
       const timer = setTimeout(() => resolve(null), 15000);
@@ -3046,7 +3067,7 @@ export default function App() {
       };
 
       const doStationSearchFallback = () => {
-        const stationSearch = new AMap.StationSearch({
+        const stationSearch = new (amapSearch(AMap).StationSearch)({
           pageIndex: 1,
           pageSize: 50,
           city: city || '全国'
@@ -3077,7 +3098,7 @@ export default function App() {
       };
 
       // 1. PlaceSearch to find the precise platform and its short lines
-      const ps = new AMap.PlaceSearch({
+      const ps = new (amapSearch(AMap).PlaceSearch)({
         pageSize: 50,
         extensions: 'all',
         type: '公交车站',
@@ -3131,7 +3152,7 @@ export default function App() {
 
         // Trace exact directions via LineSearch concurrently
         const exactDirectedLines: string[] = [];
-        const lineSearch = new AMap.LineSearch({
+        const lineSearch = new (amapSearch(AMap).LineSearch)({
           pageIndex: 1,
           city: city || '全国',
           pageSize: 10,
@@ -3693,7 +3714,7 @@ export default function App() {
 
     const AMap = (window as any).AMap;
     if (AMap && AMap.Geocoder) {
-      const geocoder = new AMap.Geocoder();
+      const geocoder = new (amapSearch(AMap).Geocoder)();
       setLoading(true);
       geocoder.getAddress([drawnPoints[0].lng, drawnPoints[0].lat], (status: string, result: any) => {
         setLoading(false);
@@ -4269,7 +4290,7 @@ export default function App() {
         return;
       }
 
-      const lineSearch = new AMap.LineSearch({
+      const lineSearch = new (amapSearch(AMap).LineSearch)({
         pageIndex: 1,
         city: item.adcode || item.sourceCity || currentCity || '全国',
         pageSize: 1,
@@ -4345,7 +4366,7 @@ export default function App() {
       }
     } else {
       // Fallback for tips without exact location: search by name
-      const ps = new AMap.PlaceSearch({
+      const ps = new (amapSearch(AMap).PlaceSearch)({
         city: item.adcode || item.sourceCity || currentCity || '全国',
         pageSize: 1
       });
@@ -4383,7 +4404,7 @@ export default function App() {
     searchDebounceRef.current = setTimeout(() => {
     if (currentSearchId !== searchIdRef.current || !searchActiveRef.current) return;
     if (!autoCompleteRef.current) {
-      autoCompleteRef.current = new AMap.AutoComplete({
+      autoCompleteRef.current = new (amapSearch(AMap).AutoComplete)({
         city: currentCity || '全国',
         citylimit: false
       });
@@ -4409,7 +4430,7 @@ export default function App() {
       name: line.name, district: line.city, location: line.path[0], type: 'busline', lineData: line,
     }))) : isLineQuery ? new Promise<any[]>((resolve) => {
       if (!AMap.LineSearch) { resolve([]); return; }
-      const lineSearch = new AMap.LineSearch({
+      const lineSearch = new (amapSearch(AMap).LineSearch)({
         pageIndex: 1,
         city: currentCity || '全国',
         pageSize: 10,
@@ -4548,7 +4569,7 @@ export default function App() {
         setLoading(false);
         return;
       }
-      const lineSearch = new AMap.LineSearch({
+      const lineSearch = new (amapSearch(AMap).LineSearch)({
         pageIndex: 1,
         city: currentCity || '全国',
         pageSize: 1,
@@ -4580,7 +4601,7 @@ export default function App() {
     }
 
     // 2. Fallback to Place Search
-    const ps = new AMap.PlaceSearch({
+    const ps = new (amapSearch(AMap).PlaceSearch)({
       city: currentCity || '全国',
       pageSize: 1,
       extensions: 'all'
@@ -4623,7 +4644,7 @@ export default function App() {
     if (!map || !(window as any).AMap) return;
 
     if (!geocoderRef.current) {
-      geocoderRef.current = new (window as any).AMap.Geocoder({
+      geocoderRef.current = new (amapSearch((window as any).AMap).Geocoder)({
         radius: 200,
         extensions: 'all'
       });
@@ -4757,7 +4778,7 @@ export default function App() {
         if (map.getZoom() >= CITY_DETAIL_ZOOM && pickViewportRef.current([lng, lat])) return;
         if (map.getZoom() < 14) return;
 
-        const geocoder = new AMap.Geocoder();
+        const geocoder = new (amapSearch(AMap).Geocoder)();
         geocoder.getAddress([lng, lat], (status: string, result: any) => {
           if (version !== mapPointVersionRef.current || map !== mapRef.current) return;
           if (status === 'complete' && result.info === 'OK') {
@@ -4995,7 +5016,7 @@ export default function App() {
 
       try {
         if (!currentCity) {
-        const geocoder = new AMap.Geocoder();
+        const geocoder = new (amapSearch(AMap).Geocoder)();
         const addressResult: any = await new Promise((resolve) => {
           const timer = setTimeout(() => resolve(null), 8000);
           geocoder.getAddress(center, (status: string, result: any) => {
@@ -5143,11 +5164,11 @@ export default function App() {
         setSharedCityStatus('暂无可用共享线路，正在检索。');
       }
 
-      // Shared data stays readable without visitor credentials; live city discovery must use their SDK key.
+      // Shared data stays readable without visitor credentials. Live discovery uses the chosen provider.
       if (!usedSharedCity) {
         const apiStatus = citySearchApiStatus(useCustomApiKey, customApiKey, customApiSecurityCode);
-        if (apiStatus !== 'ready') {
-          const message = '此城市需要重新检索，请先填写您自己的高德 Web端 API Key 和 Security Code。';
+        if (!cocomapServices && apiStatus !== 'ready') {
+          const message = '此城市需要重新检索，请先配置自有高德 Web端 API 或可可地图 Key。';
           setSharedCityStatus(message);
           setApiErrorNotification(message);
           focusCustomApiRef.current = true;
@@ -5159,7 +5180,7 @@ export default function App() {
       }
 
       if (!usedSharedCity) {
-        searchServices = await getCitySearchServices(customApiKey, customApiSecurityCode);
+        searchServices = cocomapServices ?? await getCitySearchServices(customApiKey, customApiSecurityCode);
         if (searchVersionRef.current !== thisSearchVer || isClearedRef.current || isMinigameActiveRef.current) return;
       }
 
@@ -5192,7 +5213,7 @@ export default function App() {
         });
 
         let pageIndex = 1;
-        const MAX_PAGES = 30;
+        const MAX_PAGES = cocomapServices ? 60 : 30;
         let actualFetchedCount = 0;
         const fetchPage = async (page: number): Promise<boolean> => {
           return new Promise((resolve) => {
@@ -5975,7 +5996,7 @@ export default function App() {
             const nearby: any[] = await new Promise(resolve => {
               const timer = setTimeout(() => resolve([]), 6000);
               try {
-                new AMap.PlaceSearch({ city: currentCity, type: '公交车站', pageSize: 20, extensions: 'all' })
+                new (amapSearch(AMap).PlaceSearch)({ city: currentCity, type: '公交车站', pageSize: 20, extensions: 'all' })
                   .searchNearBy('', closestSegmentProjectedTrue, 400, (status: string, result: any) => {
                     clearTimeout(timer);
                     resolve(status === 'complete' ? result?.poiList?.pois || [] : []);
@@ -5985,7 +6006,7 @@ export default function App() {
             if (lookupCancelled()) return;
             const candidates = new Set<string>();
             nearby.forEach(poi => String(poi.address || '').split(/[;；]/).map(name => name.trim()).filter(Boolean).forEach(name => candidates.add(name)));
-            const stationLines = await discoverStationLines(AMap, currentCity, nearby.slice(0, 8), lookupCancelled);
+            const stationLines = await discoverStationLines(amapSearch(AMap), currentCity, nearby.slice(0, 8), lookupCancelled);
             stationLines.forEach(name => candidates.add(name));
             const names = [...candidates].filter(name => !isLineNameBlockedRef(name));
             if (lookupCancelled() || !names.length) return;
@@ -6451,7 +6472,7 @@ export default function App() {
         let updated = false;
         let checked = 0;
         for (const shortName of queries) {
-          const lineSearch = new (window as any).AMap.LineSearch({
+          const lineSearch = new (amapSearch((window as any).AMap).LineSearch)({
             pageIndex: 1, city: currentCity || '全国', pageSize: 10, extensions: 'all',
           });
           lineSearch.search(shortName, (status: string, result: any) => {
@@ -6500,7 +6521,7 @@ export default function App() {
 
     if (!needsFetch) return; // All cached
 
-    const stationSearch = new (window as any).AMap.StationSearch({
+    const stationSearch = new (amapSearch((window as any).AMap).StationSearch)({
       pageIndex: 1,
       pageSize: 50,
       city: currentCity || '全国'
@@ -6640,7 +6661,7 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {showBusPlanner && <BusPlanner hidden={showTimeline} mapSelection={plannerMapSelection}
+        {showBusPlanner && <BusPlanner hidden={showTimeline} mapSelection={plannerMapSelection} searchServices={cocomapServices}
           onDetailSelection={setPlannerMapSelection} onDiscard={clearBusPlan} onClose={() => { setShowBusPlanner(false); clearBusPlan(); }}
           currentCity={currentCity} onMapPick={setPlannerStopPicker} onPreload={setPlannerPreloading}
           showDetails={isAdminVerified}
@@ -8186,8 +8207,8 @@ export default function App() {
                       <div ref={customApiSectionRef} className="flex flex-col gap-3 p-1">
                         <div className="flex items-center justify-between">
                           <div className="flex flex-col">
-                            <span className="text-xs font-bold text-slate-700">地图与检索使用自有高德 API</span>
-                            <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">开启后地图、普通检索与全市检索都会使用该配置；关闭后使用公共 API</span>
+                            <span className="text-xs font-bold text-slate-700">使用自有地图 API</span>
+                            <span className="text-[10px] text-slate-400 mt-1 max-w-[200px] leading-tight font-medium">支持高德 Web 端和可可地图</span>
                           </div>
                           <button 
                             type="button"
@@ -8206,45 +8227,70 @@ export default function App() {
                             />
                           </button>
                         </div>
-                        <p className="text-[11px] leading-relaxed text-slate-500">{AMAP_API_PRIVACY_NOTICE}</p>
+                        <p className="text-[11px] leading-relaxed text-slate-500">
+                          {useCustomApiKey && amapApiProvider === 'cocomap'
+                            ? 'Key 保存在此浏览器。查询时由巴士线路图转发给可可地图，地图显示使用公共高德 JS 服务。'
+                            : AMAP_API_PRIVACY_NOTICE}
+                        </p>
                         {useCustomApiKey && (
                           <div className="flex flex-col gap-2.5 pt-1">
-                            <div>
-                              <label className="text-[10px] font-bold text-slate-500 block mb-1">
-                                高德 Web端 API Key (VITE_AMAP_KEY)
-                              </label>
-                              <input
-                                type="text"
-                                value={customApiKey}
-                                onChange={(e) => setCustomApiKey(e.target.value)}
-                                placeholder="请输入高德API Key"
-                                className="px-3 py-2 bg-m3-surface-container border border-m3-outline-variant text-slate-800 rounded-xl outline-none text-xs font-bold focus:border-m3-primary transition-all w-full"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-[10px] font-bold text-slate-500 block mb-1">
-                                高德安全密钥 Security Code (VITE_AMAP_SECURITY_CODE)
-                              </label>
-                              <input
-                                type="text"
-                                value={customApiSecurityCode}
-                                onChange={(e) => setCustomApiSecurityCode(e.target.value)}
-                                placeholder="请输入高德API Security Code"
-                                className="px-3 py-2 bg-m3-surface-container border border-m3-outline-variant text-slate-800 rounded-xl outline-none text-xs font-bold focus:border-m3-primary transition-all w-full"
-                              />
-                            </div>
+                            <label className="text-[10px] font-bold text-slate-500">
+                              API 提供方
+                              <select value={amapApiProvider} onChange={e => setAmapApiProvider(e.target.value === 'cocomap' ? 'cocomap' : 'official')}
+                                className="mt-1 w-full rounded-xl border border-m3-outline-variant bg-m3-surface-container px-3 py-2 text-xs text-slate-800">
+                                <option value="official">高德 Web 端（JS API）</option>
+                                <option value="cocomap">可可地图（高德 Web 服务）</option>
+                              </select>
+                            </label>
+                            {amapApiProvider === 'cocomap' ? <label className="text-[10px] font-bold text-slate-500">
+                              可可地图 API Key
+                              <input type="password" autoComplete="off" value={cocomapKey} onChange={e => setCocomapKey(e.target.value)}
+                                placeholder="sk_coco_…"
+                                className="mt-1 w-full rounded-xl border border-m3-outline-variant bg-m3-surface-container px-3 py-2 text-xs text-slate-800" />
+                            </label> : <>
+                              <div>
+                                <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                                  高德 Web端 API Key (VITE_AMAP_KEY)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={customApiKey}
+                                  onChange={(e) => setCustomApiKey(e.target.value)}
+                                  placeholder="请输入高德API Key"
+                                  className="px-3 py-2 bg-m3-surface-container border border-m3-outline-variant text-slate-800 rounded-xl outline-none text-xs font-bold focus:border-m3-primary transition-all w-full"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold text-slate-500 block mb-1">
+                                  高德安全密钥 Security Code (VITE_AMAP_SECURITY_CODE)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={customApiSecurityCode}
+                                  onChange={(e) => setCustomApiSecurityCode(e.target.value)}
+                                  placeholder="请输入高德API Security Code"
+                                  className="px-3 py-2 bg-m3-surface-container border border-m3-outline-variant text-slate-800 rounded-xl outline-none text-xs font-bold focus:border-m3-primary transition-all w-full"
+                                />
+                              </div>
+                            </>}
                             <div className="flex items-center justify-between text-[10px] text-slate-400 mt-1">
-                              <span>保存后页面会刷新，地图、检索与全市检索都会使用该配置。</span>
+                              <span>保存后刷新页面并应用配置。</span>
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (useCustomApiKey && citySearchApiStatus(true, customApiKey, customApiSecurityCode) === 'missing') {
+                                  if (amapApiProvider === 'cocomap' && (!cocomapGateway || !isCocomapKey(cocomapKey))) {
+                                    setApiErrorNotification(cocomapGateway ? '请填写以 sk_coco_ 开头的可可地图 Key。' : '可可地图转发服务尚未配置。');
+                                    return;
+                                  }
+                                  if (amapApiProvider === 'official' && citySearchApiStatus(true, customApiKey, customApiSecurityCode) === 'missing') {
                                     setApiErrorNotification('请先输入有效的高德API Key与安全密钥');
                                     return;
                                   }
                                   localStorage.setItem('app_use_custom_api_key', String(useCustomApiKey));
                                   localStorage.setItem('app_custom_api_key', customApiKey.trim());
                                   localStorage.setItem('app_custom_api_security_code', customApiSecurityCode.trim());
+                                  localStorage.setItem(AMAP_PROVIDER_STORAGE, amapApiProvider);
+                                  localStorage.setItem(COCOMAP_KEY_STORAGE, cocomapKey.trim());
                                   setShowSettings(false);
                                   window.location.reload();
                                 }}

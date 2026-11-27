@@ -6,6 +6,7 @@ import { isGameAnswerCorrect } from '../../src/utils/gameAnswers';
 import { getGameHint, isGameHintComplete } from '../../src/utils/gameHint';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { cityDataKey } from '../../src/utils/cityDataset';
+import { COCOMAP_API_PATHS, isCocomapKey } from '../../src/utils/cocomap';
 import { MAX_CITY_BYTES, CITY_CHUNK_BYTES, CITY_UPLOAD_FORMAT, CITY_RECORD_FORMAT } from '../../src/utils/cityTransfer';
 
 export interface UploadStore {
@@ -528,6 +529,42 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
     if(path==='/health'&&request.method==='GET')return json({service:'busline-city-gateway',platform:'edgeone',version:1,
       configured:!!env.GITHUB_DISPATCH_TOKEN&&(env.CALLBACK_SECRET?.length||0)>=32&&(env.RATE_LIMIT_SALT?.length||0)>=16});
     if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization,x-admin-session,x-city-upload-token','Access-Control-Max-Age':'600'}});
+    if (path === '/amap/cocomap') {
+      if (request.method !== 'POST') return json({ info: 'COCOMAP_INVALID_REQUEST' }, 405);
+      if (!allowed.includes(origin)) return json({ info: 'COCOMAP_FORBIDDEN' }, 403);
+      const key = (request.headers.get('Authorization') ?? '').match(/^Bearer (.+)$/i)?.[1] ?? '';
+      if (!isCocomapKey(key)) return json({ info: 'COCOMAP_INVALID_KEY' }, 401);
+      const input = await jsonBody(request, 4096);
+      const endpoint = COCOMAP_API_PATHS.find(endpoint => endpoint === input?.path);
+      if (!endpoint || !input.params || typeof input.params !== 'object' || Array.isArray(input.params)) {
+        return json({ info: 'COCOMAP_INVALID_REQUEST' }, 400);
+      }
+      const allowedParams = new Set(['keywords', 'city', 'citylimit', 'offset', 'page', 'extensions',
+        'location', 'types', 'radius', 'polygon', 'subdistrict', 'origin', 'destination']);
+      const upstream = new URL(endpoint, 'https://map.culture09.xyz');
+      for (const [name, value] of Object.entries(input.params)) {
+        if (!allowedParams.has(name) || typeof value !== 'string' || value.length > 1024) {
+          return json({ info: 'COCOMAP_INVALID_REQUEST' }, 400);
+        }
+        upstream.searchParams.set(name, value);
+      }
+      try {
+        const response = await transport(upstream, {
+          redirect: 'error', signal: AbortSignal.timeout(7000),
+          headers: { Authorization: 'Bearer ' + key.trim(), 'X-Cocomap-Provider': 'amap' },
+        });
+        if (response.status === 401 || response.status === 403) return json({ info: 'COCOMAP_INVALID_KEY' }, 401);
+        if (response.status === 402) return json({ info: 'COCOMAP_OVER_LIMIT' }, 429);
+        if (response.status === 429) return json({ info: 'COCOMAP_QPS' }, 429);
+        const result = await response.json();
+        if (response.ok && result?.ok === true && typeof result.data === 'object' && result.data !== null) {
+          return json(result.data);
+        }
+      } catch {
+        // Avoid reporting transport errors that could contain request details.
+      }
+      return json({ info: 'COCOMAP_UNAVAILABLE' }, 502);
+    }
     if(path==='/admin/verify'){
       if(request.method!=='POST')throw fail(405,'管理员验证只接受 POST 请求。');
       if(!env.ADMIN_PASSWORD||!env.ADMIN_SESSION_SECRET)throw fail(503,'管理员服务尚未配置。');

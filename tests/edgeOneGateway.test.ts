@@ -5,6 +5,7 @@ import {handleEdgeOneGateway,gatewaySignature,type UploadStore} from '../edgeone
 import {uploadCitySnapshot} from '../src/utils/cityUploadClient';
 import {readCityUpload} from '../scripts/read-city-upload';
 import {cityBlobHash,CITY_CHUNK_BYTES} from '../src/utils/cityTransfer';
+import {createCocomapSearchServices} from '../src/utils/cocomap';
 const env={GITHUB_DISPATCH_TOKEN:'fake-test-token',CALLBACK_SECRET:'test-only-callback-secret-1234567890',RATE_LIMIT_SALT:'test-only-rate-salt-12345',ADMIN_PASSWORD:'buslineadmin',ADMIN_SESSION_SECRET:'test-only-admin-session-secret'};
 function fixture(){
  const data=new Map<string,string|ArrayBuffer>(),requests:string[]=[];
@@ -21,6 +22,61 @@ function fixture(){
 const sample=()=>({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',capturedAt:new Date().toISOString(),retrievalComplete:false,filtered:false,
  stops:[{id:'s',name:'站',address:'6路',location:{lng:116.123456789123,lat:39.987654321098}}],
  lines:[{id:'l',name:'6路',city:'北京市',path:[[116.123456789123,39.987654321098],[116.2,39.2]],via_stops:[]}]}) as any;
+
+test('Cocomap credentials reach only the provider and its REST results work with search callers', async () => {
+ const {store,data} = fixture();
+ const key = 'sk_coco_example';
+ const queries: URL[] = [];
+ const upstream: typeof fetch = async (input, init) => {
+   const url = new URL(String(input));
+   queries.push(url);
+   assert.equal(url.origin, 'https://map.culture09.xyz');
+   assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer ' + key);
+   assert.equal(new Headers(init?.headers).get('X-Cocomap-Provider'), 'amap');
+   assert.equal(new Headers(init?.headers).has('Cookie'), false);
+   assert.equal(url.searchParams.has('key'), false);
+   assert.equal(init?.redirect, 'error');
+   if (url.pathname === '/v3/bus/linename') return Response.json({ ok: true, data: { status: '1', count: '2',
+     buslines: [{ name: '6路(甲--乙)', id: '6', polyline: '116.1,39.8;116.2,39.9',
+       busstops: [{ name: '甲', location: '116.1,39.8' }], stime: '0530' }] } });
+   if (url.pathname === '/v3/place/polygon') return Response.json({ ok: true, data: { status: '1', count: '1',
+     pois: [{ name: '甲', location: '116.1,39.8', address: [] }] } });
+   if (url.pathname === '/v3/config/district') return Response.json({ ok: true, data: { status: '1',
+     districts: [{ name: '北京市', districts: [{ name: '房山区', adcode: '110111' }] }] } });
+   return Response.json({ ok: false, error: 'QUOTA_EXHAUSTED' }, { status: 402 });
+ };
+ const gateway: typeof fetch = (url, init) => handleEdgeOneGateway(new Request(url, {
+   ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), Origin: 'https://busline.cc' },
+ }), {}, store, upstream);
+ const services = createCocomapSearchServices('https://gateway.example', key, gateway);
+ const invoke = (call: (callback: (status: string, result: any) => void) => void) =>
+   new Promise<any>(resolve => call((status, result) => resolve({ status, ...result })));
+
+ const search = new services.LineSearch({ city: '北京', pageSize: 25 });
+ search.setPageIndex(2);
+ const bus = await invoke(callback => search.search('6路', callback));
+ assert.equal(bus.status, 'complete');
+ assert.deepEqual(bus.lineInfo[0].path, [[116.1,39.8],[116.2,39.9]]);
+ assert.deepEqual(bus.lineInfo[0].via_stops[0].location, { lng: 116.1, lat: 39.8 });
+ assert.equal(bus.lineInfo[0].stime, '0530');
+ assert.equal(bus.count, 2);
+ assert.equal(queries[0].searchParams.get('page'), '2');
+ const places = await invoke(callback => new services.PlaceSearch({type: '公交车站'}).searchInBounds('', [[116,39],[117,40]], callback));
+ assert.equal(places.poiList.pois[0].address, '');
+ assert.equal(queries[1].searchParams.get('polygon'), '116,40|117,39');
+ assert.equal(queries[1].searchParams.get('types'), '150700');
+ const districts = await invoke(callback => new services.DistrictSearch().search('北京', callback));
+ assert.equal(districts.districtList[0].districtList[0].adcode, '110111');
+ assert.deepEqual(await invoke(callback => new services.AutoComplete().search('北京', callback)),
+   { status: 'error', info: 'COCOMAP_OVER_LIMIT' });
+ const invalid = await gateway('https://gateway.example/amap/cocomap', {
+   method: 'POST', headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+   body: JSON.stringify({ path: '/not-allowed', params: {} }),
+ });
+ assert.equal(invalid.status, 400);
+ assert.equal(queries.length, 4);
+ assert.equal(data.size, 0);
+});
 
 test('session restore rejects anonymous and empty profiles, and resolves IDs for old profile RPCs', async () => {
  const {store} = fixture();
