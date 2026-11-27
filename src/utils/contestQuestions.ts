@@ -101,7 +101,7 @@ export function createLocalContestQuestion(
     if (rules.range === 'niche') return /[0-9０-９]/.test(routeName(line.name));
     return regularGameRoute(line.name.normalize('NFKC'));
   });
-  const context = entries.map(({ line }) => line.path);
+  const context = (rules.showNetworkContext ?? rules.showBasemap) ? entries.map(({ line }) => line.path) : undefined;
   const shared = { targetCity: data.city, promptText: '', showBasemap: rules.showBasemap, showStops: rules.showStops,
     isFillIn: rules.fill, contextPaths: context };
   if (mode === 'line') {

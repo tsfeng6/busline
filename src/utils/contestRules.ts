@@ -37,7 +37,10 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
         { id: 'unusual', label: '扩大至古怪线路', factor: 5 },
       ] : []),
     ] },
-    { label: '底图', tags: [{ id: 'no-base', label: '仅线路图', factor: 3 }] },
+    { label: '底图', tags: [
+      { id: 'network-only', label: '仅线路图', factor: 3 },
+      { id: 'no-base', label: '无底图', factor: 5 },
+    ] },
     { label: '站点', tags: [{ id: 'no-stops', label: '无站点', factor: 2 }] },
     { label: '提示次数', tags: [
       { id: 'hints-5', label: '5 个提示', factor: 1.5 },
@@ -77,7 +80,8 @@ export function contestRules(mode: GameMode, input: unknown) {
     perQuestion: local,
     timeLimit: timed ? Number(timed.id.slice(5)) : local ? 120 : 180,
     hintLimit: hints ? Number(hints.id.slice(6)) : 7,
-    showBasemap: local && !has('no-base'),
+    showBasemap: local && !has('network-only') && !has('no-base'),
+    showNetworkContext: local && !has('no-base'),
     showStops: local && !has('no-stops'),
     fill: has('fill'), nearby: has('nearby'), cycle: has('cycle'),
     range: has('unusual') ? 'unusual' : has('niche') ? 'niche' : has('all-city') ? 'all-city' : has('special') ? 'special' : 'urban',

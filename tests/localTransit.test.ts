@@ -114,7 +114,7 @@ test('actual game generation never invokes provider search services and accepts 
  const proxy=new Proxy(scope,{has:(target,key)=>key in target||(typeof key==='string'&&key.startsWith('set')),get:(target,key)=>key in target?Reflect.get(target,key):typeof key==='string'&&key.startsWith('set')?()=>{}:undefined});
  const run=Function('scope',`with(scope){${code};return generateQuestion;}`)(proxy);
  for (const mode of ['line', 'city', 'county'] as const) {
-  scope.gameRulesRef.current = contestRules(mode, mode === 'line' ? ['unusual','fill','time-5','no-base','no-stops'] : ['fill']);
+  scope.gameRulesRef.current = contestRules(mode, mode === 'line' ? ['unusual','fill','time-5','network-only','no-stops'] : ['fill']);
   scope.questionShownAtRef.current = null;
   await run(mode,'北京市',12);
   assert.ok(question?.isFillIn);

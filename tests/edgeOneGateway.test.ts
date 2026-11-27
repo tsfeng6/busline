@@ -361,12 +361,15 @@ test('contest labels are exclusive and only valid for their mode', async () => {
   assert.equal(contestRules('line', ['niche']).multiplier, 1);
   assert.equal(contestRules('line', ['unusual']).multiplier, 1.25);
   assert.equal(contestRules('line', []).showBasemap, true);
+  assert.equal(contestRules('line', ['network-only']).showBasemap, false);
+  assert.equal(contestRules('line', ['network-only']).multiplier, .75);
   assert.equal(contestRules('line', ['no-base']).showBasemap, false);
-  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 4050);
+  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 6750);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).hintLimit, 3);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).timeLimit, 10);
   assert.equal(contestRules('county', ['fill']).multiplier, 5);
   assert.throws(() => contestRules('line', ['time-5', 'time-10']), /每组/);
+  assert.throws(() => contestRules('line', ['network-only', 'no-base']), /每组/);
   assert.throws(() => contestRules('line', ['cycle']), /无效/);
   assert.throws(() => contestRules('city', ['no-base']), /无效/);
 });
@@ -420,5 +423,8 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   assert.deepEqual(drawing.terminals, []);
   assert.ok(drawing.frames?.every(frame => !!frame.path && frame.stops.length === 0));
   assert.equal(station.showBasemap, false);
-  assert.ok(drawing.basemap);
+  assert.equal(drawing.basemap, '');
+  const networkOnly = createLocalContestQuestion('station', data, contestRules('station', ['network-only']), districts, '', random);
+  assert.equal(networkOnly.showBasemap, false);
+  assert.ok(drawContestQuestion(networkOnly, 'station').basemap);
 });
