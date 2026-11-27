@@ -1,9 +1,9 @@
 import { ArrowLeft, ArrowUpRight, Gamepad2, History, Trophy } from 'lucide-react';
 import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
-import { contestRegions, contestRules, contestSeason, contestTagGroups, contests, isCitywideContest } from '../utils/contestRules';
+import { contestRegions, contestRules, contestSeason, contestTagGroups, contests, gameNames } from '../utils/contestRules';
 import { getContestLeaderboard, type LeaderboardEntry } from '../utils/gameAccount';
-import { CONTEST_TOTAL_LIMIT_SECONDS } from '../utils/gameTimer';
+import { getContestTotalTime } from '../utils/gameTimer';
 import { hasContestDistricts } from '../utils/contestQuestions';
 import type { PublishedCity } from '../utils/localTransit';
 import type { GameMode } from '../utils/offlineGame';
@@ -50,7 +50,6 @@ type LobbyProps = {
   onReview: () => void;
 };
 
-const gameNames = { line: '看图猜线路', station: '看通达度猜站名', city: '看线网猜城市', county: '看线网猜县城' };
 const control = 'mt-1 block w-full rounded-xl border border-m3-outline-variant/40 bg-m3-surface px-3 py-2.5 text-sm';
 const choice = (selected: boolean) => `rounded-xl border px-3 py-2 text-sm font-bold transition-colors ${selected
   ? 'border-m3-primary bg-m3-primary-container text-m3-on-primary-container'
@@ -81,17 +80,17 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
   const scope = competitive ? props.contest.scope : props.countyProvince;
   const tagGroups = contestTagGroups(mode);
   const rules = contestRules(mode, props.tags);
-  const local = mode === 'line' || mode === 'station';
+  const local = mode !== 'city' && mode !== 'county';
+  const defaults = contestRules(mode, []);
+  const totalTime = getContestTotalTime(mode, competitive);
   const city = competitive ? props.contest.scope : props.city;
-  const citywide = isCitywideContest(rules.range);
-  const area = citywide ? `${city}全域（含郊区）` : ({
+  const area = rules.includeSuburbs ? `${city}全域（含郊区）` : ({
     北京市: '北京市区（东城、西城、海淀、朝阳、丰台、石景山）',
     上海市: '上海市区（黄浦、静安、徐汇、长宁、普陀、虹口、杨浦）',
   } as Record<string, string>)[city] ?? `${city.replace(/市$/, '')}市区`;
   const rangeDescription = {
     urban: '纯数字编号的常规公交和内外环线',
     special: '常规公交、内外环线及常见带前缀的编号线路',
-    'all-city': '常规公交、内外环线及常见带前缀的编号线路',
     niche: '内外环线及线路名含阿拉伯数字的公交，包括带数字的偏门线路',
     unusual: '公交，包括无数字名称的偏门线路',
     unlimited: '具有线路走向数据的线路，包括线路变体、地铁和铁路',
@@ -100,7 +99,7 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
     || (competitive && (props.accountLoading || !props.accountEnabled))
     || (!competitive && local && !props.cities.includes(props.city))
     || (mode === 'county' && !props.countyProvinces.includes(scope));
-  const base = contestRules(mode, []).multiplier;
+  const base = defaults.multiplier;
   const max = tagGroups.reduce((product, group) => product * Math.max(...group.tags.map(tag => tag.factor)), base);
   const fraction = Math.log(rules.multiplier / base) / Math.log(max / base);
   const tier = rules.multiplier === max ? 'rainbow' : fraction >= .72 ? 'purple' : fraction >= .46 ? 'red' : fraction > 0 ? 'yellow' : 'blue';
@@ -110,8 +109,11 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
       <h2 className="text-base font-black">{competitive ? '竞赛标签' : gameNames[mode]}</h2>
       <span className={`contest-multiplier contest-multiplier-${tier}`}><strong>积分倍率 {rules.multiplier}×</strong></span>
     </div>
-    {local && <p className="text-xs text-slate-600">默认显示高德底图和站点 · 7 次提示 · 每题 2 分钟 · 选择题</p>}
-    {competitive && <p className="text-xs text-slate-600">整局限时 {CONTEST_TOTAL_LIMIT_SECONDS / 60} 分钟</p>}
+    {local && <p className="text-xs text-slate-600">
+      {mode === 'accessibility' ? '默认只显示经过目标站的公交线路' : '默认显示高德底图'}
+      {' · 每局 7 次提示 · 每题 '}{defaults.timeLimit / 60}{' 分钟 · 选择题'}
+    </p>}
+    {totalTime !== null && <p className="text-xs text-slate-600">整局限时 {totalTime / 60} 分钟</p>}
     {!competitive && mode === 'county' && <label className="block max-w-xs text-xs font-bold">省份
       <select className={control} value={props.countyProvince} onChange={event => props.onCountyProvince(event.target.value)}>
         {props.countyProvinces.map(province => <option key={province} value={province}>{province}</option>)}
@@ -126,7 +128,7 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
           {props.cities.map(city => <option key={city}>{city}</option>)}
         </select></label>
       </div>
-      {props.city && !hasContestDistricts(props.city) && (rules.range === 'urban' || rules.range === 'special') &&
+      {props.city && !hasContestDistricts(props.city) && !rules.includeSuburbs &&
         <p className="text-xs text-slate-600">市区范围按已收录站点密集区估算。</p>}
     </>}
     <div className="grid gap-3">
@@ -142,7 +144,9 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
           })}
         </div>
         {group.label === '考题范围' && city && <p className="mt-2 text-xs leading-relaxed text-slate-600">
-          考题范围包含：{area}内已收录的{mode === 'station' ? '常规公交站点' : rangeDescription}。
+          考题范围包含：{area}内已收录的{mode === 'line' ? rangeDescription : '公交站点'}
+          {mode === 'accessibility' && rules.minStationRoutes > 1 && `（至少 ${rules.minStationRoutes} 条公交线路）`}
+          {mode === 'line' && rules.includeSuburbs && rules.range === 'urban' && '（郊区另含常见带前缀的编号线路）'}。
         </p>}
         {group.label === '考题范围' && rules.range === 'unlimited' && (
           <p className="mt-2 text-xs font-semibold leading-relaxed text-amber-800">
@@ -243,7 +247,7 @@ export function GameLobby(props: LobbyProps) {
                   {props.accountEnabled && <button type="button" onClick={() => setRefresh(value => value + 1)}
                     className="rounded-lg px-2 py-1 text-xs font-bold text-m3-primary hover:bg-m3-primary-container">刷新</button>}
                 </div>
-                <div className={`grid gap-2 ${regionContests.length > 1 ? 'min-[440px]:grid-cols-2' : ''}`}>
+                <div className={`grid gap-2 ${regionContests.length > 1 ? 'min-[640px]:grid-cols-3' : ''}`}>
                   {regionContests.map(contest => {
                     const board = boardFor(contest.id);
                     return board.error ? <p key={contest.id} className="rounded-xl bg-m3-surface-container-low p-3 text-xs text-slate-600">
@@ -252,7 +256,7 @@ export function GameLobby(props: LobbyProps) {
                   })}
                 </div>
               </div>
-              {regionContests.length > 1 ? <div role="group" aria-label="竞赛项目" className="grid grid-cols-2 gap-2">
+              {regionContests.length > 1 ? <div role="group" aria-label="竞赛项目" className="grid gap-2 sm:grid-cols-3">
                 {regionContests.map(contest => <button key={contest.id} type="button"
                   aria-pressed={props.contest.id === contest.id} onClick={() => props.onContest(contest)}
                   className={`rounded-xl border px-2 py-2.5 text-xs font-bold transition-colors sm:text-sm ${props.contest.id === contest.id
@@ -268,7 +272,7 @@ export function GameLobby(props: LobbyProps) {
               <ContestCardOutline region={item.id} />
               <div className="relative col-start-2 flex min-w-0 flex-col py-1 pr-1 text-white">
                 <h3 className="mb-3 text-right text-2xl font-black tracking-tight sm:mb-5 sm:text-4xl">{item.title}</h3>
-                <div className={`grid gap-x-3 gap-y-2 ${item.contests.length > 1 ? 'min-[365px]:grid-cols-2' : ''}`}>
+                <div className={`grid gap-x-3 gap-y-2 ${item.contests.length > 1 ? 'min-[490px]:grid-cols-3' : ''}`}>
                   {item.contests.map(id => <BoardPreview key={id} contest={contestsById.get(id)!} board={boardFor(id)} />)}
                 </div>
                 <ArrowUpRight aria-hidden="true" size={27} className="ml-auto mt-auto pt-1 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />

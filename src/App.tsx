@@ -3,7 +3,7 @@ import { isGameAnswerCorrect } from './utils/gameAnswers';
 import {NearbyRoutes,type NearbyState} from './components/NearbyRoutes';
 import { loadNearbyTransitTiles } from './utils/nearbyTransitTiles';
 import {loadPublishedCities,loadGameCity,loadGameCityImage} from './utils/publishedTransit';
-import {COUNTY_GAME_RADIUS_METERS} from './utils/offlineGame';
+import {COUNTY_GAME_RADIUS_METERS, type GameMode, type OfflineQuestion} from './utils/offlineGame';
 import {DAILY_LOCATION_KEY,claimDailyLocation,gpsToMap,nearbyLines,cityTouchesRadius,radiusRing,type PublishedCity,type Point} from './utils/localTransit';
 import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
@@ -56,12 +56,12 @@ import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Ey
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
-import { CONTEST_TOTAL_LIMIT_SECONDS, formatGameTime } from './utils/gameTimer';
+import { getContestTotalTime, formatGameTime } from './utils/gameTimer';
 import { establishGameSession, gameAccountEnabled, getGameAccount, submitContestResult, type GameAccount } from './utils/gameAccount';
 import { getWechatRegistrationToken, WechatAccountLink } from './components/WechatAccountLink';
 import { GameLobby, type ContestRegionId } from './components/GameLobby';
 import { RankedGameDrawing } from './components/RankedGameDrawing';
-import { contests, contestTagGroups, contestRules, contestPrompts, type ContestRules } from './utils/contestRules';
+import { contests, gameNames, contestTagGroups, contestRules, contestPrompts, type ContestRules } from './utils/contestRules';
 import { createSimulationQuestion } from './utils/simulationQuestion';
 import { drawContestQuestion } from './utils/contestDrawing';
 import { contestRouteEndpoints } from './utils/contestRouteName';
@@ -281,7 +281,7 @@ export default function App() {
   const [contestRegion, setContestRegion] = useState<ContestRegionId | null>(null);
   const [contest, setContest] = useState<(typeof contests)[number]>(contests[0]);
   const [contestTags, setContestTags] = useState<string[]>([]);
-  const [simulationMode, setSimulationMode] = useState<'line' | 'station' | 'city' | 'county'>('line');
+  const [simulationMode, setSimulationMode] = useState<GameMode>('line');
   const [simulationTags, setSimulationTags] = useState<string[]>([]);
   useEffect(() => {
     if (gamePage) document.title = '巴士猜线';
@@ -348,7 +348,7 @@ export default function App() {
 
   // Minigame States & Logic
   const showMinigameModal = gamePage;
-  const [gameMode, setGameMode] = useState<'line' | 'station' | 'city' | 'county' | null>(null);
+  const [gameMode, setGameMode] = useState<GameMode | null>(null);
   const [gameCity, setGameCity] = useState('北京市');
   const [gameProvince, setGameProvince] = useState('北京市');
   const [gameCountyProvince, setGameCountyProvince] = useState('浙江省');
@@ -444,13 +444,14 @@ export default function App() {
   const questionShownAtRef = useRef<number | null>(null);
   const [gameElapsedMs, setGameElapsedMs] = useState(0);
   const [playedContestTags, setPlayedContestTags] = useState<ReturnType<typeof contestTagGroups>[number]['tags']>([]);
+  const totalTimeLimitRef = useRef<number | null>(null);
   const recordQuestionTime = useCallback((submittedAt: number, deadline: number | null) => {
     const shownAt = questionShownAtRef.current;
     questionShownAtRef.current = null;
     const contestDeadline = contestDeadlineRef.current;
-    if (contestDeadline !== null) {
+    if (contestDeadline !== null && totalTimeLimitRef.current !== null) {
       const endedAt = Math.min(submittedAt, deadline ?? submittedAt, contestDeadline);
-      setGameElapsedMs(Math.max(0, endedAt - (contestDeadline - CONTEST_TOTAL_LIMIT_SECONDS * 1000)));
+      setGameElapsedMs(Math.max(0, endedAt - (contestDeadline - totalTimeLimitRef.current * 1000)));
       return;
     }
     if (shownAt === null) return;
@@ -464,6 +465,7 @@ export default function App() {
   const [localGameDrawing, setLocalGameDrawing] = useState<RankedPuzzle['drawing'] | null>(null);
   const [amapGameDrawing, setAmapGameDrawing] = useState<RankedPuzzle['drawing'] | null>(null);
   const gameAnswerPanelRef = useRef<HTMLDivElement>(null);
+  const accessibilityContextRef = useRef<OfflineQuestion['contextPaths']>(undefined);
   const [gameHint, setGameHint] = useState<{ text: string; complete: boolean } | null>(null);
   const [adminQuizAnswer, setAdminQuizAnswer] = useState('');
   const handleGameHint = () => {
@@ -471,7 +473,19 @@ export default function App() {
     if (!question || gameState !== 'playing' || gameLoading || gameFeedback
       || gameHints.remaining <= 0 || gameHint?.complete || gameTimedOutRef.current) return;
     const used = gameHints.usedOnQuestion + 1;
-    setGameHint({ text: getGameHint(question.correctAnswer, used), complete: isGameHintComplete(question.correctAnswer, used) });
+    if (question.mode === 'accessibility') {
+      if (used === 1) {
+        setLocalGameDrawing(drawContestQuestion({
+          ...question, options: [], isFillIn: false, showStops: gameRulesRef.current?.showStops,
+          contextPaths: accessibilityContextRef.current,
+        }, question.mode));
+      } else {
+        setMapMode('normal');
+      }
+      setGameHint({ text: used === 1 ? '已显示周边线路图' : '已显示完整地图底图', complete: used === 2 });
+    } else {
+      setGameHint({ text: getGameHint(question.correctAnswer, used), complete: isGameHintComplete(question.correctAnswer, used) });
+    }
     setGameHints({ remaining: gameHints.remaining - 1, usedOnQuestion: used });
   };
   const [gameQuestionNum, setGameQuestionNum] = useState(1);
@@ -484,7 +498,7 @@ export default function App() {
   const [gameFeedback, setGameFeedback] = useState<{ correct: boolean; msg: string } | null>(null);
   type GameHistoryItem = {
     questionNum: number;
-    mode: 'line' | 'station' | 'city' | 'county';
+    mode: GameMode;
     targetCity: string;
     province?: string;
     promptText: string;
@@ -494,7 +508,7 @@ export default function App() {
     timedOut?: boolean;
     lineInfos?: any[];
     networkPaths?: Array<[number, number][]>;
-    networkStops?: Array<{ name?: string; lngLat: [number, number] }>;
+    networkStops?: OfflineQuestion['networkStops'];
     targetPoint?: { name: string; lngLat: [number, number] };
     fallbackCenter?: [number, number];
     countyWindow?: {center: Point; radius:number};
@@ -561,7 +575,7 @@ export default function App() {
   }, [recordQuestionTime]);
 
   useEffect(() => {
-    if (gameState !== 'playing' || !activeContestRef.current || gameFeedback?.correct === false) return;
+    if (gameState !== 'playing' || totalTimeLimitRef.current === null || gameFeedback?.correct === false) return;
     const tick = () => {
       const deadline = contestDeadlineRef.current;
       if (deadline === null || gameTimedOutRef.current) return;
@@ -688,7 +702,7 @@ export default function App() {
   }, [showMinigameModal, gameState, reviewAutoPlay, reviewIndex, gameHistory.length]);
 
   const startMinigame = (
-    mode: 'line' | 'station' | 'city' | 'county',
+    mode: GameMode,
     city: string,
     province?: string,
     competitive = false,
@@ -722,7 +736,8 @@ export default function App() {
     if (!competitive) setGameCity(city);
     const timeLimit = rules.timeLimit;
     contestDeadlineRef.current = null;
-    setContestTimeLeft(competitive ? CONTEST_TOTAL_LIMIT_SECONDS : null);
+    totalTimeLimitRef.current = getContestTotalTime(mode, competitive);
+    setContestTimeLeft(totalTimeLimitRef.current);
     gameTimeRemainingMsRef.current = competitive && !rules.perQuestion ? null : timeLimit * 1000;
     gameDeadlineRef.current = null;
     gameTimedOutRef.current = false;
@@ -749,7 +764,7 @@ export default function App() {
   };
 
   const generateQuestion = async (
-    mode: 'line' | 'station' | 'city' | 'county', city: string,
+    mode: GameMode, city: string,
     qNum: number, prevAnswer?: string, provinceOverride?: string
   ) => {
     const rules = gameRulesRef.current;
@@ -764,6 +779,8 @@ export default function App() {
     questionAbortRef.current = controller;
     const sessionId = ++gameSessionIdRef.current;
     setGameHints(prev => ({ ...prev, usedOnQuestion: 0 }));
+    accessibilityContextRef.current = undefined;
+    if (mode === 'accessibility') setMapMode('blank');
     setGameHint(null);
     setAdminQuizAnswer('');
     setConfirmQuitGame(false);setGameLoading(true);
@@ -782,14 +799,15 @@ export default function App() {
         mode === 'city' ? item => loadGameCityImage(item, controller.signal) : undefined);
       if (gameSessionIdRef.current !== sessionId) return;
       const { contextPaths, networkImage, sourceRevision, options, isFillIn, ...review } = question;
-      const drawing = drawContestQuestion(question, mode);
+      if (mode === 'accessibility') accessibilityContextRef.current = contextPaths;
+      const drawing = drawContestQuestion(mode === 'accessibility' ? { ...question, contextPaths: undefined } : question, mode);
       if (contestExpired()) {
         finishGameOnTimeout(true);
         return;
       }
       const shownAt = Date.now();
-      if (contest && contestDeadlineRef.current === null) {
-        contestDeadlineRef.current = shownAt + CONTEST_TOTAL_LIMIT_SECONDS * 1000;
+      if (totalTimeLimitRef.current !== null && contestDeadlineRef.current === null) {
+        contestDeadlineRef.current = shownAt + totalTimeLimitRef.current * 1000;
       }
       setLocalGameDrawing(drawing);
       currentGameQuestionRef.current = { ...review, questionNum: qNum, mode, province };
@@ -1361,7 +1379,7 @@ export default function App() {
       if (overlays.length > 0) {
         mapInstance.setFitView(overlays, false, [48, 170, 36, 36]);
       }
-    } else if (item.mode === 'station') {
+    } else if (item.mode === 'station' || item.mode === 'accessibility') {
       (item.lineInfos || []).forEach((info: any) => {
         renderBusLine(info, AMap, mapInstance, false, false, false);
       });
@@ -1450,12 +1468,14 @@ export default function App() {
     }
   }, [showMinigameModal, gameState, reviewIndex, reviewShowBasemap, reviewShowStops, gameHistory, mapInstance, lineThickness]);
 
+  const accessibilityMapRevealed = gameMode === 'accessibility' && gameHints.usedOnQuestion === 2;
   useEffect(() => {
     const rules = gameRulesRef.current;
     const question = currentGameQuestionRef.current;
     const AMap = (window as any).AMap;
-    if (gameState !== 'playing' || gameLoading || !rules?.showBasemap || !question || !AMap
-      || !mapInstance || !localGameDrawing || (gameMode !== 'line' && gameMode !== 'station')) return;
+    if (gameState !== 'playing' || gameLoading || !rules || !question || !AMap || !mapInstance || !localGameDrawing
+      || (gameMode !== 'line' && gameMode !== 'station' && gameMode !== 'accessibility')) return;
+    if (!rules.showBasemap && !accessibilityMapRevealed) return;
     const cleanup = mountContestMap(mapInstance, AMap, question, gameMode, rules.showStops, gameAnswerPanelRef.current);
     if (!cleanup) return;
     setAmapGameDrawing(localGameDrawing);
@@ -1463,7 +1483,7 @@ export default function App() {
       cleanup();
       setAmapGameDrawing(null);
     };
-  }, [gameState, gameLoading, gameMode, localGameDrawing, mapInstance]);
+  }, [gameState, gameLoading, gameMode, accessibilityMapRevealed, localGameDrawing, mapInstance]);
 
   // --- USER DEFINED DRAWING AND ADMIN STATES ---
   // Switch to show user submitted data (defaults to false / disabled)
@@ -4915,13 +4935,14 @@ export default function App() {
           try { roadNetLayer.setMap(null); } catch (e) {}
         }
         if (layers[0]) layers[0].setOpacity(1);
-        mapInstance.setFeatures(gamePage && gameState === 'playing' ? ['bg', 'road', 'building'] : ['bg', 'point', 'road', 'building']);
+        const hideMapLabels = gamePage && gameState === 'playing' && gameMode !== 'accessibility';
+        mapInstance.setFeatures(hideMapLabels ? ['bg', 'road', 'building'] : ['bg', 'point', 'road', 'building']);
         mapInstance.setMapStyle('amap://styles/light');
       }
     } catch (e) {
       // Ignore errors if map is being destroyed
     }
-  }, [showBaseMap, useSatelliteMap, mapInstance, gamePage, gameState]);
+  }, [showBaseMap, useSatelliteMap, mapInstance, gamePage, gameState, gameMode]);
 
   const handleSearch = async (forceRefresh = false, sharedOverride?: CityDataset) => {
     // Shared loads are lower priority than a local result or its submission dialog.
@@ -8959,13 +8980,7 @@ export default function App() {
                   <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <span className="px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[11px] font-black shrink-0">
-                        {gameMode === 'line'
-                          ? '看图猜线路'
-                          : gameMode === 'station'
-                          ? '看通达度猜站名'
-                          : gameMode === 'county'
-                          ? '看线网猜县城'
-                          : '看线网猜城市'}
+                        {gameMode && gameNames[gameMode]}
                       </span>
                       <span className="text-[11px] font-bold text-slate-500 shrink-0">
                         第 {gameQuestionNum} 题
@@ -9048,7 +9063,7 @@ export default function App() {
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-xs font-bold transition-colors hover:bg-m3-primary/20 disabled:opacity-45 disabled:cursor-not-allowed"
                     >
                       <Sparkles className="w-3.5 h-3.5" />
-                      {gameHints.remaining === 0 ? '提示已用完' : gameHint?.complete ? '本题已全部揭示' : '提示'}
+                      {gameHints.remaining === 0 ? '提示已用完' : gameHint?.complete ? (gameMode === 'accessibility' ? '本题地图提示已用完' : '本题已全部揭示') : '提示'}
                       <span className="tabular-nums">{gameHints.remaining}/{gameHintLimit}</span>
                     </motion.button>
                   </div>}
@@ -9064,7 +9079,9 @@ export default function App() {
                         aria-live="polite"
                         className="px-3 py-2.5 rounded-2xl bg-m3-primary-container/50 border border-m3-outline-variant/40"
                       >
-                        <div className="text-[10px] font-bold text-m3-primary mb-1">答案提示 · {Array.from(gameHint?.text ?? '').length} 个字符</div>
+                        <div className="text-[10px] font-bold text-m3-primary mb-1">
+                          {gameMode === 'accessibility' ? '地图提示' : `答案提示 · ${Array.from(gameHint?.text ?? '').length} 个字符`}
+                        </div>
                         <motion.p
                           key={gameHints.usedOnQuestion}
                           initial={{ opacity: 0, y: 3 }}
@@ -9113,7 +9130,7 @@ export default function App() {
                             ? '输入县城名称（如：桐庐 / 桐庐县）'
                             : gameMode === 'city'
                             ? '输入城市名称（如：北京 / 北京市）'
-                            : gameMode === 'station'
+                            : gameMode === 'station' || gameMode === 'accessibility'
                             ? '输入站点名称（如：西单）'
                             : '输入线路名称（如：1路 / 环一线外环）'
                         }
@@ -9245,13 +9262,7 @@ export default function App() {
                     end: reviewedLine.end_stop || reviewedLine.via_stops?.at(-1)?.name,
                   })
                   : null;
-                const modeLabel = item.mode === 'line'
-                  ? '看图猜线路'
-                  : item.mode === 'station'
-                  ? '看通达度猜站名'
-                  : item.mode === 'county'
-                  ? '看线网猜县城'
-                  : '看线网猜城市';
+                const modeLabel = gameNames[item.mode];
 
                 return (
                   <div className="px-4 py-3 flex flex-col gap-2.5 bg-m3-surface">

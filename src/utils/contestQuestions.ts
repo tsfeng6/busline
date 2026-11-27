@@ -1,6 +1,6 @@
 import type { BusLine } from '../types';
 import type { CityDataset } from './cityDataset';
-import { isCitywideContest, type ContestRules } from './contestRules';
+import type { ContestRules } from './contestRules';
 import { distanceMeters, radiusRing, regularGameRoute, routeName, type CountySeat, type Point } from './localTransit';
 import { fullContestRouteName, isRouteEndpointAnnotation, routeAnnotations } from './contestRouteName';
 import { createOfflineQuestion, shuffle, type OfflineQuestion } from './offlineGame';
@@ -88,7 +88,7 @@ export function estimateUrbanDistrict(data: CityDataset): Polygon[] {
 }
 
 export function createLocalContestQuestion(
-  mode: 'line' | 'station', data: CityDataset, rules: ContestRules, polygons: Polygon[], previous: string, random = Math.random,
+  mode: 'line' | 'station' | 'accessibility', data: CityDataset, rules: ContestRules, polygons: Polygon[], previous: string, random = Math.random,
 ): OfflineQuestion {
   const checks = polygons.map(([ring, ...holes]) => {
     const bounds = ring.reduce(([w,s,e,n], [x,y]) => [Math.min(w,x), Math.min(s,y), Math.max(e,x), Math.max(n,y)],
@@ -107,28 +107,28 @@ export function createLocalContestQuestion(
     }
     return included;
   };
-  const citywide = isCitywideContest(rules.range);
-  const unlimited = rules.range === 'unlimited';
+  const unlimited = mode === 'line' && rules.range === 'unlimited';
   const answerName = unlimited ? fullContestRouteName : routeName;
   const drawableLines = data.lines.filter(line => line.path?.length >= 2);
   const entries = (unlimited ? drawableLines : drawableLines.filter(line =>
-    !isRailRoute(line.name) && !hasRouteVariant(line.name)))
+    !isRailRoute(line.name) && (mode !== 'line' || !hasRouteVariant(line.name))))
     .map(line => ({ line, stops: routeStops(line) }));
-  const eligible = unlimited ? entries : entries.filter(({ line }) => {
-    const normalized = line.name.normalize('NFKC');
-    const label = routeName(normalized);
-    if (loopDirection.test(label) || /\d[路线]?环线$/.test(label) || /\((?:内环|外环|环线)\)/.test(normalized)) return true;
-    if (mode === 'station' || rules.range === 'urban') return regular(line.name);
-    if (rules.range === 'unusual') return true;
-    if (rules.range === 'niche') return /[0-9０-９]/.test(routeName(line.name));
-    return regularGameRoute(line.name.normalize('NFKC'));
-  });
-  const context = (rules.showNetworkContext ?? rules.showBasemap) ? drawableLines.map(line => line.path) : undefined;
+  const context = (rules.showNetworkContext || mode === 'accessibility') ? drawableLines.map(line => line.path) : undefined;
   const shared = { targetCity: data.city, promptText: '', showBasemap: rules.showBasemap, showStops: rules.showStops,
     isFillIn: rules.fill, contextPaths: context };
   if (mode === 'line') {
-    const pool = citywide ? eligible : eligible.filter(entry =>
-      (entry.stops.length >= 2 ? entry.stops.map(stop => stop.lngLat) : entry.line.path).every(urban));
+    const pool = entries.filter(entry => {
+      const { line, stops } = entry;
+      const inUrban = (stops.length >= 2 ? stops.map(stop => stop.lngLat) : line.path).every(urban);
+      if (!inUrban && !rules.includeSuburbs) return false;
+      if (unlimited || rules.range === 'unusual') return true;
+      const normalized = line.name.normalize('NFKC');
+      const label = routeName(normalized);
+      if (loopDirection.test(label) || /\d[路线]?环线$/.test(label) || /\((?:内环|外环|环线)\)/.test(normalized)) return true;
+      if (rules.range === 'niche') return /[0-9]/.test(label);
+      if (inUrban && rules.range === 'urban') return regular(normalized);
+      return regularGameRoute(normalized);
+    });
     const picked = shuffle(pool.filter(entry => answerName(entry.line.name) !== previous), random)[0] ?? pool[0];
     if (!picked || (!rules.fill && new Set(pool.map(entry => answerName(entry.line.name))).size < 2)) throw Error('所选标签下暂无足够的线路。');
     const answer = answerName(picked.line.name);
@@ -142,20 +142,30 @@ export function createLocalContestQuestion(
     return { ...shared, correctAnswer: answer, options: rules.fill ? [] : options(answer, names.map(entry => answerName(entry.line.name)), random),
       lineInfos: [picked.line], networkStops: picked.stops };
   }
-  const stations = new Map<string, { name: string; lngLat: Point; routes: typeof eligible }[]>();
-  for (const entry of eligible) for (const stop of entry.stops) {
-    if (!citywide && !urban(stop.lngLat)) continue;
+  const stations = new Map<string, { name: string; lngLat: Point; routes: typeof entries }[]>();
+  for (const entry of entries) for (const stop of entry.stops) {
     const group = stations.get(stop.name) ?? [];
     let station = group.find(other => distanceMeters(stop.lngLat, other.lngLat) <= 150);
     if (!station) { station = { ...stop, routes: [] }; group.push(station); stations.set(stop.name, group); }
     if (!station.routes.includes(entry)) station.routes.push(entry);
   }
   const all = [...stations.values()].flat();
-  const candidates = all.filter(station => new Set(station.routes.map(route => routeName(route.line.name))).size >= 2);
-  const picked = shuffle(candidates.filter(station => station.name !== previous), random)[0] ?? candidates[0];
-  if (!picked || (!rules.fill && stations.size < 2)) throw Error('所选标签下暂无足够的站点。');
-  const names = rules.fill ? [] : rules.nearby ? [...all].sort((a,b) => distanceMeters(a.lngLat,picked.lngLat)-distanceMeters(b.lngLat,picked.lngLat)) : shuffle(all,random);
-  return { ...shared, correctAnswer: picked.name, options: rules.fill ? [] : options(picked.name, names.map(station => station.name), random),
-    targetPoint: { name: picked.name, lngLat: picked.lngLat }, fallbackCenter: picked.lngLat,
-    lineInfos: picked.routes.map(entry => entry.line), networkStops: picked.routes.flatMap(entry => entry.stops) };
+  const scoped = rules.includeSuburbs ? all : all.filter(station => urban(station.lngLat));
+  const candidates = scoped.filter(station =>
+    new Set(station.routes.map(route => routeName(route.line.name))).size >= rules.minStationRoutes);
+  const ordered = shuffle(candidates, random);
+  for (const picked of [...ordered.filter(station => station.name !== previous), ...ordered.filter(station => station.name === previous)]) {
+    const names = rules.fill ? [] : rules.nearby ? all
+      .map(station => ({ name: station.name, distance: distanceMeters(station.lngLat, picked.lngLat) }))
+      .filter(station => station.distance >= 700)
+      .sort((a, b) => a.distance - b.distance).map(station => station.name)
+      : shuffle(scoped, random).map(station => station.name);
+    const choices = rules.fill ? [] : options(picked.name, names, random);
+    if (!rules.fill && choices.length < (rules.nearby ? 4 : 2)) continue;
+    return { ...shared, correctAnswer: picked.name, options: choices,
+      targetPoint: { name: picked.name, lngLat: picked.lngLat }, fallbackCenter: picked.lngLat,
+      lineInfos: mode === 'accessibility' ? picked.routes.map(entry => entry.line) : undefined,
+      networkStops: mode === 'accessibility' && rules.showStops ? picked.routes.flatMap(entry => entry.stops) : undefined };
+  }
+  throw Error('所选标签下暂无足够的站点。');
 }

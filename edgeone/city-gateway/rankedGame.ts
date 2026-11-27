@@ -7,7 +7,7 @@ import type { PublishedCity } from '../../src/utils/localTransit';
 import { shuffle, type GameMode, type OfflineQuestion } from '../../src/utils/offlineGame';
 import { createCityContestQuestion, createLocalContestQuestion, createNetworkContestQuestion, contestDistrictPolygons } from '../../src/utils/contestQuestions';
 import { createSimulationQuestion, rankedQuestionRandom } from '../../src/utils/simulationQuestion';
-import { isCitywideContest, type ContestRules } from '../../src/utils/contestRules';
+import type { ContestRules } from '../../src/utils/contestRules';
 
 export async function createRankedQuestion(
   appOrigin: string, fetcher: typeof fetch, mode: GameMode,
@@ -79,9 +79,8 @@ export async function createRankedQuestion(
           networkImage: png.toString('base64') };
       }
       const data = await loadCity(candidate.city);
-      if (mode === 'line' || mode === 'station') {
-        const polygons = isCitywideContest(rules.range)
-          ? [] : contestDistrictPolygons(scope);
+      if (mode === 'line' || mode === 'station' || mode === 'accessibility') {
+        const polygons = contestDistrictPolygons(scope);
         return createLocalContestQuestion(mode, data, rules, polygons, previous, random);
       }
       return createNetworkContestQuestion(mode, data, rules,

@@ -40,7 +40,7 @@ export function isGameAnswerCorrect(answer: string, correctAnswer: string, isFil
       const nu = normLineName(u);
       const nc = normLineName(c);
       isCorrect = u === c || (nu.length > 0 && nu === nc);
-    } else if (mode === 'station') {
+    } else if ((mode === 'station' || mode === 'accessibility')) {
       const stripStationEnd = (s: string) => {
         const stripped = s.replace(
           /(?:公交枢纽站|公交场站|公交总站|公交车站|公交站|枢纽站|首末站|总站|车站|站)$/,

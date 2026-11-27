@@ -22,7 +22,7 @@ const fail=(status:number,message:string)=>Object.assign(Error(message),{status}
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex');
 const equal=(a:string,b:string)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 export const gatewaySignature=(secret:string,text:string)=>createHmac('sha256',secret).update(text).digest('hex');
-type GameName='line'|'station'|'city'|'county';
+type GameName = typeof contests[number]['game'];
 const validContest = (game: unknown, scope: string): game is GameName =>
   contests.some(contest => contest.game === game && contest.scope === scope);
 const gameAccount=(user:any,profile?:any):{id:string;displayName:string;avatarUrl?:string}=>({id:String(user?.id||profile?.id||''),displayName:String(profile?.display_name||'巴士玩家').slice(0,24),avatarUrl:profile?.avatar_url||profile?.avatar_path?String(profile?.avatar_url||profile?.avatar_path):undefined});
@@ -363,6 +363,7 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     if (!runId) {
       const scope = input.game === 'city' ? '全国' : typeof input.scope === 'string' ? input.scope.trim() : '';
       if (!validContest(input.game, scope)) throw fail(400, '不存在这个竞赛项目。');
+      if (input.game === 'accessibility') throw fail(400, '请从巴士猜线大厅开始这个竞赛。');
       let rules;
       try { rules = contestRules(input.game, input.tags ?? []); }
       catch (error) { throw fail(400, (error as Error).message); }

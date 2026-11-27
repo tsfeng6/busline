@@ -4,7 +4,7 @@ import type { OfflineQuestion } from './offlineGame';
 type MapQuestion = Pick<OfflineQuestion, 'lineInfos' | 'targetPoint'> & { networkStops?: { lngLat: Point }[] };
 
 export function mountContestMap(
-  map: any, AMap: any, question: MapQuestion, mode: 'line' | 'station',
+  map: any, AMap: any, question: MapQuestion, mode: 'line' | 'station' | 'accessibility',
   showStops: boolean, panel: HTMLElement | null,
 ) {
   const routes: any[] = [];
@@ -32,7 +32,7 @@ export function mountContestMap(
     }
   }
 
-  if (!routes.length) return;
+  if (!routes.length && !question.targetPoint) return;
   if (showStops) for (const stop of question.networkStops ?? []) {
     overlayList.push(marker(stop.lngLat, '#346DB3', 4));
   }
@@ -50,6 +50,10 @@ export function mountContestMap(
   try {
     map.add(overlayList);
     const fit = () => {
+      if (!routes.length && question.targetPoint) {
+        map.setZoomAndCenter(15, question.targetPoint.lngLat);
+        return;
+      }
       const bottom = Math.min(map.getSize().height * .65, (panel?.offsetHeight ?? 160) + 24);
       map.setFitView(routes, false, [32, 32, bottom, 32]);
     };

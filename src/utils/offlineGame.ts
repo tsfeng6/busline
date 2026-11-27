@@ -2,7 +2,7 @@ import type {BusLine} from '../types';
 import type {CityDataset} from './cityDataset';
 import {clipRouteToRadius,distanceMeters,eligibleGameLines,regularGameRoute,routeName,type CountySeat,type Point} from './localTransit';
 export const COUNTY_GAME_RADIUS_METERS = 10_000;
-export type GameMode='line'|'station'|'city'|'county';
+export type GameMode='line'|'station'|'accessibility'|'city'|'county';
 export type GameDifficulty='easy'|'medium'|'hard'|'hell';
 export type GameStage={showBasemap:boolean;showStops:boolean;isFillIn:boolean;confusing?:boolean};
 export type OfflineQuestion={targetCity:string;correctAnswer:string;promptText:string;options:string[];isFillIn:boolean;

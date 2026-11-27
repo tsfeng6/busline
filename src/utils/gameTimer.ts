@@ -1,4 +1,8 @@
-export const CONTEST_TOTAL_LIMIT_SECONDS = 20 * 60;
+import type { GameMode } from './offlineGame';
+
+export function getContestTotalTime(mode: GameMode | null, competitive: boolean): number | null {
+  return mode === 'accessibility' ? 60 * 60 : competitive ? 20 * 60 : null;
+}
 
 export function getGameTimeLimit(mode: 'line' | 'station' | 'city' | 'county', difficulty: 'easy' | 'medium' | 'hard' | 'hell'): number | null {
   if (mode === 'city' || mode === 'county') return 180;

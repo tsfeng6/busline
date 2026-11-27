@@ -42,7 +42,7 @@ export function drawContestQuestion(question: OfflineQuestion, mode: GameMode, c
       if (distance(path[0]) > distance(path.at(-1)!)) paths[0] = [...path].reverse();
     }
   }
-  const anchor = question.countyWindow?.center ?? paths.find(path => path.length)?.[0] ?? [0, 0];
+  const anchor = question.countyWindow?.center ?? paths.find(path => path.length)?.[0] ?? question.targetPoint?.lngLat ?? [0, 0];
   const longitudeScale = Math.cos(anchor[1] * Math.PI / 180);
   let west = Infinity, east = -Infinity, south = Infinity, north = -Infinity;
   for (const path of paths) for (const [lng, lat] of path) {
@@ -50,8 +50,8 @@ export function drawContestQuestion(question: OfflineQuestion, mode: GameMode, c
     west = Math.min(west, x); east = Math.max(east, x);
     south = Math.min(south, y); north = Math.max(north, y);
   }
-  if (question.countyWindow) {
-    const delta = question.countyWindow.radius / 111320;
+  if (question.countyWindow || mode === 'station') {
+    const delta = (question.countyWindow?.radius ?? 1200) / 111320;
     west = south = -delta; east = north = delta;
   }
   const scale = 930 / Math.max(east - west, north - south, 1e-9);
@@ -109,7 +109,7 @@ export function drawContestQuestion(question: OfflineQuestion, mode: GameMode, c
       distance -= length;
     }
   }
-  const local = mode === 'line' || mode === 'station';
+  const local = mode === 'line' || mode === 'station' || mode === 'accessibility';
   return {
     path: cycle ? '' : routePaths.join(''), frames: cycle ? [...frames.values()] : undefined, arrows, basemap: [...roads].join(''), county: !!question.countyWindow,
     stops: local && question.showStops && !cycle ? (question.networkStops ?? []).map(stop => project(stop.lngLat)) : [],
