@@ -2964,11 +2964,19 @@ export default function App() {
     // otherwise clicking a stop may show merely a subset of its routes.
     const savedCity = await cityDataCache.get(city || currentCity).catch(() => null);
     const localLines = new Set<string>();
+    const publishedRoutes = new Map<string, ViewportRoute>();
     for (const line of fetchedLinesCache.current.values()) {
       if (!isLineNameBlockedRef(line.name) && line.via_stops?.some(matchesStop)) localLines.add(line.name);
     }
     for (const line of savedCity?.lines || []) {
-      if (!isLineNameBlockedRef(line.name) && line.via_stops?.some(matchesStop)) localLines.add(line.name);
+      if (isLineNameBlockedRef(line.name) || !line.via_stops?.some(matchesStop)) continue;
+      localLines.add(line.name);
+      if (publishedOnly) {
+        publishedRoutes.set(line.name, {
+          city: line.city || city, id: line.id, name: line.name,
+          stime: line.stime, etime: line.etime, scheduleDescription: line.scheduleDescription,
+        });
+      }
     }
     if (showUserSubmittedData) {
       for (const line of approvedUserLines) {
@@ -2978,7 +2986,7 @@ export default function App() {
     // A retrieval-complete city snapshot is the authoritative local source;
     // it already includes every collected direction and returns immediately.
     if (publishedOnly || (savedCity?.retrievalComplete && localLines.size)) {
-      return localLines.size ? { name, address: '', lines: [...localLines], isBusStop: true } : null;
+      return localLines.size ? { name, address: '', lines: [...localLines], isBusStop: true, publishedRoutes } : null;
     }
     const stationSupplement = discoverStationLines(AMap, city || currentCity,
       [{ name, location: { lng: location[0], lat: location[1] } }], () => false);
@@ -3182,7 +3190,8 @@ export default function App() {
             if (!previous || previous.key !== selectedKey) return previous;
             return {
               ...previous,
-              lines: Array.from(new Set([...(previous.lines || []), ...(details.lines || [])]))
+              lines: Array.from(new Set([...(previous.lines || []), ...(details.lines || [])])),
+              publishedRoutes: details.publishedRoutes,
             };
           });
         });
@@ -8566,22 +8575,22 @@ export default function App() {
                     const { name, start, end } = info;
                     const isUserSub = fetchedLinesCache.current.get(line)?.isUserSubmitted || approvedUserLines.some(ul => ul.name === line);
                     const badgeText = name.replace('路', '');
-                    const viewportRoute = !selectedStop && selectedViewportRoutesRef.current.find(route => route.name === line);
-                    const schedule = fetchedLinesCache.current.get(line) || Array.from(fetchedLinesCache.current.values() as Iterable<BusLine>).find(candidate =>
-                      candidate.name.split(/[（(]/)[0].replace('路', '').trim() === name.replace('路', '').trim() && candidate.start_stop === start && candidate.end_stop === end)
-                      // The compact viewport tile includes the two display times,
-                      // avoiding a duplicate AMap request for a route just picked
-                      // from the map.
+                    const stationRoute: ViewportRoute | undefined = selectedStop?.publishedRoutes?.get(line);
+                    const roadRoute = !selectedStop ? selectedViewportRoutesRef.current.find(route => route.name === line) : undefined;
+                    const viewportRoute = stationRoute ?? roadRoute;
+                    const schedule = (viewportRoute && (viewportRoute.stime || viewportRoute.etime) ? viewportRoute : undefined)
+                      || fetchedLinesCache.current.get(line)
                       || viewportRoute
+                      || Array.from(fetchedLinesCache.current.values() as Iterable<BusLine>).find(candidate =>
+                      candidate.name.split(/[（(]/)[0].replace('路', '').trim() === name.replace('路', '').trim() && candidate.start_stop === start && candidate.end_stop === end)
                       || timelineLines.find(candidate => candidate.name === line);
                     const inactiveOnTimeline = showTimeline && !!schedule && isLineOperating(schedule, timelineMinute) === false;
                     return (
                       <div 
                         key={line + idx}
                         onClick={() => {
-                          const route = !selectedStop && selectedViewportRoutesRef.current.find(route => route.name === line);
-                          void handleManualSearch({ name: line, type: 'busline', routeId: route ? route.id : undefined,
-                            sourceCity: selectedStop?.key?.startsWith('tile:') ? selectedStop.city : route ? route.city : undefined });
+                          void handleManualSearch({ name: line, type: 'busline', routeId: viewportRoute?.id,
+                            sourceCity: viewportRoute?.city || (selectedStop?.key?.startsWith('tile:') ? selectedStop.city : undefined) });
                         }}
                         className={`md:bg-m3-surface md:border md:border-m3-outline-variant/30 md:rounded-2xl md:p-3 bg-m3-surface-container-low rounded-2xl p-2.5 px-3 flex md:gap-3.5 gap-3 items-center md:hover:bg-m3-surface-container-high hover:border-m3-primary/30 transition-all group relative overflow-hidden shrink-0 cursor-pointer snap-center max-w-[220px] md:max-w-none md:w-auto md:h-[72px] border border-transparent shadow-xs ${inactiveOnTimeline ? 'opacity-45 grayscale' : ''}`}
                       >
@@ -8628,7 +8637,7 @@ export default function App() {
                             )}
                           </div>
                         </div>
-                        <div className="shrink-0"><OperatingHours first={schedule?.stime} last={schedule?.etime} description={schedule && 'scheduleDescription' in schedule ? schedule.scheduleDescription : undefined} /></div>
+                        <div className="shrink-0"><OperatingHours first={schedule?.stime} last={schedule?.etime} description={schedule?.scheduleDescription} /></div>
                       </div>
                     );
                   })}

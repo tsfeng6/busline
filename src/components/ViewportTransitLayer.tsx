@@ -9,7 +9,7 @@ import {
 } from '../utils/transitTiles';
 
 export type ViewportStop = TileStop & { location: { lng: number; lat: number }; key: string; isBusStop: true };
-export type ViewportRoute = Pick<TileRoute, 'city' | 'id' | 'name' | 'stime' | 'etime'>;
+export type ViewportRoute = Pick<TileRoute, 'city' | 'id' | 'name' | 'stime' | 'etime'> & { scheduleDescription?: string };
 export type ViewportTransitSelection = {
   stops(): ViewportStop[];
   routesAt(point: TransitPoint): ViewportRoute[];
