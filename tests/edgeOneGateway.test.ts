@@ -346,18 +346,18 @@ test('local contest results save the best score for the authenticated player', a
  assert.equal((await submit(4, '')).status, 401);
  assert.equal((await submit(-1)).status, 400);
  assert.deepEqual(await (await submit(4)).json(), {saved:true});
- assert.equal(best.get('line'), 6);
+ assert.equal(best.get('line'), 4);
  assert.equal((await submit(2)).status, 200);
- assert.equal(best.get('line'), 6);
+ assert.equal(best.get('line'), 4);
  assert.equal((await submit(5)).status, 200);
- assert.equal(best.get('line'), 7.5);
+ assert.equal(best.get('line'), 5);
  assert.equal((await submit(4, undefined, 'station', [])).status, 200);
  assert.equal((await submit(3, undefined, 'accessibility', ['medium-stops', 'time-300'])).status, 200);
  assert.equal(best.get('station'), 2);
  assert.equal(best.get('accessibility'), 6);
  suspended = true;
  assert.equal((await submit(8)).status, 403);
- assert.equal(best.get('line'), 7.5);
+ assert.equal(best.get('line'), 5);
 });
 
 test('contest labels are exclusive and only valid for their mode', async () => {
@@ -372,7 +372,10 @@ test('contest labels are exclusive and only valid for their mode', async () => {
   assert.equal(contestRules('line', ['network-only']).showBasemap, false);
   assert.equal(contestRules('line', ['network-only']).multiplier, 1.5);
   assert.equal(contestRules('line', ['no-base']).showBasemap, false);
-  assert.equal(contestRules('accessibility', ['all-city', 'medium-stops', 'time-300']).multiplier, 6);
+  for (const mode of ['line', 'station', 'accessibility'] as const) {
+    assert.equal(contestRules(mode, ['all-city']).multiplier, 1);
+  }
+  assert.equal(contestRules('accessibility', ['all-city', 'medium-stops', 'time-300']).multiplier, 4);
   assert.throws(() => contestRules('station', ['no-base']), /无效/);
   assert.throws(() => contestRules('station', ['no-stops']), /无效/);
   assert.throws(() => contestRules('accessibility', ['network-only']), /无效/);
