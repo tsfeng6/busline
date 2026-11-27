@@ -1,6 +1,6 @@
 import type { BusLine } from '../types';
 import type { CityDataset } from './cityDataset';
-import type { ContestRules } from './contestRules';
+import { DEFAULT_LINE_MIN_KM, type ContestRules } from './contestRules';
 import { distanceMeters, radiusRing, regularGameRoute, routeName, type CountySeat, type Point } from './localTransit';
 import { fullContestRouteName, isRouteEndpointAnnotation, routeAnnotations } from './contestRouteName';
 import { createOfflineQuestion, shuffle, type OfflineQuestion } from './offlineGame';
@@ -27,6 +27,15 @@ function contains(ring: Ring, [lng, lat]: Point) {
 
 const regular = (name: string) => /^\d+路?(?:内环|外环|环线)?$/.test(routeName(name).normalize('NFKC'));
 const loopDirection = /(?:内环|外环)$/;
+
+function meetsDefaultLineLength(path: Point[]) {
+  let meters = 0;
+  for (let index = 1; index < path.length; index++) {
+    meters += distanceMeters(path[index - 1], path[index]);
+    if (meters >= DEFAULT_LINE_MIN_KM * 1000) return true;
+  }
+  return false;
+}
 
 function hasRouteVariant(name: string) {
   const normalized = name.normalize('NFKC');
@@ -121,6 +130,7 @@ export function createLocalContestQuestion(
       const { line, stops } = entry;
       const inUrban = (stops.length >= 2 ? stops.map(stop => stop.lngLat) : line.path).every(urban);
       if (!inUrban && !rules.includeSuburbs) return false;
+      if (rules.range === 'urban' && !meetsDefaultLineLength(line.path)) return false;
       if (unlimited || rules.range === 'unusual') return true;
       const normalized = line.name.normalize('NFKC');
       const label = routeName(normalized);

@@ -460,6 +460,24 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   assert.ok(drawContestQuestion(question, 'line').arrows?.length);
   assert.ok(drawContestQuestion(question, 'line').basemap);
 
+  const lengthPool = { ...data, lines: [
+    line('4路', [[116.1,39.8],[116.15,39.8]]),
+    line('5路', [[116.1,39.8],[116.16,39.8],[116.1,39.8]]),
+    line('6路', [[116.8,39.8],[116.85,39.8]]),
+    ...data.lines,
+  ] };
+  const guessByLength = (tags: string[]) =>
+    createLocalContestQuestion('line', lengthPool, contestRules('line', tags), districts, '', random);
+  assert.equal(guessByLength([]).correctAnswer, '5路');
+  assert.deepEqual(guessByLength([]).options, ['5路', '1路', '2路']);
+  assert.deepEqual(guessByLength(['all-city']).options, ['5路', '1路', '2路', '3路']);
+  assert.equal(guessByLength(['special']).correctAnswer, '4路');
+  const shortSuburb = { ...data, lines: [lengthPool.lines[2]] };
+  assert.throws(() => createLocalContestQuestion('line', shortSuburb,
+    contestRules('line', ['all-city', 'fill']), districts, '', random), /暂无足够/);
+  assert.equal(createLocalContestQuestion('line', shortSuburb,
+    contestRules('line', ['all-city', 'special', 'fill']), districts, '', random).correctAnswer, '6路');
+
   const unusual = { ...line('观光环线', [[116.7,39.8],[116.9,39.9]]), via_stops: [] };
   const unrestrictedData = { ...data, lines: [unusual, ...data.lines] };
   const unrestricted = createLocalContestQuestion('line', unrestrictedData, contestRules('line', ['unusual', 'all-city', 'nearby']), districts, '', random);

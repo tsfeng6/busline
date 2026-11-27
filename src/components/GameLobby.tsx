@@ -1,7 +1,7 @@
 import { ArrowLeft, ArrowUpRight, Gamepad2, History, Trophy } from 'lucide-react';
 import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
-import { contestRegions, contestRules, contestSeason, contestTagGroups, contests, gameNames } from '../utils/contestRules';
+import { contestRegions, contestRules, contestSeason, contestTagGroups, contests, DEFAULT_LINE_MIN_KM, gameNames } from '../utils/contestRules';
 import { getContestLeaderboard, type LeaderboardEntry } from '../utils/gameAccount';
 import { getContestTotalTime } from '../utils/gameTimer';
 import { hasContestDistricts } from '../utils/contestQuestions';
@@ -147,6 +147,7 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
           考题范围包含：{area}内已收录的{mode === 'line' ? rangeDescription : '公交站点'}
           {mode === 'accessibility' && rules.minStationRoutes > 1 && `（至少 ${rules.minStationRoutes} 条公交线路）`}
           {mode === 'line' && rules.includeSuburbs && rules.range === 'urban' && '（郊区另含常见带前缀的编号线路）'}。
+          {mode === 'line' && rules.range === 'urban' && `线路长度至少为 ${DEFAULT_LINE_MIN_KM} 公里。`}
         </p>}
         {group.label === '考题范围' && rules.range === 'unlimited' && (
           <p className="mt-2 text-xs font-semibold leading-relaxed text-amber-800">

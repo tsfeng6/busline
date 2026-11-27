@@ -6,6 +6,7 @@ export const gameNames = {
 } satisfies Record<GameMode, string>;
 
 export const contestSeason = 'S1';
+export const DEFAULT_LINE_MIN_KM = 8;
 
 export const contests = [
   { id: 'line-beijing', game: 'line', scope: '北京市', title: '猜线路·北京' },
@@ -38,13 +39,13 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
   const suburbs = { id: 'all-city', label: '加入郊区', factor: 2 };
   return [
     { label: '考题范围', tags: mode === 'line' ? [
-      { id: 'special', label: '扩大至微型线路', factor: 2 },
-      { id: 'niche', label: '扩大至小众线路', factor: 3 },
-      { id: 'unusual', label: '扩大至古怪线路', factor: 4 },
-      { id: 'unlimited', label: '扩大至无限制', factor: 5 },
+      { id: 'special', label: '加入微型线路', factor: 2 },
+      { id: 'niche', label: '加入小众线路', factor: 3 },
+      { id: 'unusual', label: '加入古怪线路', factor: 4 },
+      { id: 'unlimited', label: '无限制', factor: 5 },
     ] : mode === 'accessibility' ? [
-      { id: 'medium-stops', label: '扩大至中型站', factor: 2 },
-      { id: 'all-stops', label: '扩大至小站', factor: 3 },
+      { id: 'medium-stops', label: '加入中型站', factor: 2 },
+      { id: 'all-stops', label: '加入小站', factor: 3 },
     ] : [suburbs] },
     ...(mode === 'station' ? [] : [{ label: '地区', tags: [suburbs] }]),
     ...(mode === 'accessibility' ? [] : [{ label: '底图', tags: [
