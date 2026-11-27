@@ -1,7 +1,7 @@
 import { ArrowLeft, ArrowUpRight, Gamepad2, History, Trophy } from 'lucide-react';
 import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import { useEffect, useRef, useState } from 'react';
-import { contestRegions, contestRules, contestSeason, contestTagGroups, contests } from '../utils/contestRules';
+import { contestRegions, contestRules, contestSeason, contestTagGroups, contests, isCitywideContest } from '../utils/contestRules';
 import { getContestLeaderboard, type LeaderboardEntry } from '../utils/gameAccount';
 import { hasContestDistricts } from '../utils/contestQuestions';
 import type { PublishedCity } from '../utils/localTransit';
@@ -81,6 +81,19 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
   const tagGroups = contestTagGroups(mode);
   const rules = contestRules(mode, props.tags);
   const local = mode === 'line' || mode === 'station';
+  const city = competitive ? props.contest.scope : props.city;
+  const citywide = isCitywideContest(rules.range);
+  const area = citywide ? `${city}全域（含郊区）` : ({
+    北京市: '北京市区（东城、西城、海淀、朝阳、丰台、石景山）',
+    上海市: '上海市区（黄浦、静安、徐汇、长宁、普陀、虹口、杨浦）',
+  } as Record<string, string>)[city] ?? `${city.replace(/市$/, '')}市区`;
+  const rangeDescription = {
+    urban: '纯数字编号的常规公交',
+    special: '常规公交及常见带前后缀的编号线路（排除偏门线路）',
+    'all-city': '常规公交及常见带前后缀的编号线路（排除偏门线路）',
+    niche: '所有线路名含阿拉伯数字的公交，包括带数字的偏门线路',
+    unusual: '所有已收录公交，包括无数字名称的偏门线路',
+  }[rules.range];
   const locked = props.catalogLoading || !props.catalogAvailable
     || (competitive && (props.accountLoading || !props.accountEnabled))
     || (!competitive && local && !props.cities.includes(props.city))
@@ -95,7 +108,7 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
       <h2 className="text-base font-black">{competitive ? '竞赛标签' : gameNames[mode]}</h2>
       <span className={`contest-multiplier contest-multiplier-${tier}`}><strong>积分倍率 {rules.multiplier}×</strong></span>
     </div>
-    {local && <p className="text-xs text-slate-600">默认市区常规线路 · 显示底图和站点 · 7 次提示 · 每题 2 分钟 · 选择题</p>}
+    {local && <p className="text-xs text-slate-600">默认显示高德底图和站点 · 7 次提示 · 每题 2 分钟 · 选择题</p>}
     {!competitive && mode === 'county' && <label className="block max-w-xs text-xs font-bold">省份
       <select className={control} value={props.countyProvince} onChange={event => props.onCountyProvince(event.target.value)}>
         {props.countyProvinces.map(province => <option key={province} value={province}>{province}</option>)}
@@ -125,6 +138,9 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
             </button>;
           })}
         </div>
+        {group.label === '考题范围' && city && <p className="mt-2 text-xs leading-relaxed text-slate-600">
+          考题范围包含：{area}内已收录的{mode === 'station' ? '常规公交站点' : rangeDescription}。铁路与地铁除外。
+        </p>}
       </fieldset>)}
     </div>
     {props.error && <p role="alert" className="text-sm text-m3-error">{props.error}</p>}

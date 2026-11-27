@@ -26,30 +26,33 @@ export const contestPrompts = {
 type Tag = { id: string; label: string; factor: number };
 export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }[] {
   if (mode === 'city' || mode === 'county') {
-    return [{ label: '答题方式', tags: [{ id: 'fill', label: '填空题', factor: 3 }] }];
+    return [{ label: '答题方式', tags: [{ id: 'fill', label: '填空题', factor: 5 }] }];
   }
   return [
     { label: '考题范围', tags: [
-      ...(mode === 'line' ? [{ id: 'special', label: '扩大至市区非常规线路', factor: 1.5 }] : []),
+      ...(mode === 'line' ? [{ id: 'special', label: '扩大至市区非常规线路', factor: 2 }] : []),
       { id: 'all-city', label: mode === 'line' ? '扩大至郊区线路' : '扩大至全市', factor: 3 },
-      ...(mode === 'line' ? [{ id: 'unusual', label: '扩大至古怪小众线路', factor: 6 }] : []),
+      ...(mode === 'line' ? [
+        { id: 'niche', label: '扩大至小众线路', factor: 4 },
+        { id: 'unusual', label: '扩大至古怪线路', factor: 5 },
+      ] : []),
     ] },
-    { label: '底图', tags: [{ id: 'no-base', label: '无底图', factor: 5 }] },
+    { label: '底图', tags: [{ id: 'no-base', label: '仅线路图', factor: 3 }] },
     { label: '站点', tags: [{ id: 'no-stops', label: '无站点', factor: 2 }] },
     { label: '提示次数', tags: [
       { id: 'hints-5', label: '5 个提示', factor: 1.5 },
       { id: 'hints-3', label: '3 个提示', factor: 2 },
-      { id: 'hints-0', label: '无提示', factor: 5 },
+      { id: 'hints-0', label: '无提示', factor: 3 },
     ] },
     { label: '每题限时', tags: [
       { id: 'time-60', label: '1 分钟', factor: 1.5 },
       { id: 'time-30', label: '30 秒', factor: 3 },
-      { id: 'time-10', label: '10 秒', factor: 6 },
-      { id: 'time-5', label: '5 秒', factor: 10 },
+      { id: 'time-10', label: '10 秒', factor: 5 },
+      { id: 'time-5', label: '5 秒', factor: 6 },
     ] },
     { label: '答题方式', tags: [
-      { id: 'nearby', label: '混淆选项', factor: 4 },
-      { id: 'fill', label: '填空题', factor: 8 },
+      { id: 'nearby', label: '混淆选项', factor: 3 },
+      { id: 'fill', label: '填空题', factor: 5 },
     ] },
     ...(mode === 'station' ? [{ label: '线网显示', tags: [{ id: 'cycle', label: '每秒轮流显示线路', factor: 10 }] }] : []),
   ];
@@ -77,8 +80,12 @@ export function contestRules(mode: GameMode, input: unknown) {
     showBasemap: local && !has('no-base'),
     showStops: local && !has('no-stops'),
     fill: has('fill'), nearby: has('nearby'), cycle: has('cycle'),
-    range: has('unusual') ? 'unusual' : has('all-city') ? 'all-city' : has('special') ? 'special' : 'urban',
+    range: has('unusual') ? 'unusual' : has('niche') ? 'niche' : has('all-city') ? 'all-city' : has('special') ? 'special' : 'urban',
   };
 }
 
 export type ContestRules = ReturnType<typeof contestRules>;
+
+export function isCitywideContest(range: ContestRules['range']) {
+  return range === 'all-city' || range === 'niche' || range === 'unusual';
+}

@@ -123,7 +123,8 @@ test('actual game generation never invokes provider search services and accepts 
   assert.equal(question.correctAnswer, undefined);
   assert.ok(scope.currentGameQuestionRef.current?.correctAnswer);
   assert.equal(drawing?.county, mode === 'county');
-  assert.equal(drawing?.basemap ?? '', '');
+  if (mode === 'line') assert.ok(drawing?.basemap);
+  else assert.equal(drawing?.basemap ?? '', '');
   assert.equal(typeof scope.questionShownAtRef.current,'number');
   if (mode === 'line') {
    assert.equal(scope.gameTimeRemainingMsRef.current, 5000);

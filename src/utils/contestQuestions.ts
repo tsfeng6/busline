@@ -1,6 +1,6 @@
 import type { BusLine } from '../types';
 import type { CityDataset } from './cityDataset';
-import type { ContestRules } from './contestRules';
+import { isCitywideContest, type ContestRules } from './contestRules';
 import { distanceMeters, radiusRing, regularGameRoute, routeName, type CountySeat, type Point } from './localTransit';
 import { createOfflineQuestion, shuffle, type OfflineQuestion } from './offlineGame';
 
@@ -92,13 +92,16 @@ export function createLocalContestQuestion(
     }
     return included;
   };
-  const unrestricted = rules.range === 'unusual';
-  const citywide = rules.range === 'all-city' || unrestricted;
+  const citywide = isCitywideContest(rules.range);
   const entries = data.lines.filter(line => line.path?.length >= 2 && !isRailRoute(line.name))
     .map(line => ({ line, stops: routeStops(line) }));
-  const eligible = entries.filter(({ line }) => mode === 'station' || rules.range === 'urban' ? regular(line.name)
-    : unrestricted || regularGameRoute(line.name.normalize('NFKC')));
-  const context = rules.showBasemap ? entries.map(({ line }) => line.path) : undefined;
+  const eligible = entries.filter(({ line }) => {
+    if (mode === 'station' || rules.range === 'urban') return regular(line.name);
+    if (rules.range === 'unusual') return true;
+    if (rules.range === 'niche') return /[0-9０-９]/.test(routeName(line.name));
+    return regularGameRoute(line.name.normalize('NFKC'));
+  });
+  const context = entries.map(({ line }) => line.path);
   const shared = { targetCity: data.city, promptText: '', showBasemap: rules.showBasemap, showStops: rules.showStops,
     isFillIn: rules.fill, contextPaths: context };
   if (mode === 'line') {

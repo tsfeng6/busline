@@ -7,7 +7,7 @@ import type { PublishedCity } from '../../src/utils/localTransit';
 import { shuffle, type GameMode, type OfflineQuestion } from '../../src/utils/offlineGame';
 import { createCityContestQuestion, createLocalContestQuestion, createNetworkContestQuestion, contestDistrictPolygons } from '../../src/utils/contestQuestions';
 import { createSimulationQuestion, rankedQuestionRandom } from '../../src/utils/simulationQuestion';
-import type { ContestRules } from '../../src/utils/contestRules';
+import { isCitywideContest, type ContestRules } from '../../src/utils/contestRules';
 
 export async function createRankedQuestion(
   appOrigin: string, fetcher: typeof fetch, mode: GameMode,
@@ -80,7 +80,7 @@ export async function createRankedQuestion(
       }
       const data = await loadCity(candidate.city);
       if (mode === 'line' || mode === 'station') {
-        const polygons = rules.range === 'all-city' || rules.range === 'unusual'
+        const polygons = isCitywideContest(rules.range)
           ? [] : contestDistrictPolygons(scope);
         return createLocalContestQuestion(mode, data, rules, polygons, previous, random);
       }

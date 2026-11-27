@@ -2,7 +2,7 @@ import type { CityDataset } from './cityDataset';
 import {
   createCityContestQuestion, createLocalContestQuestion, createNetworkContestQuestion, estimateUrbanDistrict, hasContestDistricts, contestDistrictPolygons,
 } from './contestQuestions';
-import type { ContestRules } from './contestRules';
+import { isCitywideContest, type ContestRules } from './contestRules';
 import type { PublishedCity } from './localTransit';
 import { shuffle, type GameMode, type OfflineQuestion } from './offlineGame';
 
@@ -62,10 +62,10 @@ export async function createSimulationQuestion(
   if (!catalog.some(item => item.city === city)) throw Error('请选择网站已有线路图的城市。');
   const data = await loadCity(city);
   signal.throwIfAborted();
-  const citywide = rules.range === 'all-city' || rules.range === 'unusual';
+  const citywide = isCitywideContest(rules.range);
   const polygons = citywide ? [] : hasContestDistricts(city)
     ? contestDistrictPolygons(city)
     : estimateUrbanDistrict(data);
   signal.throwIfAborted();
-  return { ...createLocalContestQuestion(mode, data, rules, polygons, previous, random), sourceRevision: data.capturedAt + ':bus-only-v2' };
+  return { ...createLocalContestQuestion(mode, data, rules, polygons, previous, random), sourceRevision: data.capturedAt + ':bus-scope-v3' };
 }

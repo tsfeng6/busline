@@ -64,6 +64,7 @@ import { RankedGameDrawing } from './components/RankedGameDrawing';
 import { contests, contestTagGroups, contestRules, contestPrompts, type ContestRules } from './utils/contestRules';
 import { createSimulationQuestion } from './utils/simulationQuestion';
 import { drawContestQuestion } from './utils/contestDrawing';
+import { mountContestMap } from './utils/contestMap';
 import { createNetworkContestQuestion } from './utils/contestQuestions';
 
 const isFirebaseEnabled = () => true;
@@ -452,6 +453,8 @@ export default function App() {
   const gameRulesRef = useRef<ContestRules | null>(null);
   const questionAbortRef = useRef<AbortController | null>(null);
   const [localGameDrawing, setLocalGameDrawing] = useState<RankedPuzzle['drawing'] | null>(null);
+  const [amapGameDrawing, setAmapGameDrawing] = useState<RankedPuzzle['drawing'] | null>(null);
+  const gameAnswerPanelRef = useRef<HTMLDivElement>(null);
   const [gameHint, setGameHint] = useState<{ text: string; complete: boolean } | null>(null);
   const [adminQuizAnswer, setAdminQuizAnswer] = useState('');
   const handleGameHint = () => {
@@ -713,7 +716,7 @@ export default function App() {
     setReviewIndex(0);
     setReviewAutoPlay(false);
     setReviewHoveredStop(null);
-    setMapMode('blank');
+    setMapMode(rules.showBasemap ? 'normal' : 'blank');
     void generateQuestion(mode, city, 1, undefined, activeProv);
   };
 
@@ -1388,6 +1391,21 @@ export default function App() {
       }
     }
   }, [showMinigameModal, gameState, reviewIndex, reviewShowBasemap, reviewShowStops, gameHistory, mapInstance, lineThickness]);
+
+  useEffect(() => {
+    const rules = gameRulesRef.current;
+    const question = currentGameQuestionRef.current;
+    const AMap = (window as any).AMap;
+    if (gameState !== 'playing' || gameLoading || !rules?.showBasemap || !question || !AMap
+      || !mapInstance || !localGameDrawing || (gameMode !== 'line' && gameMode !== 'station')) return;
+    const cleanup = mountContestMap(mapInstance, AMap, question, gameMode, rules.showStops, rules.cycle, gameAnswerPanelRef.current);
+    if (!cleanup) return;
+    setAmapGameDrawing(localGameDrawing);
+    return () => {
+      cleanup();
+      setAmapGameDrawing(null);
+    };
+  }, [gameState, gameLoading, gameMode, localGameDrawing, mapInstance]);
 
   // --- USER DEFINED DRAWING AND ADMIN STATES ---
   // Switch to show user submitted data (defaults to false / disabled)
@@ -4830,13 +4848,13 @@ export default function App() {
           try { roadNetLayer.setMap(null); } catch (e) {}
         }
         if (layers[0]) layers[0].setOpacity(1);
-        mapInstance.setFeatures(['bg', 'point', 'road', 'building']);
+        mapInstance.setFeatures(gamePage && gameState === 'playing' ? ['bg', 'road', 'building'] : ['bg', 'point', 'road', 'building']);
         mapInstance.setMapStyle('amap://styles/light');
       }
     } catch (e) {
       // Ignore errors if map is being destroyed
     }
-  }, [showBaseMap, useSatelliteMap, mapInstance]);
+  }, [showBaseMap, useSatelliteMap, mapInstance, gamePage, gameState]);
 
   const handleSearch = async (forceRefresh = false, sharedOverride?: CityDataset) => {
     // Shared loads are lower priority than a local result or its submission dialog.
@@ -8812,8 +8830,8 @@ export default function App() {
   const gameDrawing = localGameDrawing;
   const gameHintLimit = gameRulesRef.current?.hintLimit ?? 7;
   return <div className="relative h-dvh w-full overflow-hidden bg-m3-surface-container-low">
-    <div ref={containerRef} aria-hidden={gameState === 'menu' || (isAnswering && !!gameDrawing)} className="relative isolate h-full w-full bg-white" id="amap-container" />
-    {isAnswering && gameDrawing && <RankedGameDrawing key={gameQuestionNum} drawing={gameDrawing} />}
+    <div ref={containerRef} aria-hidden={gameState === 'menu' || (isAnswering && amapGameDrawing !== gameDrawing)} className="relative isolate h-full w-full bg-white" id="amap-container" />
+    {isAnswering && gameDrawing && amapGameDrawing !== gameDrawing && <RankedGameDrawing key={gameQuestionNum} drawing={gameDrawing} />}
     {gameState === 'menu' && <GameLobby
       division={gameDivision} onDivision={next => { setGameDivision(next); setGameDataError(''); }}
       regionId={contestRegion} onRegion={setContestRegion}
@@ -8867,7 +8885,7 @@ export default function App() {
               }
             >
               {gameState === 'playing' && gameQuestionData && (
-                <div className="px-4 py-3 flex flex-col gap-2 relative bg-m3-surface">
+                <div ref={gameAnswerPanelRef} className="px-4 py-3 flex flex-col gap-2 relative bg-m3-surface">
                   <div className="flex items-center justify-between gap-2 border-b border-m3-outline-variant/20 pb-2 flex-wrap">
                     <div className="flex items-center gap-2 min-w-0 flex-1">
                       <span className="px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container text-[11px] font-black shrink-0">

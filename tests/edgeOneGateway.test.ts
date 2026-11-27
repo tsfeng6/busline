@@ -201,7 +201,7 @@ test('ranked gateway exposes only the drawing until the server grades the answer
    const { p_user, p_action, p_input } = JSON.parse(String(init?.body));
    assert.equal(p_user, id);
    if (p_action === 'start') {
-     assert.equal(p_input.rules.multiplier, 3);
+     assert.equal(p_input.rules.multiplier, 5);
      assert.deepEqual(p_input.rules.tags, ['fill']);
      state.rules = p_input.rules;
      return Response.json({id:run, game:p_input.game, scope:p_input.scope, difficulty:p_input.difficulty});
@@ -215,7 +215,7 @@ test('ranked gateway exposes only the drawing until the server grades the answer
      assert.equal(p_input.correct, true);
      assert.equal(p_input.score, undefined);
      assert.equal(p_input.id, questionId);
-     return Response.json({ question:state.question, number:1, answer:p_input.answer, correct:true, timedOut:false, score:3, finished:false });
+     return Response.json({ question:state.question, number:1, answer:p_input.answer, correct:true, timedOut:false, score:5, finished:false });
    }
    throw Error('unexpected action');
  };
@@ -248,7 +248,7 @@ test('ranked gateway exposes only the drawing until the server grades the answer
  assert.equal(state.number, 1);
  assert.equal(state.id, questionId);
  const settled = await post('/ranked-game-runs/' + run + '/answer', {id:questionId, answer:'北京市', score:999});
- assert.equal((await settled.json()).score, 3);
+ assert.equal((await settled.json()).score, 5);
  Object.assign(state, { number: 10, question: null, previousAnswer: '北京市' });
  const latePack = await post(prefix + '/pack', {number:11});
  assert.equal(latePack.status, 200);
@@ -357,10 +357,15 @@ test('local contest results save the best score for the authenticated player', a
 test('contest labels are exclusive and only valid for their mode', async () => {
   const { contestRules } = await import('../src/utils/contestRules');
   assert.equal(contestRules('line', []).multiplier, .25);
-  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 30000);
+  assert.equal(contestRules('line', ['special']).multiplier, .5);
+  assert.equal(contestRules('line', ['niche']).multiplier, 1);
+  assert.equal(contestRules('line', ['unusual']).multiplier, 1.25);
+  assert.equal(contestRules('line', []).showBasemap, true);
+  assert.equal(contestRules('line', ['no-base']).showBasemap, false);
+  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 4050);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).hintLimit, 3);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).timeLimit, 10);
-  assert.equal(contestRules('county', ['fill']).multiplier, 3);
+  assert.equal(contestRules('county', ['fill']).multiplier, 5);
   assert.throws(() => contestRules('line', ['time-5', 'time-10']), /每组/);
   assert.throws(() => contestRules('line', ['cycle']), /无效/);
   assert.throws(() => contestRules('city', ['no-base']), /无效/);
@@ -397,12 +402,13 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   const outskirts = [[116.8,39.8],[116.9,39.8]] as [number, number][];
   const rail = ['地铁1号线', '市郊铁路S2线', '机场联络线', '磁悬浮', 'G123'].map(name => line(name, core));
   const mixed = { ...data, lines: [
-    ...rail, line('假日5路', core), line('快速直达专线187路', core), line('X107路', outskirts), line('兴33路', core),
+    ...rail, line('观光环线', core), line('假日5路', core), line('快速直达专线187路', core), line('X107路', outskirts), line('兴33路', core),
   ] };
   const guess = (tag: string) => createLocalContestQuestion('line', mixed, contestRules('line', [tag,'fill']), districts, '', random);
   assert.equal(guess('special').correctAnswer, '兴33路');
   assert.equal(guess('all-city').correctAnswer, 'X107路');
-  assert.equal(guess('unusual').correctAnswer, '假日5路');
+  assert.equal(guess('niche').correctAnswer, '假日5路');
+  assert.equal(guess('unusual').correctAnswer, '观光环线');
   assert.equal(guess('unusual').contextPaths?.length, mixed.lines.length - rail.length);
 
 
@@ -413,5 +419,6 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   assert.ok(drawing.target);
   assert.deepEqual(drawing.terminals, []);
   assert.ok(drawing.frames?.every(frame => !!frame.path && frame.stops.length === 0));
-  assert.equal(drawing.basemap, '');
+  assert.equal(station.showBasemap, false);
+  assert.ok(drawing.basemap);
 });
