@@ -66,5 +66,5 @@ export async function createSimulationQuestion(
     ? contestDistrictPolygons(city)
     : estimateUrbanDistrict(data);
   signal.throwIfAborted();
-  return { ...createLocalContestQuestion(mode, data, rules, polygons, previous, random), sourceRevision: data.capturedAt + ':bus-scope-v8' };
+  return { ...createLocalContestQuestion(mode, data, rules, polygons, previous, random), sourceRevision: data.capturedAt + ':bus-scope-v9' };
 }

@@ -43,11 +43,11 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
       { id: 'niche', label: '加入至小众线路', factor: 3 },
       { id: 'unusual', label: '加入至古怪线路', factor: 4 },
       { id: 'unlimited', label: '无限制', factor: 5 },
-    ] : mode === 'accessibility' ? [
+    ] : [
       { id: 'medium-stops', label: '加入中型站', factor: 2 },
       { id: 'all-stops', label: '加入小站', factor: 3 },
-    ] : [suburbs] },
-    ...(mode === 'station' ? [] : [{ label: '地区', tags: [suburbs] }]),
+    ] },
+    { label: '地区', tags: [suburbs] },
     ...(mode === 'accessibility' ? [] : [{ label: '底图', tags: [
       { id: 'network-only', label: '仅线路图', factor: 2 },
       ...(mode === 'line' ? [{ id: 'no-base', label: '无底图', factor: 4 }] : []),
@@ -100,7 +100,7 @@ export function contestRules(mode: GameMode, input: unknown) {
     showStops: local && mode !== 'station' && !has('no-stops'),
     fill: has('fill'), nearby: has('nearby'),
     includeSuburbs: has('all-city'),
-    minStationRoutes: mode === 'accessibility' ? has('all-stops') ? 1 : has('medium-stops') ? 5 : 10 : 1,
+    minStationRoutes: mode === 'station' || mode === 'accessibility' ? has('all-stops') ? 1 : has('medium-stops') ? 5 : 10 : 1,
     range: has('unlimited') ? 'unlimited' : has('unusual') ? 'unusual' : has('niche') ? 'niche' : has('special') ? 'special' : 'urban',
   };
 }

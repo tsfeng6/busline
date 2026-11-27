@@ -382,9 +382,15 @@ test('contest labels are exclusive and only valid for their mode', async () => {
   assert.throws(() => contestRules('station', ['no-stops']), /无效/);
   assert.throws(() => contestRules('accessibility', ['network-only']), /无效/);
   assert.equal(contestRules('accessibility', []).timeLimit, 600);
-  assert.equal(contestRules('accessibility', []).minStationRoutes, 10);
-  assert.equal(contestRules('accessibility', ['medium-stops']).minStationRoutes, 5);
-  assert.equal(contestRules('accessibility', ['all-stops']).minStationRoutes, 1);
+  for (const mode of ['station', 'accessibility'] as const) {
+    assert.equal(contestRules(mode, []).minStationRoutes, 10);
+    assert.equal(contestRules(mode, ['medium-stops', 'all-city']).minStationRoutes, 5);
+    assert.equal(contestRules(mode, ['medium-stops', 'all-city']).multiplier, 2.5);
+    assert.equal(contestRules(mode, ['medium-stops', 'all-city']).includeSuburbs, true);
+    assert.equal(contestRules(mode, ['all-stops']).minStationRoutes, 1);
+    assert.equal(contestRules(mode, ['all-stops']).multiplier, 1.5);
+    assert.throws(() => contestRules(mode, ['medium-stops', 'all-stops']), /每组/);
+  }
   assert.equal(contestRules('station', ['hints-3', 'time-10']).hintLimit, 3);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).timeLimit, 10);
   assert.equal(contestRules('county', ['fill']).multiplier, 5);
@@ -412,7 +418,8 @@ test('station modes share the 700-meter distractor rule and use separate contest
   const districts: [number, number][][][] = [[[[116,39.7],[116.5,39.7],[116.5,39.9],[116,39.9],[116,39.7]]]];
   const data = { ...sample(), lines };
   const random = () => .999;
-  const station = createLocalContestQuestion('station', data, contestRules('station', ['nearby']), districts, '', random);
+  assert.throws(() => createLocalContestQuestion('station', data, contestRules('station', []), districts, '', random), /暂无足够/);
+  const station = createLocalContestQuestion('station', data, contestRules('station', ['medium-stops', 'nearby']), districts, '', random);
   assert.equal(station.correctAnswer, '中心站');
   assert.deepEqual(station.options, ['中心站', '候选甲', '候选乙', '候选丙']);
   assert.equal(station.lineInfos, undefined);
@@ -519,7 +526,7 @@ test('contest question scope, nearby choices and diagram layers follow server ru
     assert.deepEqual(result.options, ['环一线外环', '1路']);
     assert.equal(result.contextPaths?.length, loopData.lines.length);
   }
-  const loopStation = createLocalContestQuestion('station', loopData, contestRules('station', ['fill']), districts, '', random);
+  const loopStation = createLocalContestQuestion('station', loopData, contestRules('station', ['all-stops', 'fill']), districts, '', random);
   assert.equal(loopStation.lineInfos, undefined);
 
   const { isGameAnswerCorrect } = await import('../src/utils/gameAnswers');
@@ -533,7 +540,7 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   assert.equal(isGameAnswerCorrect('密25(河西)', open.correctAnswer, true, 'line', true), true);
   assert.equal(isGameAnswerCorrect('密25', open.correctAnswer, true, 'line', true), false);
 
-  const station = createLocalContestQuestion('station', data, contestRules('station', []), districts, '', random);
+  const station = createLocalContestQuestion('station', data, contestRules('station', ['all-stops']), districts, '', random);
   const drawing = drawContestQuestion(station, 'station');
   assert.equal(station.correctAnswer, '中心站');
   assert.equal(drawing.frames, undefined);
@@ -543,7 +550,7 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   assert.deepEqual(drawing.stops, []);
   assert.equal(station.showBasemap, true);
   assert.ok(drawing.basemap);
-  const networkOnly = createLocalContestQuestion('station', data, contestRules('station', ['network-only']), districts, '', random);
+  const networkOnly = createLocalContestQuestion('station', data, contestRules('station', ['network-only', 'all-stops']), districts, '', random);
   assert.equal(networkOnly.showBasemap, false);
   assert.ok(drawContestQuestion(networkOnly, 'station').basemap);
 

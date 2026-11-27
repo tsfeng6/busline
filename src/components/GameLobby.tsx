@@ -145,7 +145,7 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
         </div>
         {group.label === '考题范围' && city && <p className="mt-2 text-xs leading-relaxed text-slate-600">
           考题范围包含：{area}内已收录的{mode === 'line' ? rangeDescription : '公交站点'}
-          {mode === 'accessibility' && rules.minStationRoutes > 1 && `（至少 ${rules.minStationRoutes} 条公交线路）`}
+          {(mode === 'station' || mode === 'accessibility') && rules.minStationRoutes > 1 && `（至少 ${rules.minStationRoutes} 条公交线路）`}
           {mode === 'line' && rules.includeSuburbs && rules.range === 'urban' && '（郊区另含常见带前缀的编号线路）'}。
           {mode === 'line' && rules.range === 'urban' && `线路长度至少为 ${DEFAULT_LINE_MIN_KM} 公里。`}
         </p>}
