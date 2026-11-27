@@ -782,7 +782,7 @@ export default function App() {
         mode === 'city' ? item => loadGameCityImage(item, controller.signal) : undefined);
       if (gameSessionIdRef.current !== sessionId) return;
       const { contextPaths, networkImage, sourceRevision, options, isFillIn, ...review } = question;
-      const drawing = drawContestQuestion(question, mode, rules.cycle);
+      const drawing = drawContestQuestion(question, mode);
       if (contestExpired()) {
         finishGameOnTimeout(true);
         return;
@@ -1456,7 +1456,7 @@ export default function App() {
     const AMap = (window as any).AMap;
     if (gameState !== 'playing' || gameLoading || !rules?.showBasemap || !question || !AMap
       || !mapInstance || !localGameDrawing || (gameMode !== 'line' && gameMode !== 'station')) return;
-    const cleanup = mountContestMap(mapInstance, AMap, question, gameMode, rules.showStops, rules.cycle, gameAnswerPanelRef.current);
+    const cleanup = mountContestMap(mapInstance, AMap, question, gameMode, rules.showStops, gameAnswerPanelRef.current);
     if (!cleanup) return;
     setAmapGameDrawing(localGameDrawing);
     return () => {

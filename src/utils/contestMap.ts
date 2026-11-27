@@ -1,13 +1,12 @@
-import { routeName, type Point } from './localTransit';
+import type { Point } from './localTransit';
 import type { OfflineQuestion } from './offlineGame';
 
 type MapQuestion = Pick<OfflineQuestion, 'lineInfos' | 'targetPoint'> & { networkStops?: { lngLat: Point }[] };
 
 export function mountContestMap(
   map: any, AMap: any, question: MapQuestion, mode: 'line' | 'station',
-  showStops: boolean, cycle: boolean, panel: HTMLElement | null,
+  showStops: boolean, panel: HTMLElement | null,
 ) {
-  const frames = new Map<string, any[]>();
   const routes: any[] = [];
   const overlayList: any[] = [];
   const marker = (center: Point, fillColor: string, radius: number) => new AMap.CircleMarker({
@@ -31,23 +30,10 @@ export function mountContestMap(
     if (mode === 'line') {
       overlayList.push(marker(path[0], '#16a34a', 6), marker(path.at(-1)!, '#ef4444', 5));
     }
-    if (cycle) {
-      const name = routeName(line.name);
-      const frame = frames.get(name) ?? [];
-      frame.push(route);
-      if (showStops) for (const { location } of line.via_stops ?? []) {
-        if (Number.isFinite(location?.lng) && Number.isFinite(location?.lat)) {
-          const stop = marker([location.lng, location.lat], '#346DB3', 4);
-          frame.push(stop);
-          overlayList.push(stop);
-        }
-      }
-      frames.set(name, frame);
-    }
   }
 
   if (!routes.length) return;
-  if (showStops && !cycle) for (const stop of question.networkStops ?? []) {
+  if (showStops) for (const stop of question.networkStops ?? []) {
     overlayList.push(marker(stop.lngLat, '#346DB3', 4));
   }
   if (question.targetPoint) {
@@ -56,37 +42,21 @@ export function mountContestMap(
     overlayList.push(target);
   }
 
-  const routeFrames = [...frames.values()];
-  let active = 0;
   let fitObserver: ResizeObserver | undefined;
-  let timer: number | undefined;
   const cleanup = () => {
     fitObserver?.disconnect();
-    if (timer !== undefined) window.clearInterval(timer);
     map.remove(overlayList);
   };
   try {
     map.add(overlayList);
     const fit = () => {
       const bottom = Math.min(map.getSize().height * .65, (panel?.offsetHeight ?? 160) + 24);
-      // Fit all directions even when the station's visible directions rotate.
-      routeFrames.forEach(frame => frame.forEach(overlay => overlay.show()));
       map.setFitView(routes, false, [32, 32, bottom, 32]);
-      routeFrames.forEach((frame, index) => {
-        if (index !== active) frame.forEach(overlay => overlay.hide());
-      });
     };
     fit();
     if (panel && typeof ResizeObserver !== 'undefined') {
       fitObserver = new ResizeObserver(fit);
       fitObserver.observe(panel);
-    }
-    if (routeFrames.length > 1) {
-      timer = window.setInterval(() => {
-        routeFrames[active].forEach(overlay => overlay.hide());
-        active = (active + 1) % routeFrames.length;
-        routeFrames[active].forEach(overlay => overlay.show());
-      }, 1000);
     }
     return cleanup;
   } catch {

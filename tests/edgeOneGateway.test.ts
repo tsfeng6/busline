@@ -366,14 +366,14 @@ test('contest labels are exclusive and only valid for their mode', async () => {
   assert.equal(contestRules('line', ['network-only']).showBasemap, false);
   assert.equal(contestRules('line', ['network-only']).multiplier, 1.5);
   assert.equal(contestRules('line', ['no-base']).showBasemap, false);
-  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill', 'cycle']).multiplier, 13500);
+  assert.equal(contestRules('station', ['all-city', 'no-base', 'no-stops', 'hints-0', 'time-5', 'fill']).multiplier, 1350);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).hintLimit, 3);
   assert.equal(contestRules('station', ['hints-3', 'time-10']).timeLimit, 10);
   assert.equal(contestRules('county', ['fill']).multiplier, 5);
   assert.throws(() => contestRules('line', ['time-5', 'time-10']), /每组/);
   assert.throws(() => contestRules('line', ['network-only', 'no-base']), /每组/);
   assert.throws(() => contestRules('line', ['unusual', 'unlimited']), /每组/);
-  assert.throws(() => contestRules('line', ['cycle']), /无效/);
+  assert.throws(() => contestRules('station', ['cycle']), /无效/);
   assert.throws(() => contestRules('city', ['no-base']), /无效/);
 });
 
@@ -446,13 +446,14 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   assert.equal(isGameAnswerCorrect('密25(河西)', open.correctAnswer, true, 'line', true), true);
   assert.equal(isGameAnswerCorrect('密25', open.correctAnswer, true, 'line', true), false);
 
-  const station = createLocalContestQuestion('station', data, contestRules('station', ['cycle','no-stops','no-base']), districts, '', random);
-  const drawing = drawContestQuestion(station, 'station', true);
+  const station = createLocalContestQuestion('station', data, contestRules('station', ['no-stops','no-base']), districts, '', random);
+  const drawing = drawContestQuestion(station, 'station');
   assert.equal(station.correctAnswer, '中心站');
-  assert.equal(drawing.frames?.length, 3);
+  assert.equal(drawing.frames, undefined);
   assert.ok(drawing.target);
   assert.deepEqual(drawing.terminals, []);
-  assert.ok(drawing.frames?.every(frame => !!frame.path && frame.stops.length === 0));
+  assert.ok(drawing.path);
+  assert.deepEqual(drawing.stops, []);
   assert.equal(station.showBasemap, false);
   assert.equal(drawing.basemap, '');
   const networkOnly = createLocalContestQuestion('station', data, contestRules('station', ['network-only']), districts, '', random);

@@ -58,7 +58,6 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
       { id: 'nearby', label: '混淆选项', factor: 3 },
       { id: 'fill', label: '填空题', factor: 5 },
     ] },
-    ...(mode === 'station' ? [{ label: '线网显示', tags: [{ id: 'cycle', label: '每秒轮流显示线路', factor: 10 }] }] : []),
   ];
 }
 
@@ -84,7 +83,7 @@ export function contestRules(mode: GameMode, input: unknown) {
     showBasemap: local && !has('network-only') && !has('no-base'),
     showNetworkContext: local && !has('no-base'),
     showStops: local && !has('no-stops'),
-    fill: has('fill'), nearby: has('nearby'), cycle: has('cycle'),
+    fill: has('fill'), nearby: has('nearby'),
     range: has('unlimited') ? 'unlimited' : has('unusual') ? 'unusual' : has('niche') ? 'niche' : has('all-city') ? 'all-city' : has('special') ? 'special' : 'urban',
   };
 }
