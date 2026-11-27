@@ -38,13 +38,13 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
   return [
     { label: '考题范围', tags: mode === 'line' ? [
       { id: 'special', label: '扩大至微型线路', factor: 2 },
-      { id: 'niche', label: '扩大至小众线路', factor: 4 },
-      { id: 'unusual', label: '扩大至古怪线路', factor: 5 },
-      { id: 'unlimited', label: '扩大至无限制', factor: 5.5 },
+      { id: 'niche', label: '扩大至小众线路', factor: 3 },
+      { id: 'unusual', label: '扩大至古怪线路', factor: 4 },
+      { id: 'unlimited', label: '扩大至无限制', factor: 5 },
     ] : mode === 'accessibility' ? [
       { id: 'medium-stops', label: '扩大至中型站', factor: 2 },
       { id: 'all-stops', label: '扩大至小站', factor: 3 },
-    ] : [{ id: 'all-city', label: '扩大至全市', factor: 3 }] },
+    ] : [{ id: 'all-city', label: '加入郊区', factor: 3 }] },
     ...(mode === 'station' ? [] : [{ label: '地区', tags: [{ id: 'all-city', label: '加入郊区', factor: 3 }] }]),
     ...(mode === 'accessibility' ? [] : [{ label: '底图', tags: [
       { id: 'network-only', label: '仅线路图', factor: 3 },
