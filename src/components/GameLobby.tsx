@@ -139,7 +139,7 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
           })}
         </div>
         {group.label === '考题范围' && city && <p className="mt-2 text-xs leading-relaxed text-slate-600">
-          考题范围包含：{area}内已收录的{mode === 'station' ? '常规公交站点' : rangeDescription}。铁路与地铁除外。
+          考题范围包含：{area}内已收录的{mode === 'station' ? '常规公交站点' : rangeDescription}。
         </p>}
       </fieldset>)}
     </div>
