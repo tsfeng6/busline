@@ -2,6 +2,32 @@ import { routeName, type Point } from './localTransit';
 import type { GameMode, OfflineQuestion } from './offlineGame';
 import type { RankedPuzzle } from './rankedGame';
 
+function clipToQuestionFrame(a: Point, b: Point): [Point, Point] | undefined {
+  const [x, y] = a;
+  const dx = b[0] - x, dy = b[1] - y;
+  if (!dx && !dy) return;
+  const inside = (value: number) => value >= 0 && value <= 1000;
+  if (inside(x) && inside(y) && inside(b[0]) && inside(b[1])) return [a, b];
+  if (Math.max(x, b[0]) < 0 || Math.min(x, b[0]) > 1000 ||
+      Math.max(y, b[1]) < 0 || Math.min(y, b[1]) > 1000) return;
+  let start = 0, end = 1;
+  if (dx) {
+    const left = -x / dx, right = (1000 - x) / dx;
+    start = Math.max(start, Math.min(left, right));
+    end = Math.min(end, Math.max(left, right));
+  }
+  if (dy) {
+    const top = -y / dy, bottom = (1000 - y) / dy;
+    start = Math.max(start, Math.min(top, bottom));
+    end = Math.min(end, Math.max(top, bottom));
+  }
+  if (start >= end) return;
+  return [
+    [Math.round(x + dx * start), Math.round(y + dy * start)],
+    [Math.round(x + dx * end), Math.round(y + dy * end)],
+  ];
+}
+
 export function drawContestQuestion(question: OfflineQuestion, mode: GameMode, cycle = false): RankedPuzzle['drawing'] {
   if (question.networkImage) return {
     path: '', raster: question.networkImage, stops: [], terminals: [], county: false,
@@ -61,16 +87,13 @@ export function drawContestQuestion(question: OfflineQuestion, mode: GameMode, c
     let previous: [number, number] | undefined;
     for (const point of points) {
       const pixel = project(point);
-      if (previous && pixel.some((value, i) => value !== previous![i])
-        && pixel.every(value => value >= 0 && value <= 1000)
-        && previous.every(value => value >= 0 && value <= 1000)) {
-        const [a, b] = [previous.join(' '), pixel.join(' ')].sort();
-        roads.add('M' + a + 'L' + b);
-        if (roads.size >= 12000) break;
+      const visible = previous && clipToQuestionFrame(previous, pixel);
+      if (visible) {
+        const [a, b] = visible.map(point => point.join(' ')).sort();
+        if (a !== b) roads.add('M' + a + 'L' + b);
       }
       previous = pixel;
     }
-    if (roads.size >= 12000) break;
   }
   const arrows: [number, number, number][] = [];
   if (mode === 'line') for (const points of paths) {

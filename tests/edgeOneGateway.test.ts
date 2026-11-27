@@ -415,9 +415,12 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   assert.equal(guess('all-city').correctAnswer, 'X107路');
   assert.equal(guess('niche').correctAnswer, '假日5路');
   assert.equal(guess('unusual').correctAnswer, '观光环线');
-  assert.equal(guess('unusual').contextPaths?.length, mixed.lines.length - rail.length);
+  assert.equal(guess('unusual').contextPaths?.length, mixed.lines.length);
 
-  const variants = ['631快', '密25（河西）', '840区间', '840路区间车(甲--乙)', '41A', '31路支线'];
+  const variants = [
+    '631快', '密25（河西）(密云鼓楼南站--河西三站)', '840区间', '840路区间车(甲--乙)', '41A', '31路支线',
+    '574路(工作日高峰期间)(南营东站--地铁张郭庄站)', '574路(工作日6:00--9:00)(南营东站--地铁张郭庄站)',
+  ];
   const loopData = { ...data, lines: [
     ...variants.map(name => line(name, core)),
     line('环一线外环', core),
@@ -427,12 +430,15 @@ test('contest question scope, nearby choices and diagram layers follow server ru
     const result = createLocalContestQuestion('line', loopData, contestRules('line', range), districts, '', random);
     assert.equal(result.correctAnswer, '环一线外环');
     assert.deepEqual(result.options, ['环一线外环', '1路']);
-    assert.equal(result.contextPaths?.length, 2);
+    assert.equal(result.contextPaths?.length, loopData.lines.length);
   }
   const loopStation = createLocalContestQuestion('station', loopData, contestRules('station', ['fill']), districts, '', random);
   assert.deepEqual(loopStation.lineInfos?.map(item => item.name), ['环一线外环', '1路(甲(东门)--乙)']);
 
   const { isGameAnswerCorrect } = await import('../src/utils/gameAnswers');
+  const { contestRouteEndpoints } = await import('../src/utils/contestRouteName');
+  assert.deepEqual(contestRouteEndpoints(variants[6]), { start: '南营东站', end: '地铁张郭庄站' });
+  assert.deepEqual(contestRouteEndpoints(variants[1]), { start: '密云鼓楼南站', end: '河西三站' });
   const openPool = { ...data, lines: [line('密25（河西）(甲(东门)--乙)', outskirts), rail[0], line('840区间', core)] };
   const open = createLocalContestQuestion('line', openPool, contestRules('line', ['unlimited']), [], '', random);
   assert.equal(open.correctAnswer, '密25（河西）');
@@ -452,4 +458,17 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   const networkOnly = createLocalContestQuestion('station', data, contestRules('station', ['network-only']), districts, '', random);
   assert.equal(networkOnly.showBasemap, false);
   assert.ok(drawContestQuestion(networkOnly, 'station').basemap);
+
+  const { basemap } = drawContestQuestion({
+    ...question, networkPaths: [[[0, 0], [1, 0]]],
+    contextPaths: [
+      ...Array.from({length: 12001}, (_, i) => {
+        const x = (i % 200) / 930, y = Math.floor(i / 200) / 930;
+        return [[x, y], [x + 1 / 930, y]] as [number, number][];
+      }),
+      [[-1, 0.2], [2, 0.2]],
+    ],
+  }, 'line');
+  assert.ok(basemap?.includes('M0 314L1000 314'));
+  assert.equal((basemap?.match(/M/g) ?? []).length, 12002);
 });

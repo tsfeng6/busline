@@ -110,8 +110,9 @@ export function createLocalContestQuestion(
   const citywide = isCitywideContest(rules.range);
   const unlimited = rules.range === 'unlimited';
   const answerName = unlimited ? fullContestRouteName : routeName;
-  const entries = data.lines.filter(line =>
-    line.path?.length >= 2 && (unlimited || (!isRailRoute(line.name) && !hasRouteVariant(line.name))))
+  const drawableLines = data.lines.filter(line => line.path?.length >= 2);
+  const entries = (unlimited ? drawableLines : drawableLines.filter(line =>
+    !isRailRoute(line.name) && !hasRouteVariant(line.name)))
     .map(line => ({ line, stops: routeStops(line) }));
   const eligible = unlimited ? entries : entries.filter(({ line }) => {
     const normalized = line.name.normalize('NFKC');
@@ -122,7 +123,7 @@ export function createLocalContestQuestion(
     if (rules.range === 'niche') return /[0-9０-９]/.test(routeName(line.name));
     return regularGameRoute(line.name.normalize('NFKC'));
   });
-  const context = (rules.showNetworkContext ?? rules.showBasemap) ? entries.map(({ line }) => line.path) : undefined;
+  const context = (rules.showNetworkContext ?? rules.showBasemap) ? drawableLines.map(line => line.path) : undefined;
   const shared = { targetCity: data.city, promptText: '', showBasemap: rules.showBasemap, showStops: rules.showStops,
     isFillIn: rules.fill, contextPaths: context };
   if (mode === 'line') {

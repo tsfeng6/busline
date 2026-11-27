@@ -64,6 +64,7 @@ import { RankedGameDrawing } from './components/RankedGameDrawing';
 import { contests, contestTagGroups, contestRules, contestPrompts, type ContestRules } from './utils/contestRules';
 import { createSimulationQuestion } from './utils/simulationQuestion';
 import { drawContestQuestion } from './utils/contestDrawing';
+import { contestRouteEndpoints } from './utils/contestRouteName';
 import { mountContestMap } from './utils/contestMap';
 import { createNetworkContestQuestion } from './utils/contestQuestions';
 
@@ -9160,8 +9161,12 @@ export default function App() {
 
               {gameState === 'review' && gameHistory[reviewIndex] && (() => {
                 const item = gameHistory[reviewIndex];
-                const lineMeta = item.mode === 'line' && item.lineInfos?.[0]?.name
-                  ? parseLineInfo(item.lineInfos[0].name)
+                const reviewedLine = item.mode === 'line' ? item.lineInfos?.[0] : undefined;
+                const lineMeta = reviewedLine
+                  ? (contestRouteEndpoints(reviewedLine.name) ?? {
+                    start: reviewedLine.start_stop || reviewedLine.via_stops?.[0]?.name,
+                    end: reviewedLine.end_stop || reviewedLine.via_stops?.at(-1)?.name,
+                  })
                   : null;
                 const modeLabel = item.mode === 'line'
                   ? '看图猜线路'
@@ -9230,7 +9235,7 @@ export default function App() {
                         <span className="font-bold text-slate-700">
                           正确答案：<strong className="text-m3-primary">{item.correctAnswer}</strong>
                         </span>
-                        {lineMeta && lineMeta.start && lineMeta.start !== '-' && (
+                        {lineMeta?.start && lineMeta.end && lineMeta.start !== '-' && lineMeta.end !== '-' && (
                           <span className="text-[11px] font-medium text-slate-500">
                             （<span className="text-emerald-600 font-bold">●</span> {lineMeta.start} → <span className="text-red-500 font-bold">●</span> {lineMeta.end}）
                           </span>

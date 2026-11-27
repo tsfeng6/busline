@@ -1,4 +1,12 @@
-const endpointSeparator = /^.+?(?:--+|—+|→|↔).+$/s;
+const endpointSeparator = /^(.+?)(?:--+|—+|→|↔)(.+)$/s;
+
+function matchRouteEndpoints(detail: string) {
+  const normalized = detail.normalize('NFKC').trim();
+  // Operating notes may contain a time range with the same separator as stops.
+  if (/^(?:工作日|非工作日|节假日|双休日|周[一二三四五六日天]|早高峰|晚高峰|高峰期间|仅在|仅限)/.test(normalized) ||
+      /\d{1,2}:\d{2}/.test(normalized)) return null;
+  return normalized.match(endpointSeparator);
+}
 
 export function routeAnnotations(name: string) {
   const groups: { start: number; end: number; detail: string }[] = [];
@@ -16,7 +24,15 @@ export function routeAnnotations(name: string) {
 }
 
 export function isRouteEndpointAnnotation(detail: string) {
-  return endpointSeparator.test(detail.normalize('NFKC'));
+  return matchRouteEndpoints(detail) !== null;
+}
+
+export function contestRouteEndpoints(name: string) {
+  const groups = routeAnnotations(name) ?? [];
+  for (let index = groups.length - 1; index >= 0; index--) {
+    const match = matchRouteEndpoints(groups[index].detail);
+    if (match) return { start: match[1].trim(), end: match[2].trim() };
+  }
 }
 
 export function fullContestRouteName(name: string) {
