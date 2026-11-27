@@ -1,18 +1,23 @@
+import { fullContestRouteName } from './contestRouteName';
 import type { GameMode } from './offlineGame';
 
-export function isGameAnswerCorrect(answer: string, correctAnswer: string, isFillIn: boolean, mode: GameMode | null): boolean {
+export function isGameAnswerCorrect(answer: string, correctAnswer: string, isFillIn: boolean, mode: GameMode | null, preserveRouteQualifier = false): boolean {
   const rawUser = answer.trim(), rawCorrect = correctAnswer.trim();
   let isCorrect = rawUser === rawCorrect;
 
   if (!isCorrect && isFillIn) {
     const toHalfWidth = (s: string) =>
       s.replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0)).replace(/\u3000/g, ' ');
-    const norm = (s: string) =>
-      toHalfWidth(s)
+    const norm = (s: string) => {
+      const input = toHalfWidth(s);
+      const text = mode === 'line' && preserveRouteQualifier
+        ? fullContestRouteName(input).replace(/[()]/g, '')
+        : input.replace(/\(.*?\)/g, '');
+      return text
         .toLowerCase()
         .replace(/\s+/g, '')
-        .replace(/\(.*?\)|（.*?）/g, '')
         .replace(/[·\-—_.,，。、'"“”‘’]/g, '');
+    };
 
     const u = norm(rawUser);
     const c = norm(rawCorrect);

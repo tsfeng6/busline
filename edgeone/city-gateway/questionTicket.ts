@@ -34,7 +34,7 @@ export function openQuestion(ticket: string, secret: string, run: string, number
   return JSON.parse(brotliDecompressSync(compressed, { maxOutputLength: maxDecodedBytes }).toString('utf8'));
 }
 
-type AnswerVerifier = Pick<OfflineQuestion, 'correctAnswer' | 'isFillIn'> & { game: string };
+type AnswerVerifier = Pick<OfflineQuestion, 'correctAnswer' | 'isFillIn'> & { game: string; preserveRouteQualifier?: boolean };
 const answerKey = (secret: string) => createHmac('sha256', secret).update('busline-ranked-answer-v1').digest();
 const answerContext = (run: string, user: string, id: string) => Buffer.from(JSON.stringify([run, user, id]));
 

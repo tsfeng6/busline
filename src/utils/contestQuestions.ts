@@ -2,6 +2,7 @@ import type { BusLine } from '../types';
 import type { CityDataset } from './cityDataset';
 import { isCitywideContest, type ContestRules } from './contestRules';
 import { distanceMeters, radiusRing, regularGameRoute, routeName, type CountySeat, type Point } from './localTransit';
+import { fullContestRouteName, isRouteEndpointAnnotation, routeAnnotations } from './contestRouteName';
 import { createOfflineQuestion, shuffle, type OfflineQuestion } from './offlineGame';
 
 // GCJ-02 district polygons from the DataV administrative atlas, limited to the
@@ -29,20 +30,10 @@ const loopDirection = /(?:内环|外环)$/;
 
 function hasRouteVariant(name: string) {
   const normalized = name.normalize('NFKC');
-  let depth = 0;
-  let start = 0;
-  for (const { 0: bracket, index } of normalized.matchAll(/[()]/g)) {
-    if (bracket === '(') {
-      if (depth++ === 0) start = index + 1;
-      continue;
-    }
-    if (depth === 0) return true;
-    if (--depth !== 0) continue;
-    const detail = normalized.slice(start, index).trim();
-    // Published names append the origin and destination as direction metadata.
-    if (!/^(?:内环|外环|环线)$/.test(detail) && !/^.+?(?:--+|—+|→|↔).+$/.test(detail)) return true;
-  }
-  if (depth !== 0) return true;
+  const annotations = routeAnnotations(normalized);
+  // Published names append the origin and destination as direction metadata.
+  if (!annotations || annotations.some(({ detail }) =>
+    !/^(?:内环|外环|环线)$/.test(detail) && !isRouteEndpointAnnotation(detail))) return true;
   const label = routeName(normalized).replace(/\s+/g, '').replace(loopDirection, '').replace(/(\d[路线]?)环线$/, '$1');
   if (/(?:区间(?:快车?|慢车?|车|线)?|快车?|慢车?|支(?:线|路)?|短线|加班车?|延长线)(?:路)?$/.test(label)) return true;
   const numberedSuffix = label.match(/^(?:[A-Za-z\p{Script=Han}]{0,4})\d+(.*)$/u)?.[1];
@@ -117,10 +108,12 @@ export function createLocalContestQuestion(
     return included;
   };
   const citywide = isCitywideContest(rules.range);
+  const unlimited = rules.range === 'unlimited';
+  const answerName = unlimited ? fullContestRouteName : routeName;
   const entries = data.lines.filter(line =>
-    line.path?.length >= 2 && !isRailRoute(line.name) && !hasRouteVariant(line.name))
+    line.path?.length >= 2 && (unlimited || (!isRailRoute(line.name) && !hasRouteVariant(line.name))))
     .map(line => ({ line, stops: routeStops(line) }));
-  const eligible = entries.filter(({ line }) => {
+  const eligible = unlimited ? entries : entries.filter(({ line }) => {
     const normalized = line.name.normalize('NFKC');
     const label = routeName(normalized);
     if (loopDirection.test(label) || /\d[路线]?环线$/.test(label) || /\((?:内环|外环|环线)\)/.test(normalized)) return true;
@@ -135,9 +128,9 @@ export function createLocalContestQuestion(
   if (mode === 'line') {
     const pool = citywide ? eligible : eligible.filter(entry =>
       (entry.stops.length >= 2 ? entry.stops.map(stop => stop.lngLat) : entry.line.path).every(urban));
-    const picked = shuffle(pool.filter(entry => routeName(entry.line.name) !== previous), random)[0] ?? pool[0];
-    if (!picked || (!rules.fill && new Set(pool.map(entry => routeName(entry.line.name))).size < 2)) throw Error('所选标签下暂无足够的线路。');
-    const answer = routeName(picked.line.name);
+    const picked = shuffle(pool.filter(entry => answerName(entry.line.name) !== previous), random)[0] ?? pool[0];
+    if (!picked || (!rules.fill && new Set(pool.map(entry => answerName(entry.line.name))).size < 2)) throw Error('所选标签下暂无足够的线路。');
+    const answer = answerName(picked.line.name);
     const middleStop = picked.stops[Math.floor(picked.stops.length / 2)];
     const target = middleStop?.lngLat ?? picked.line.path[Math.floor(picked.line.path.length / 2)];
     const names = rules.fill ? [] : rules.nearby
@@ -145,7 +138,7 @@ export function createLocalContestQuestion(
           .reduce((best, point) => Math.min(best, distanceMeters(point, target)), Infinity) }))
         .sort((a, b) => a.distance - b.distance).map(({ entry }) => entry)
       : shuffle(pool, random);
-    return { ...shared, correctAnswer: answer, options: rules.fill ? [] : options(answer, names.map(entry => routeName(entry.line.name)), random),
+    return { ...shared, correctAnswer: answer, options: rules.fill ? [] : options(answer, names.map(entry => answerName(entry.line.name)), random),
       lineInfos: [picked.line], networkStops: picked.stops };
   }
   const stations = new Map<string, { name: string; lngLat: Point; routes: typeof eligible }[]>();

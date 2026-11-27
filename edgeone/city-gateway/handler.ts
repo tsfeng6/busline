@@ -383,10 +383,12 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
       if (!verifier) {
         const current = await action('read');
         if (current.id === input.id && current.question) {
-          verifier = { ...unlock(current.question, current.number), game: current.game };
+          verifier = { ...unlock(current.question, current.number), game: current.game, preserveRouteQualifier: current.rules.range === 'unlimited' };
         }
       }
-      const correct = !!verifier && isGameAnswerCorrect(input.answer, verifier.correctAnswer, verifier.isFillIn, verifier.game as GameName);
+      const correct = !!verifier && isGameAnswerCorrect(
+        input.answer, verifier.correctAnswer, verifier.isFillIn, verifier.game as GameName, verifier.preserveRouteQualifier,
+      );
       // The RPC still checks ownership, question ID, deadline and repeat submissions.
       const result = await action('answer', { id: input.id, answer: input.answer.trim(), timeout: input.timeout === true, correct });
       return reply(result.question?.encrypted ? { ...result, question: unlock(result.question, result.number) } : result);
@@ -463,7 +465,9 @@ async function handleGameGateway(request:Request,env:Env,json:(data:unknown,stat
     const question = issued.question;
     const promptText = contestPrompts[current.game as GameName];
     const { correctAnswer, isFillIn } = unlock(question, issued.number);
-    const sealed = sealAnswer({ correctAnswer, isFillIn, game: current.game }, serviceKey, runId, user, issued.id);
+    const sealed = sealAnswer({
+      correctAnswer, isFillIn, game: current.game, preserveRouteQualifier: current.rules.range === 'unlimited',
+    }, serviceKey, runId, user, issued.id);
     const answerTicket = sealed.length <= 2048 ? sealed : undefined;
     return reply({ id: issued.id, number: issued.number, options: question.isFillIn ? [] : question.options, isFillIn: question.isFillIn, promptText,
       answerTicket, drawing: issued.drawing, remainingMs: issued.remainingMs, hints: current.rules.hintLimit - issued.hints, hintLimit: current.rules.hintLimit });

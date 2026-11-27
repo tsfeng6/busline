@@ -361,6 +361,7 @@ test('contest labels are exclusive and only valid for their mode', async () => {
   assert.equal(contestRules('line', ['special']).multiplier, 1);
   assert.equal(contestRules('line', ['niche']).multiplier, 2);
   assert.equal(contestRules('line', ['unusual']).multiplier, 2.5);
+  assert.equal(contestRules('line', ['unlimited']).multiplier, 2.75);
   assert.equal(contestRules('line', []).showBasemap, true);
   assert.equal(contestRules('line', ['network-only']).showBasemap, false);
   assert.equal(contestRules('line', ['network-only']).multiplier, 1.5);
@@ -371,6 +372,7 @@ test('contest labels are exclusive and only valid for their mode', async () => {
   assert.equal(contestRules('county', ['fill']).multiplier, 5);
   assert.throws(() => contestRules('line', ['time-5', 'time-10']), /每组/);
   assert.throws(() => contestRules('line', ['network-only', 'no-base']), /每组/);
+  assert.throws(() => contestRules('line', ['unusual', 'unlimited']), /每组/);
   assert.throws(() => contestRules('line', ['cycle']), /无效/);
   assert.throws(() => contestRules('city', ['no-base']), /无效/);
 });
@@ -429,6 +431,14 @@ test('contest question scope, nearby choices and diagram layers follow server ru
   }
   const loopStation = createLocalContestQuestion('station', loopData, contestRules('station', ['fill']), districts, '', random);
   assert.deepEqual(loopStation.lineInfos?.map(item => item.name), ['环一线外环', '1路(甲(东门)--乙)']);
+
+  const { isGameAnswerCorrect } = await import('../src/utils/gameAnswers');
+  const openPool = { ...data, lines: [line('密25（河西）(甲(东门)--乙)', outskirts), rail[0], line('840区间', core)] };
+  const open = createLocalContestQuestion('line', openPool, contestRules('line', ['unlimited']), [], '', random);
+  assert.equal(open.correctAnswer, '密25（河西）');
+  assert.deepEqual(open.options, ['密25（河西）', '地铁1号线', '840区间']);
+  assert.equal(isGameAnswerCorrect('密25(河西)', open.correctAnswer, true, 'line', true), true);
+  assert.equal(isGameAnswerCorrect('密25', open.correctAnswer, true, 'line', true), false);
 
   const station = createLocalContestQuestion('station', data, contestRules('station', ['cycle','no-stops','no-base']), districts, '', random);
   const drawing = drawContestQuestion(station, 'station', true);

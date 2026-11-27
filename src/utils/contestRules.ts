@@ -35,6 +35,7 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
       ...(mode === 'line' ? [
         { id: 'niche', label: '扩大至小众线路', factor: 4 },
         { id: 'unusual', label: '扩大至古怪线路', factor: 5 },
+        { id: 'unlimited', label: '扩大至无限制', factor: 5.5 },
       ] : []),
     ] },
     { label: '底图', tags: [
@@ -84,12 +85,12 @@ export function contestRules(mode: GameMode, input: unknown) {
     showNetworkContext: local && !has('no-base'),
     showStops: local && !has('no-stops'),
     fill: has('fill'), nearby: has('nearby'), cycle: has('cycle'),
-    range: has('unusual') ? 'unusual' : has('niche') ? 'niche' : has('all-city') ? 'all-city' : has('special') ? 'special' : 'urban',
+    range: has('unlimited') ? 'unlimited' : has('unusual') ? 'unusual' : has('niche') ? 'niche' : has('all-city') ? 'all-city' : has('special') ? 'special' : 'urban',
   };
 }
 
 export type ContestRules = ReturnType<typeof contestRules>;
 
 export function isCitywideContest(range: ContestRules['range']) {
-  return range === 'all-city' || range === 'niche' || range === 'unusual';
+  return range === 'all-city' || range === 'niche' || range === 'unusual' || range === 'unlimited';
 }

@@ -93,6 +93,7 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
     'all-city': '常规公交、内外环线及常见带前缀的编号线路',
     niche: '内外环线及线路名含阿拉伯数字的公交，包括带数字的偏门线路',
     unusual: '公交，包括无数字名称的偏门线路',
+    unlimited: '具有线路走向数据的线路，包括线路变体、地铁和铁路',
   }[rules.range];
   const locked = props.catalogLoading || !props.catalogAvailable
     || (competitive && (props.accountLoading || !props.accountEnabled))
@@ -141,6 +142,11 @@ function GameOptions(props: LobbyProps & { competitive: boolean }) {
         {group.label === '考题范围' && city && <p className="mt-2 text-xs leading-relaxed text-slate-600">
           考题范围包含：{area}内已收录的{mode === 'station' ? '常规公交站点' : rangeDescription}。
         </p>}
+        {group.label === '考题范围' && rules.range === 'unlimited' && (
+          <p className="mt-2 text-xs font-semibold leading-relaxed text-amber-800">
+            此范围较难，存在题目作答异常的可能性，请您谨慎选择！
+          </p>
+        )}
       </fieldset>)}
     </div>
     {props.error && <p role="alert" className="text-sm text-m3-error">{props.error}</p>}

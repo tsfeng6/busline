@@ -773,7 +773,7 @@ export default function App() {
     currentGameQuestionRef.current = null;
     const rawUser = answer.trim();
     const rawCorrect = question.correctAnswer.trim();
-    const isCorrect = isGameAnswerCorrect(rawUser, rawCorrect, gameQuestionData.isFillIn, gameMode);
+    const isCorrect = isGameAnswerCorrect(rawUser, rawCorrect, gameQuestionData.isFillIn, gameMode, gameRulesRef.current?.range === 'unlimited');
     const recorded = { ...question, userAnswer: rawUser, isCorrect };
     if (gameDeadlineRef.current !== null) gameTimeRemainingMsRef.current = Math.max(0, gameDeadlineRef.current - submittedAt);
     recordQuestionTime(submittedAt, gameDeadlineRef.current);
