@@ -39,9 +39,9 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
   const suburbs = { id: 'all-city', label: '加入郊区', factor: 2.5 };
   return [
     { label: '考题范围', tags: mode === 'line' ? [
-      { id: 'special', label: '加入微型线路', factor: 2 },
-      { id: 'niche', label: '加入小众线路', factor: 3 },
-      { id: 'unusual', label: '加入古怪线路', factor: 4 },
+      { id: 'special', label: '加入至微型线路', factor: 2 },
+      { id: 'niche', label: '加入至小众线路', factor: 3 },
+      { id: 'unusual', label: '加入至古怪线路', factor: 4 },
       { id: 'unlimited', label: '无限制', factor: 5 },
     ] : mode === 'accessibility' ? [
       { id: 'medium-stops', label: '加入中型站', factor: 2 },
