@@ -36,7 +36,7 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
   if (mode === 'city' || mode === 'county') {
     return [{ label: '答题方式', tags: [{ id: 'fill', label: '填空题', factor: 5 }] }];
   }
-  const suburbs = { id: 'all-city', label: '加入郊区', factor: 2 };
+  const suburbs = { id: 'all-city', label: '加入郊区', factor: 2.5 };
   return [
     { label: '考题范围', tags: mode === 'line' ? [
       { id: 'special', label: '加入微型线路', factor: 2 },
@@ -49,8 +49,8 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
     ] : [suburbs] },
     ...(mode === 'station' ? [] : [{ label: '地区', tags: [suburbs] }]),
     ...(mode === 'accessibility' ? [] : [{ label: '底图', tags: [
-      { id: 'network-only', label: '仅线路图', factor: 3 },
-      ...(mode === 'line' ? [{ id: 'no-base', label: '无底图', factor: 5 }] : []),
+      { id: 'network-only', label: '仅线路图', factor: 2 },
+      ...(mode === 'line' ? [{ id: 'no-base', label: '无底图', factor: 4 }] : []),
     ] }]),
     ...(mode === 'station' ? [] : [{ label: '站点', tags: [{ id: 'no-stops', label: '无站点', factor: 2 }] }]),
     { label: '提示次数', tags: [
