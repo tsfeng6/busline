@@ -1,6 +1,7 @@
 import { routeName, type Point } from './localTransit';
 import type { GameMode, OfflineQuestion } from './offlineGame';
 import type { RankedPuzzle } from './rankedGame';
+import { contestRouteColors } from './contestRouteColors';
 
 function clipToQuestionFrame(a: Point, b: Point): [Point, Point] | undefined {
   const [x, y] = a;
@@ -70,6 +71,9 @@ export function drawContestQuestion(question: OfflineQuestion, mode: GameMode, c
     return commands.join('');
   };
   const routePaths = paths.map(serialize);
+  const coloredRoutes = mode === 'accessibility' && !question.networkPaths
+    ? contestRouteColors(lines).map((color, index) => ({ path: routePaths[index], color }))
+    : undefined;
   const frames = new Map<string, { path: string; stops: [number, number][] }>();
   if (cycle) lines.forEach((line, index) => {
     const name = routeName(line.name);
@@ -111,7 +115,8 @@ export function drawContestQuestion(question: OfflineQuestion, mode: GameMode, c
   }
   const local = mode === 'line' || mode === 'station' || mode === 'accessibility';
   return {
-    path: cycle ? '' : routePaths.join(''), frames: cycle ? [...frames.values()] : undefined, arrows, basemap: [...roads].join(''), county: !!question.countyWindow,
+    path: cycle || coloredRoutes ? '' : routePaths.join(''), coloredRoutes,
+    frames: cycle ? [...frames.values()] : undefined, arrows, basemap: [...roads].join(''), county: !!question.countyWindow,
     stops: local && question.showStops && !cycle ? (question.networkStops ?? []).map(stop => project(stop.lngLat)) : [],
     target: question.targetPoint ? project(question.targetPoint.lngLat) : undefined,
     terminals: mode === 'line' ? paths.filter(points => points.length > 1).map(points => ({ first: project(points[0]), last: project(points.at(-1)!) })) : [],

@@ -417,6 +417,15 @@ test('station modes share the 700-meter distractor rule and use separate contest
   assert.deepEqual(accessibility.options, station.options);
   assert.equal(accessibility.lineInfos?.length, 6);
   assert.equal(accessibility.showBasemap, false);
+  const { drawContestQuestion } = await import('../src/utils/contestDrawing');
+  const firstLine = lines[0];
+  const drawing = drawContestQuestion({
+    ...accessibility,
+    lineInfos: [...lines, { ...firstLine, name: '1路(终点--中心站)', path: [...firstLine.path].reverse() }],
+  }, 'accessibility');
+  assert.equal(drawing.coloredRoutes?.length, 7);
+  assert.equal(new Set(drawing.coloredRoutes?.map(route => route.color)).size, 6);
+  assert.equal(drawing.coloredRoutes?.[0].color, drawing.coloredRoutes?.at(-1)?.color);
   assert.equal(getContestTotalTime('accessibility', false), 3600);
   assert.equal(getContestTotalTime('accessibility', true), 3600);
   assert.equal(getContestTotalTime('station', true), 1200);

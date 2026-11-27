@@ -1,5 +1,6 @@
 import type { Point } from './localTransit';
 import type { OfflineQuestion } from './offlineGame';
+import { contestRouteColors } from './contestRouteColors';
 
 type MapQuestion = Pick<OfflineQuestion, 'lineInfos' | 'targetPoint'> & { networkStops?: { lngLat: Point }[] };
 
@@ -13,7 +14,9 @@ export function mountContestMap(
     center, radius, fillColor, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 1.5, zIndex: 65,
   });
 
-  for (const line of question.lineInfos ?? []) {
+  const lines = question.lineInfos ?? [];
+  const colors = mode === 'accessibility' ? contestRouteColors(lines) : [];
+  for (const [index, line] of lines.entries()) {
     if (!line.path || line.path.length < 2) continue;
     let path = line.path;
     const firstStop = line.via_stops?.[0]?.location;
@@ -22,7 +25,7 @@ export function mountContestMap(
       if (distance(path[0]) > distance(path.at(-1)!)) path = [...path].reverse();
     }
     const route = new AMap.Polyline({
-      path, strokeColor: '#346DB3', strokeWeight: 5, strokeOpacity: 1, showDir: mode === 'line',
+      path, strokeColor: colors[index] ?? '#346DB3', strokeWeight: 5, strokeOpacity: 1, showDir: mode === 'line',
       lineJoin: 'round', lineCap: 'round', isOutline: true, outlineColor: '#fff', borderWeight: 1, zIndex: 55,
     });
     routes.push(route);

@@ -9,6 +9,7 @@ export type RankedPuzzle = {
   promptText: string;
   drawing: {
     path: string;
+    coloredRoutes?: { path: string; color: string }[];
     raster?: string;
     basemap?: string;
     frames?: { path: string; stops: [number, number][] }[];

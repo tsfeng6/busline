@@ -64,6 +64,7 @@ import { RankedGameDrawing } from './components/RankedGameDrawing';
 import { contests, gameNames, contestTagGroups, contestRules, contestPrompts, type ContestRules } from './utils/contestRules';
 import { createSimulationQuestion } from './utils/simulationQuestion';
 import { drawContestQuestion } from './utils/contestDrawing';
+import { contestRouteColors } from './utils/contestRouteColors';
 import { contestRouteEndpoints } from './utils/contestRouteName';
 import { mountContestMap } from './utils/contestMap';
 import { createNetworkContestQuestion } from './utils/contestQuestions';
@@ -1380,8 +1381,10 @@ export default function App() {
         mapInstance.setFitView(overlays, false, [48, 170, 36, 36]);
       }
     } else if (item.mode === 'station' || item.mode === 'accessibility') {
-      (item.lineInfos || []).forEach((info: any) => {
-        renderBusLine(info, AMap, mapInstance, false, false, false);
+      const lines = item.lineInfos ?? [];
+      const colors = item.mode === 'accessibility' ? contestRouteColors(lines) : [];
+      lines.forEach((info, index) => {
+        renderBusLine(info, AMap, mapInstance, false, false, false, colors[index]);
       });
       if (reviewShowStops && item.networkStops && item.networkStops.length > 0 && markerGroupRef.current) {
         const otherMarkers = item.networkStops.map((st) => {
@@ -2616,7 +2619,7 @@ export default function App() {
 
 
 
-  const renderBusLine = (line: any, AMap: any, map: any, clear = true, showMarkers = true, shouldFitView = true) => {
+  const renderBusLine = (line: any, AMap: any, map: any, clear = true, showMarkers = true, shouldFitView = true, color?: string) => {
     roadLookupVersionRef.current++;
     const lineCity = line.city || currentCity;
     const path = line.path.map((p: any) => Array.isArray(p) ? p : [p.lng, p.lat]);
@@ -2662,7 +2665,7 @@ export default function App() {
       if (displayPaths.length > 0) {
         polyline = new AMap.Polyline({
           path: displayPaths,
-          strokeColor: line.isUserSubmitted ? '#BA55D3' : (clear ? '#39FF14' : getRandomPastelColor()),
+          strokeColor: color ?? (line.isUserSubmitted ? '#BA55D3' : (clear ? '#39FF14' : getRandomPastelColor())),
           strokeWeight: lineThickness === 'thin' ? 2.5 : 5,
           strokeOpacity: 0.8,
           lineJoin: 'round',
