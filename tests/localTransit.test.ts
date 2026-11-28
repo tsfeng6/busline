@@ -11,12 +11,29 @@ import {contestRules, contestPrompts} from '../src/utils/contestRules';
 import {drawContestQuestion} from '../src/utils/contestDrawing';
 import {createSimulationQuestion} from '../src/utils/simulationQuestion';
 import {normalizeCityDataset} from '../src/utils/cityDataset';
+import {searchBuslineData} from '../src/utils/buslineSearch';
 const center:[number,number]=[116,39];
 const data=()=>normalizeCityDataset({schemaVersion:1,city:'北京市',scope:'city',coverage:'observed',filtered:false,retrievalComplete:true,capturedAt:new Date().toISOString(),
  stops:[{id:'s',name:'海淀区政府',address:'1路;X107路',location:{lng:116,lat:39}},{id:'t',name:'东站',address:'1路',location:{lng:116.01,lat:39}}],
  lines:[{id:'1',name:'1路(甲--乙)',city:'北京市',path:[[115.95,39],[116.05,39]],via_stops:[{name:'海淀区政府',location:{lng:116,lat:39}},{name:'东站',location:{lng:116.01,lat:39}}]},
  {id:'2',name:'X107路(甲--乙)',city:'北京市',path:[[116,38.95],[116,39.05]],via_stops:[{name:'海淀区政府',location:{lng:116,lat:39}}]},
  {id:'3',name:'快速直达专线187路',city:'北京市',path:[[115.95,38.95],[116.05,39.05]],via_stops:[{name:'海淀区政府',location:{lng:116,lat:39}}]}]});
+test('map search returns only matching saved routes and stops, with their recorded directions', () => {
+ const snapshot = data();
+ const reverse = { ...snapshot.lines[0], id: 'reverse', name: '1路(乙--甲)', stime: '06:00' };
+ snapshot.lines.push(reverse);
+ const search = (query: string) => searchBuslineData(query, snapshot.city, [snapshot], [],
+   name => name.startsWith('快速直达'), center);
+ assert.deepEqual(search('１路').map(result => result.name), ['1路(甲--乙)', '1路(乙--甲)']);
+ const [station] = search('海淀区政府公交站');
+ assert.equal(station?.type, 'busstop');
+ if (station?.type === 'busstop') {
+  assert.deepEqual(station.location, center);
+  assert.deepEqual([...station.lines.keys()], ['1路(甲--乙)', 'X107路(甲--乙)', '1路(乙--甲)']);
+  assert.equal(station.lines.get(reverse.name)?.stime, '06:00');
+ }
+ assert.deepEqual(search('未收录的商场'), []);
+});
 test('game routes keep ordinary numeric services in both ladders',()=>{
  for(const name of ['1路','368路','X107路','兴33路','黎城5路','368快路','围场8路','300路内环','M191路(甲--乙)'])assert.equal(regularGameRoute(name),true,name);
  for(const name of ['快速直达专线187路','节假日5路','北京密码','机场巴士','机场5路','地铁1号线','市郊铁路S2线','商务班车1路','旅游专线2路'])assert.equal(regularGameRoute(name),false,name);

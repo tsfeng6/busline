@@ -21,6 +21,7 @@ type AccountCardProps = {
   accessToken: string;
   authLoading: boolean;
   hideTrigger?: boolean;
+  triggerClassName?: string;
   profileOnly?: boolean;
   open: boolean;
   tab: AccountTab;
@@ -32,7 +33,7 @@ type AccountCardProps = {
   children: ReactNode;
 };
 
-export function WechatAccountLink({ account, accessToken, authLoading, hideTrigger, profileOnly, open, tab, onTabChange, onOpen, onClose, onSignedIn, onLogout, children }: AccountCardProps) {
+export function WechatAccountLink({ account, accessToken, authLoading, hideTrigger, triggerClassName = '', profileOnly, open, tab, onTabChange, onOpen, onClose, onSignedIn, onLogout, children }: AccountCardProps) {
   const registrationToken = getWechatRegistrationToken();
   const [mode, setMode] = useState<'qr' | 'password' | 'register'>(registrationToken ? 'register' : 'qr');
   const [message, setMessage] = useState(''), [name, setName] = useState(''), [avatar, setAvatar] = useState<File | null>(null), [avatarPreview, setAvatarPreview] = useState('');
@@ -134,7 +135,7 @@ export function WechatAccountLink({ account, accessToken, authLoading, hideTrigg
   };
 
   return <>
-    {!open && !hideTrigger && <button type="button" aria-label="打开个人主页" onClick={openAccount} className="pointer-events-auto fixed right-4 top-5 z-[110] h-[42px] w-[42px] rounded-full border border-white/80 bg-m3-primary shadow-sm transition-transform hover:scale-105 active:scale-95">
+    {!open && !hideTrigger && <button type="button" aria-label="打开个人主页" onClick={openAccount} className={`pointer-events-auto fixed right-4 top-5 z-[110] h-[42px] w-[42px] rounded-full border border-white/80 bg-m3-primary shadow-sm transition-transform hover:scale-105 active:scale-95 ${triggerClassName}`}>
       <Avatar name={account?.displayName || '人'} image={account?.avatarUrl} className="h-full w-full text-base" />
     </button>}
     <AnimatePresence>

@@ -4,7 +4,7 @@ import { formatTimelineMinute } from '../utils/timeline';
 export function TimelineBar({ minute, onChange, onClose, onTogglePlayback, playing, active, total, viewport, overview }: {
   minute: number; onChange: (value: number) => void; onClose: () => void; onTogglePlayback: () => void; playing: boolean; active: number; total: number; viewport?: boolean; overview?: boolean;
 }) {
-  return <div className="fixed bottom-[max(.75rem,env(safe-area-inset-bottom))] sm:bottom-5 left-1/2 -translate-x-1/2 z-40 w-[min(640px,calc(100vw-32px))] rounded-3xl bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 shadow-xl px-3 py-2 sm:px-5 sm:py-3 pointer-events-auto">
+  return <div className="fixed bottom-[var(--busline-dock-clearance)] md:bottom-5 left-1/2 -translate-x-1/2 z-40 w-[min(640px,calc(100vw-32px))] rounded-3xl bg-m3-surface/95 backdrop-blur-xl border border-m3-outline-variant/40 shadow-xl px-3 py-2 sm:px-5 sm:py-3 pointer-events-auto">
     <div className="flex items-center justify-between gap-2 mb-2">
       <div className="flex items-center gap-2"><button type="button" onClick={onTogglePlayback} aria-label={playing ? '暂停时间轴' : '播放时间轴'} title={playing ? '暂停' : '播放'} className="p-1.5 rounded-full hover:bg-m3-primary/10 text-m3-primary">{playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}</button><div className="flex items-baseline gap-2"><strong className="text-lg tabular-nums text-m3-primary">{formatTimelineMinute(minute)}</strong><span className="text-xs text-slate-500">{viewport ? '视野内运营 ' : '运营中 '}{active}/{total} 个方向</span></div></div>
       <button type="button" onClick={onClose} aria-label="退出时间轴" className="p-1.5 rounded-full hover:bg-m3-primary/10"><X className="w-4 h-4" /></button>

@@ -162,3 +162,17 @@
 @media (prefers-reduced-motion: reduce) {
   .contest-preview { transition: none; }
 }
+
+.busline-map {
+  --busline-dock-clearance: calc(7.25rem + max(.625rem, env(safe-area-inset-bottom)));
+}
+
+@media (width < 768px) {
+  .busline-map-dock {
+    bottom: calc(max(.625rem, env(safe-area-inset-bottom)) + var(--busline-keyboard-offset, 0px));
+  }
+
+  .busline-search-suggestions {
+    max-height: clamp(3rem, calc(100dvh - var(--busline-keyboard-offset, 0px) - 8rem), min(38dvh, 22rem));
+  }
+}

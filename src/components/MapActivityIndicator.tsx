@@ -4,7 +4,7 @@ export function MapActivityIndicator({mode,raised=false,progress}:{mode:'city'|'
  if(!mode)return null;
  const paths=['M4 17H20','M17 4V20','M8 20V13L13 8H22'];
  const value=Math.max(0,Math.min(100,progress?.value ?? 8));
- return <div role="status" aria-live="polite" className={`fixed left-4 sm:left-6 bottom-12 ${raised?'md:bottom-40':''} z-40 pointer-events-none select-none`}>
+ return <div role="status" aria-live="polite" className={`fixed left-4 sm:left-6 bottom-[var(--busline-dock-clearance)] md:bottom-12 ${raised?'md:bottom-40':''} z-40 pointer-events-none select-none`}>
   <div className="w-56 rounded-2xl bg-[#eef3f0]/95 border border-[#dfe7e2] shadow-[0_7px_20px_rgba(30,55,43,0.14)] px-3 py-2.5 text-[#3c7195] backdrop-blur-sm">
    <div className="flex items-center gap-2">
     <div className="flex h-7 w-7 shrink-0 items-center justify-center">

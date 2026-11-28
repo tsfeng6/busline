@@ -4,7 +4,7 @@ import {NearbyRoutes,type NearbyState} from './components/NearbyRoutes';
 import { loadNearbyTransitTiles } from './utils/nearbyTransitTiles';
 import {loadPublishedCities,loadGameCity,loadGameCityImage} from './utils/publishedTransit';
 import {COUNTY_GAME_RADIUS_METERS, type GameMode, type OfflineQuestion} from './utils/offlineGame';
-import {DAILY_LOCATION_KEY,claimDailyLocation,gpsToMap,nearbyLines,cityTouchesRadius,radiusRing,type PublishedCity,type Point} from './utils/localTransit';
+import {DAILY_LOCATION_KEY,claimDailyLocation,gpsToMap,nearbyLines,cityTouchesRadius,distanceMeters,radiusRing,type PublishedCity,type Point} from './utils/localTransit';
 import { getCitySearchServices } from './utils/citySearchRealm';
 import { AMAP_API_PRIVACY_NOTICE, citySearchApiStatus } from './utils/citySearchApi';
 import { resolveAmapCredentials } from './utils/amapCredentials';
@@ -29,7 +29,7 @@ import { lineBaseIdentity, matchesLineQuery, matchesReturnedLine } from './utils
 import { resolveSearchCity } from './utils/searchCity';
 import { discoverStationLines, expandSavedStationCoverage, segmentGridKeys, type StationCoverageDepth } from './utils/stationCoverage';
 import { joinLineSegments } from './utils/mapPerformance';
-import { getSuggestionKind, rankSearchSuggestions } from './utils/searchSuggestions';
+import { searchBuslineData, type BuslineSearchResult } from './utils/buslineSearch';
 import { BusPlanner } from './components/BusPlanner';
 import { pickPlannerMapSelection } from './utils/plannerMapSelection';
 import { isLocalBusLine, plannerTransferMarkers, type BusPlan, type PlannerMapSelection, type PlannerPoint } from './utils/busPlanner';
@@ -53,7 +53,7 @@ import {
   saveCitySearchToCache,
   saveLinesToCache,
 } from './utils/lineCache';
-import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Zap, Gamepad2, Trophy, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause } from 'lucide-react';
+import { Bus, Map as MapIcon, ZoomIn, Info, Loader2, List, X, Search, Camera, Eye, EyeOff, Navigation, Paintbrush, ClipboardCheck, Database, Trash2, Edit3, Undo, Redo, MapPin, Check, LogOut, Magnet, GitCommit, BoxSelect, ImagePlus, RefreshCw, AlertTriangle, Flag, Satellite, Zap, Gamepad2, Trophy, Sparkles, Clock, Route, Shield, RotateCcw, History, ChevronLeft, ChevronRight, Play, Pause, Settings } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { getGameHint, isGameHintComplete } from './utils/gameHint';
@@ -938,7 +938,6 @@ export default function App() {
   const sharedMapDataRef = useRef(false);
   const [stats, setStats] = useState({ stops: 0, lines: 0 });
   const [cacheUpdateTick, setCacheUpdateTick] = useState(0);
-  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   type MapMode = 'normal' | 'satellite' | 'blank';
   type StationDisplayMode = 'all' | 'terminal' | 'none';
 
@@ -2353,14 +2352,15 @@ export default function App() {
   const [selectedSegmentAddress, setSelectedSegmentAddress] = useState<string | null>(null);
   const [currentCity, setCurrentCity] = useState<string>('全国');
   const [searchQuery, setSearchQuery] = useState('');
-  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [suggestions, setSuggestions] = useState<BuslineSearchResult[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
-  const autoCompleteRef = useRef<any>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
+  const mapDockRef = useRef<HTMLElement>(null);
   const searchActiveRef = useRef(false);
   const searchComposingRef = useRef(false);
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionsError, setSuggestionsError] = useState('');
   const searchIdRef = useRef(0);
   const dismissSearchSuggestions = () => {
     searchActiveRef.current = false;
@@ -2368,7 +2368,6 @@ export default function App() {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setSuggestionsLoading(false);
     setShowSuggestions(false);
-    setIsMobileSearchOpen(false);
   };
   useEffect(() => {
     const onOutsidePointer = (event: PointerEvent) => {
@@ -2382,6 +2381,30 @@ export default function App() {
     };
   }, []);
 
+
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const updateDockPosition = () => {
+      const input = searchContainerRef.current?.querySelector('input');
+      const offset = input && document.activeElement === input
+        ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
+        : 0;
+      mapDockRef.current?.style.setProperty('--busline-keyboard-offset', `${offset}px`);
+    };
+    viewport.addEventListener('resize', updateDockPosition);
+    viewport.addEventListener('scroll', updateDockPosition);
+    document.addEventListener('focusin', updateDockPosition);
+    const resetDockPosition = () => mapDockRef.current?.style.removeProperty('--busline-keyboard-offset');
+    const searchContainer = searchContainerRef.current;
+    searchContainer?.addEventListener('focusout', resetDockPosition);
+    return () => {
+      viewport.removeEventListener('resize', updateDockPosition);
+      viewport.removeEventListener('scroll', updateDockPosition);
+      document.removeEventListener('focusin', updateDockPosition);
+      searchContainer?.removeEventListener('focusout', resetDockPosition);
+    };
+  }, []);
 
   const getRandomPastelColor = () => {
     const h = Math.floor(Math.random() * 360);
@@ -2881,7 +2904,7 @@ export default function App() {
           });
 
           // Fetch full details to show all lines
-          const details = await fetchStopDetails(stop.name, stopLatLng, AMap, lineCity);
+          const details = await fetchStopDetails(stop.name, stopLatLng, AMap, lineCity, line.buslineOnly ? line : undefined);
           if (plannerMapModeRef.current) return;
           if (details) {
             setSelectedStop({ ...details, city: lineCity });
@@ -2899,7 +2922,10 @@ export default function App() {
       activeRawMarkersRef.current = markers;
       syncStopMarkersToMap(map, AMap);
     }
-    if (shouldFitView && polylineObj) map.setFitView(polylineObj);
+    if (shouldFitView && polylineObj) {
+      if (window.innerWidth < 768) map.setFitView([polylineObj], false, [44, 24, 240, 24]);
+      else map.setFitView(polylineObj);
+    }
 
   };
 
@@ -2994,7 +3020,7 @@ export default function App() {
     }
   };
 
-  const fetchStopDetails = async (name: string, location: [number, number], AMap: any, city: string, publishedOnly = false): Promise<any> => {
+  const fetchStopDetails = async (name: string, location: [number, number], AMap: any, city: string, publishedOnly: boolean | BusLine = false): Promise<any> => {
     const getDistSq = (p1: [number, number], p2: [number, number]) => {
       return Math.pow(p1[0] - p2[0], 2) + Math.pow(p1[1] - p2[1], 2);
     };
@@ -3007,6 +3033,26 @@ export default function App() {
     // loaded area. Always consult the complete saved city snapshot as well,
     // otherwise clicking a stop may show merely a subset of its routes.
     const savedCity = await cityDataCache.get(city || currentCity).catch(() => null);
+    if (typeof publishedOnly === 'object') {
+      const cityLines = lastCityDataset?.city === city ? lastCityDataset.lines : [];
+      const buslineSearchLines = new Map([[publishedOnly.name, publishedOnly]]);
+      for (const line of [...cityLines, ...(savedCity?.lines ?? [])]) {
+        if (!buslineSearchLines.has(line.name) && !isLineNameBlockedRef(line.name) && line.via_stops?.some(matchesStop)) {
+          buslineSearchLines.set(line.name, line);
+        }
+      }
+      const publishedRoutes = new Map<string, ViewportRoute>();
+      for (const [name, line] of buslineSearchLines) {
+        publishedRoutes.set(name, {
+          city: line.city || city, id: line.id, name,
+          stime: line.stime, etime: line.etime, scheduleDescription: line.scheduleDescription,
+        });
+      }
+      return {
+        name, city, address: '', isBusStop: true, lines: [...buslineSearchLines.keys()],
+        publishedRoutes, buslineSearchLines, key: `tile:search:${city}:${location.join(',')}`,
+      };
+    }
     const localLines = new Set<string>();
     const publishedRoutes = new Map<string, ViewportRoute>();
     for (const line of fetchedLinesCache.current.values()) {
@@ -4250,6 +4296,31 @@ export default function App() {
     mapPointVersionRef.current++;
     setShowSuggestions(false);
     setSearchQuery(item.name);
+    const local = item.buslineSearchResult as BuslineSearchResult | undefined;
+    if (local) {
+      if (local.type === 'busline') {
+        renderBusLine({ ...local.line, buslineOnly: true }, AMap, map);
+      } else {
+        const publishedRoutes = new Map<string, ViewportRoute>();
+        for (const [name, line] of local.lines) publishedRoutes.set(name, {
+          city: line.city || local.city, id: line.id, name,
+          stime: line.stime, etime: line.etime, scheduleDescription: line.scheduleDescription,
+        });
+        selectedViewportRoutesRef.current = [];
+        setSelectedSegmentLines(null);
+        setSelectedSegmentName(null);
+        setSelectedSegmentAddress(null);
+        setTopCard('stop');
+        setSelectedStop({
+          name: local.name, location: { lng: local.location[0], lat: local.location[1] },
+          city: local.city, isBusStop: true, lines: [...local.lines.keys()], publishedRoutes,
+          buslineSearchLines: local.lines, key: `tile:search:${local.city}:${local.location.join(',')}`,
+        });
+        setSelectionPos(local.location);
+        map.setZoomAndCenter(17, local.location);
+      }
+      return;
+    }
     if (item.type === 'busline' || checkIsLineQuery(item.name)) {
       setTopCard('line');
     }
@@ -4379,241 +4450,70 @@ export default function App() {
   };
 
 
-  const findLoadedLines = (query: string) => [...fetchedLinesCache.current.values()].filter(line =>
-    line.city?.replace(/市$/, '') === currentCity.replace(/市$/, '')
-    && matchesLineQuery(query, line.name) && !isLineNameBlockedRef(line.name));
-
-  const onSearchInputChange = (val: string) => {
-    const currentSearchId = ++searchIdRef.current;
-    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    setSearchQuery(val);
-    if (searchComposingRef.current) return;
-    searchActiveRef.current = true;
-    setSuggestionsLoading(!!val.trim());
-    setShowSuggestions(!!val.trim());
-    setSuggestions([]);
-    if (!val.trim()) {
-      setSuggestions([]);
-      setShowSuggestions(false);
-      return;
-    }
-
-    const AMap = (window as any).AMap;
-    if (!AMap || !AMap.AutoComplete) { setSuggestionsLoading(false); return; }
-
-    searchDebounceRef.current = setTimeout(() => {
-    if (currentSearchId !== searchIdRef.current || !searchActiveRef.current) return;
-    if (!autoCompleteRef.current) {
-      autoCompleteRef.current = new (amapSearch(AMap).AutoComplete)({
-        city: currentCity || '全国',
-        citylimit: false
-      });
-    }
-
-    // Parallel search for better results
-    const fetchTips = new Promise<any[]>((resolve) => {
-      const timeout = setTimeout(() => resolve([]), 8000);
-      autoCompleteRef.current.search(val, (status: string, result: any) => {
-        clearTimeout(timeout);
-        checkAmapQuotaError(status, result);
-        if (status === 'complete' && result.tips) {
-          resolve(result.tips);
-        } else {
-          resolve([]);
-        }
-      });
-    });
-
-    const isLineQuery = checkIsLineQuery(val);
-    const loadedLines = isLineQuery ? findLoadedLines(val) : [];
-    const fetchLines = loadedLines.length ? Promise.resolve(loadedLines.map(line => ({
-      name: line.name, district: line.city, location: line.path[0], type: 'busline', lineData: line,
-    }))) : isLineQuery ? new Promise<any[]>((resolve) => {
-      if (!AMap.LineSearch) { resolve([]); return; }
-      const lineSearch = new (amapSearch(AMap).LineSearch)({
-        pageIndex: 1,
-        city: currentCity || '全国',
-        pageSize: 10,
-        extensions: 'all'
-      });
-      const timeout = setTimeout(() => resolve([]), 8000);
-      lineSearch.search(val, (status: string, result: any) => {
-        clearTimeout(timeout);
-        checkAmapQuotaError(status, result);
-        if (result?.lineInfo) {
-          result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
-        }
-        if (status === 'complete' && result?.lineInfo) {
-          resolve(result.lineInfo.map((l: any) => ({
-            name: l.name,
-            district: l.city || currentCity,
-            location: l.path[0],
-            type: 'busline',
-            lineData: l
-          })));
-        } else {
-          resolve([]);
-        }
-      });
-    }) : Promise.resolve([]);
-
-    Promise.all([fetchTips, fetchLines]).then(([tips, lines]) => {
-      if (currentSearchId !== searchIdRef.current || !searchActiveRef.current) return;
-
-      // Prioritize exact line matches, then other lines, then POIs with locations
-      const combined = [...lines];
-
-      const stationGroups = new Map<string, any[]>();
-      const otherTips: any[] = [];
-
-      tips.forEach((tip: any) => {
-        // High fidelity station detection
-        const isStation = getSuggestionKind(tip) === 'station';
-
-        const isLine = !isStation && checkIsLineQuery(tip.name);
-
-        if (isLine) {
-           if (!combined.some(c => c.name.startsWith(tip.name))) {
-             combined.push({ ...tip, type: 'busline' });
-           }
-        } else if (tip.location && isStation) {
-           const cleanName = tip.name.replace(/\(.*?\)|（.*?）/g, '').replace('公交站', '').trim();
-           if (!stationGroups.has(cleanName)) {
-             stationGroups.set(cleanName, []);
-           }
-           stationGroups.get(cleanName)!.push({ ...tip, type: 'busstop' });
-        } else if (tip.location) {
-           otherTips.push(tip);
-        }
-      });
-
-      Array.from(stationGroups.entries()).forEach(([cleanName, groupTips]) => {
-         if (groupTips.length > 1) {
-             // 1. Calculate centroid for the aggregated "All platforms" tip
-             let sumLng = 0, sumLat = 0;
-             groupTips.forEach(t => { sumLng += parseFloat(t.location.lng); sumLat += parseFloat(t.location.lat); });
-             const centroid = { lng: sumLng / groupTips.length, lat: sumLat / groupTips.length };
-
-             // The aggregated button
-             combined.push({
-                 ...groupTips[0],
-                 name: `${cleanName} (所有站台)`,
-                 location: centroid,
-                 isAggregated: true
-             });
-
-             // Number the different platforms
-             groupTips.forEach((t, idx) => {
-                 combined.push({
-                     ...t,
-                     name: `${t.name} - ${idx + 1}`
-                 });
-             });
-         } else {
-             combined.push(groupTips[0]);
-         }
-      });
-
-      otherTips.forEach(t => combined.push(t));
-
-      // Include approved user custom lines matching description
-      const q = val.toLowerCase().trim();
-      const isFilteredOut = localStorage.getItem('app_filter_user_submissions') === 'true';
-      if (showUserSubmittedData && q.length > 0 && !isFilteredOut) {
-        approvedUserLines.forEach(ul => {
-          if (ul.name.toLowerCase().includes(q)) {
-            // Avoid duplicate additions
-            if (!combined.some(c => c.name === ul.name)) {
-              combined.unshift({
-                name: ul.name,
-                type: 'userLine',
-                isUserSubmitted: true,
-                 id: ul.id,
-                 creatorNickname: ul.creatorNickname,
-                location: ul.path[0] ? { lng: ul.path[0].lng, lat: ul.path[0].lat } : null
-              });
-            }
-          }
-        });
+  const lookupBuslineSearch = async (value: string) => {
+    const center = mapRef.current ? getLatLng(mapRef.current.getCenter()) : [116.4, 39.9] as Point;
+    let query = value.trim();
+    let city = currentCity === '全国' ? '' : currentCity;
+    const qualified = query.match(/^([^\s:：]+)[\s:：]+(.+)$/);
+    if (qualified || !city) {
+      const catalog = await loadPublishedCities().catch(() => []);
+      const namedCity = qualified && catalog.find(entry =>
+        entry.city.replace(/市$/, '') === qualified[1].replace(/市$/, ''));
+      if (namedCity && qualified) {
+        city = namedCity.city;
+        query = qualified[2];
+      } else if (!city) {
+        city = catalog.filter(entry => cityTouchesRadius(entry, center, 0))
+          .sort((a, b) => distanceMeters(a.center, center) - distanceMeters(b.center, center))[0]?.city ?? '';
       }
-
-      setSuggestions(rankSearchSuggestions(combined, val).slice(0, 12));
-      setSuggestionsLoading(false);
-      setShowSuggestions(true);
-    }).catch(() => {
-      if (currentSearchId === searchIdRef.current && searchActiveRef.current) setSuggestionsLoading(false);
-    });
-    }, 220);
+    }
+    const local = lastCityDataset && lastCityDataset.city.replace(/市$/, '') === city.replace(/市$/, '') ? lastCityDataset : null;
+    const shared = city ? await cityDataCache.get(city).catch(error => {
+      if (local || enableLineCacheRef.current) return null;
+      throw error;
+    }) : null;
+    const cached = city && !local && !shared && enableLineCacheRef.current ? await getCityCacheData(city) : null;
+    const datasets = [local, local === shared ? null : shared, cached]
+      .filter((data): data is Pick<CityDataset, 'lines' | 'stops'> => !!data);
+    const userLines = showUserSubmittedData && localStorage.getItem('app_filter_user_submissions') !== 'true'
+      ? approvedUserLines.filter(line => !line.city || !city || line.city.replace(/市$/, '') === city.replace(/市$/, ''))
+        .map(line => ({ ...line, isUserSubmitted: true }))
+      : [];
+    return searchBuslineData(query, city, datasets, userLines, isLineNameBlockedRef, center);
   };
 
-  const performFullSearch = async (query: string) => {
-    dismissSearchSuggestions();
+  const selectBuslineSearchResult = (result: BuslineSearchResult) => {
+    searchContainerRef.current?.querySelector('input')?.blur();
+    void handleManualSearch({ name: result.name, buslineSearchResult: result });
+  };
+
+  const runBuslineSearch = async (query: string, requestId: number, selectFirst: boolean) => {
+    try {
+      const results = await lookupBuslineSearch(query);
+      if (requestId !== searchIdRef.current || !searchActiveRef.current) return;
+      if (selectFirst && results[0]) selectBuslineSearchResult(results[0]);
+      else setSuggestions(results);
+    } catch {
+      if (requestId === searchIdRef.current && searchActiveRef.current) setSuggestionsError('暂时无法读取已收录线路，请稍后重试。');
+    } finally {
+      if (requestId === searchIdRef.current) setSuggestionsLoading(false);
+    }
+  };
+
+  const onSearchInputChange = (value: string, selectFirst = false) => {
+    const requestId = ++searchIdRef.current;
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    setSearchQuery(value);
+    if (searchComposingRef.current) return;
+    const query = value.trim();
+    searchActiveRef.current = true;
+    setSuggestionsLoading(!!query);
+    setShowSuggestions(!!query);
+    setSuggestions([]);
+    setSuggestionsError('');
     if (!query) return;
-    isClearedRef.current = false;
-    searchVersionRef.current++;
-    setShowSuggestions(false);
-    setLoading(true);
-
-    const AMap = (window as any).AMap;
-    if (!AMap) {
-      setLoading(false);
-      return;
-    }
-    const isLineQuery = checkIsLineQuery(query);
-
-    // 1. Try Line Search first if it looks like a line
-    if (isLineQuery) {
-      const loaded = findLoadedLines(query)[0];
-      if (loaded) {
-        renderBusLine(loaded, AMap, mapRef.current);
-        setLoading(false);
-        return;
-      }
-      const lineSearch = new (amapSearch(AMap).LineSearch)({
-        pageIndex: 1,
-        city: currentCity || '全国',
-        pageSize: 1,
-        extensions: 'all'
-      });
-
-      const status = await new Promise<string>((resolve) => {
-        const timeout = setTimeout(() => resolve('fail'), 10000);
-        lineSearch.search(query, (s: string, result: any) => {
-          clearTimeout(timeout);
-          checkAmapQuotaError(s, result);
-          if (result && result.lineInfo) {
-            result.lineInfo = result.lineInfo.filter((l: any) => !isLineNameBlockedRef(l.name));
-          }
-          if (s === 'complete' && result.lineInfo && result.lineInfo.length > 0) {
-            renderBusLine(result.lineInfo[0], AMap, mapRef.current);
-            resolve('done');
-          } else {
-            resolve('fail');
-          }
-        });
-      });
-      if (status === 'done' || status === 'fail') {
-        if (status === 'done') {
-          setLoading(false);
-          return;
-        }
-      }
-    }
-
-    // 2. Fallback to Place Search
-    const ps = new (amapSearch(AMap).PlaceSearch)({
-      city: currentCity || '全国',
-      pageSize: 1,
-      extensions: 'all'
-    });
-
-    ps.search(query, (status: string, result: any) => {
-      setLoading(false);
-      if (checkAmapQuotaError(status, result)) return;
-      if (status === 'complete' && result.poiList && result.poiList.pois.length > 0) {
-        handleManualSearch(result.poiList.pois[0]);
-      }
-    });
+    if (selectFirst) void runBuslineSearch(query, requestId, true);
+    else searchDebounceRef.current = setTimeout(() => void runBuslineSearch(query, requestId, false), 180);
   };
 
   const [containerPos, setContainerPos] = useState<{ x: number, y: number } | null>(null);
@@ -6508,7 +6408,7 @@ export default function App() {
 
   // Background fetch for stop line counts when a bus line is active
   useEffect(() => {
-    if (!stationLineStatsRef.current || !activeBusLine || !activeBusLine.via_stops || !(window as any).AMap) return;
+    if (!stationLineStatsRef.current || !activeBusLine || activeBusLine.buslineOnly || !activeBusLine.via_stops || !(window as any).AMap) return;
 
     // Check if we need to load any stats
     let needsFetch = false;
@@ -6615,7 +6515,7 @@ export default function App() {
   const geometryDebug = import.meta.env.DEV && typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debugGeometry');
   const isAnswering = showMinigameModal && gameState === 'playing';
   if (!gamePage) return (
-    <div className="flex flex-col h-screen w-full bg-m3-surface-container-low font-sans text-slate-900 overflow-hidden relative selection:bg-m3-primary/20">
+    <div className="busline-map flex h-dvh w-full flex-col overflow-hidden bg-m3-surface-container-low font-sans text-slate-900 relative selection:bg-m3-primary/20">
       {geometryDebug && mapInstance && <GeometryDebugPanel map={mapInstance} />}
       {/* Global API Quota / Error Banner */}
       <AnimatePresence>
@@ -6674,11 +6574,11 @@ export default function App() {
           }} onDraw={drawBusPlan} />}
       </AnimatePresence>
 
-      <header className="fixed top-0 left-0 right-0 z-20 px-4 pt-5 pb-0 pointer-events-none">
+      <header ref={mapDockRef} className={`busline-map-dock fixed inset-x-0 px-3 pointer-events-none md:top-0 md:px-4 md:pt-5 ${showSuggestions ? 'z-[80]' : 'z-[60] md:z-20'}`}>
         {!isAnswering && !isDrawingMode && (
-          <div className="flex items-start justify-between gap-2 w-full h-[46px]">
+          <div className="flex w-full flex-col gap-1.5 md:h-[46px] md:flex-row md:items-start md:justify-between md:gap-2">
             {/* Pure Material 3 Search Bar (without logo, slightly narrower) */}
-            <div ref={searchContainerRef} className={`backdrop-blur-xl bg-m3-surface/95 border border-m3-outline-variant/40 shadow-sm flex items-center h-[46px] pointer-events-auto transition-all duration-300 ease-out overflow-visible ${isMobileSearchOpen ? 'absolute left-4 right-4 md:relative md:left-auto md:right-auto md:w-[280px] rounded-full z-30' : 'relative min-w-0 flex-1 sm:max-w-[260px] md:max-w-[320px] rounded-full'}`}>
+            <div ref={searchContainerRef} className="relative flex h-12 w-full min-w-0 items-center rounded-[1.45rem] border border-m3-outline-variant/40 bg-m3-surface/98 shadow-lg backdrop-blur-xl pointer-events-auto md:h-[46px] md:max-w-[320px] md:flex-1 md:rounded-full md:shadow-sm">
 
               {/* Search Lead Icon */}
               <div className="flex items-center justify-center pl-4 pr-1.5 shrink-0 text-m3-primary">
@@ -6689,12 +6589,13 @@ export default function App() {
               <div className="flex-1 flex items-center overflow-hidden h-full pl-1 pr-2">
                 <input 
                   type="text" 
-                  placeholder={(!enableCityWideSearch && zoomLevel < 12) ? t('searchHint') : t('searchPlaceholder')} 
-                  className="bg-transparent border-none outline-none text-xs sm:text-sm font-medium text-slate-800 w-full placeholder:text-[#66768D] h-full"
+                  placeholder="搜索已收录的公交站、线路…"
+                  className="h-full w-full border-none bg-transparent text-base font-medium text-slate-800 outline-none placeholder:text-[#66768D] md:text-sm"
                   value={searchQuery}
                   onChange={(e) => onSearchInputChange(e.target.value)}
                   role="combobox"
-                  aria-label="搜索线路或地点"
+                  aria-label="搜索已收录的公交线路或站点"
+                  enterKeyHint="search"
                   aria-autocomplete="list"
                   aria-expanded={showSuggestions}
                   aria-controls="search-suggestions"
@@ -6705,22 +6606,19 @@ export default function App() {
                     if (e.nativeEvent.isComposing || searchComposingRef.current || e.keyCode === 229) return;
                     if (e.key === 'Escape') { dismissSearchSuggestions(); return; }
                     if (e.key === 'Enter') {
-                      if (suggestions.length > 0 && showSuggestions) {
-                        handleManualSearch(suggestions[0]);
+                      if (!suggestionsLoading && suggestions.length && showSuggestions) {
+                        selectBuslineSearchResult(suggestions[0]);
                       } else {
-                        performFullSearch(searchQuery);
+                        onSearchInputChange(searchQuery, true);
                       }
-                      setIsMobileSearchOpen(false);
                     }
                   }}
-                  autoFocus={isMobileSearchOpen}
                 />
                 {searchQuery && (
                   <button 
-                    onMouseDown={(e) => { 
-                      e.preventDefault();
-                      handleClear();
-                    }} 
+                    type="button"
+                    onMouseDown={e => e.preventDefault()}
+                    onClick={() => handleClear()}
                     className="px-1.5 shrink-0 h-full flex items-center text-[#66768D] hover:text-slate-800"
                     title="清空搜索"
                   >
@@ -6732,7 +6630,6 @@ export default function App() {
               {!showMinigameModal && <button type="button" aria-label="公交线路规划 Beta" title="公交线路规划 Beta" aria-pressed={showBusPlanner && !showTimeline}
                 onClick={() => {
                   dismissSearchSuggestions();
-                  setIsMobileSearchOpen(false);
                   const openingPlanner = !showBusPlanner || showTimeline;
                   setShowBusPlanner(openingPlanner);
                   setShowTimeline(false);
@@ -6747,41 +6644,36 @@ export default function App() {
                 {showSuggestions && searchQuery.trim().length > 0 && (
                   <motion.div
                     id="search-suggestions" role="listbox" aria-busy={suggestionsLoading}
-                    initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                    initial={{ opacity: 0, scale: 0.98 }}
                     animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                    exit={{ opacity: 0, scale: 0.98 }}
                     transition={{ type: 'spring', damping: 20, stiffness: 280 }}
-                    className="absolute top-[calc(100%+8px)] left-0 right-0 bg-m3-surface/98 backdrop-blur-2xl border border-m3-outline-variant/40 rounded-3xl shadow-xl overflow-hidden py-2 z-50 pointer-events-auto"
+                    className="busline-search-suggestions absolute inset-x-0 bottom-[calc(100%+8px)] z-50 overflow-y-auto overscroll-contain rounded-[1.45rem] border border-m3-outline-variant/40 bg-m3-surface/98 py-1.5 shadow-xl backdrop-blur-2xl pointer-events-auto md:top-[calc(100%+8px)] md:bottom-auto md:max-h-[22rem]"
                   >
                     {suggestionsLoading && <p role="status" className="px-5 py-3 text-xs text-slate-500">正在查找…</p>}
-                    {!suggestionsLoading && suggestions.length === 0 && <p role="status" className="px-5 py-3 text-xs text-slate-500">暂无匹配结果，可按回车继续搜索</p>}
-                    {suggestions.slice(0, 6).map((tip, idx) => (
+                    {!suggestionsLoading && suggestions.length === 0 && <p role="status" className="px-5 py-3 text-xs text-slate-500">{suggestionsError || '已收录数据中暂无匹配线路或站点。'}</p>}
+                    {suggestions.map(tip => (
                       <button
-                        key={idx}
+                        key={tip.type + ':' + tip.name + ':' + (tip.type === 'busline' ? tip.line.id : tip.location.join(','))}
                         type="button"
                         role="option"
                         aria-selected={false}
                         onMouseDown={e => e.preventDefault()}
-                        onClick={() => handleManualSearch(tip)}
+                        onClick={() => selectBuslineSearchResult(tip)}
                         className="w-full px-5 py-3.5 text-left hover:bg-m3-primary/8 transition-colors flex flex-col gap-0.5 relative border-b border-m3-outline-variant/15 last:border-0"
                       >
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold text-slate-800">{tip.name}</span>
-                          {tip.isAggregated && (
-                            <span className="px-2 py-0.5 rounded-full bg-m3-primary-container text-[8px] font-bold text-m3-on-primary-container border border-m3-outline/10">
-                              汇总
-                            </span>
-                          )}
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border border-m3-outline/10 whitespace-nowrap shrink-0 ${getSuggestionKind(tip) === 'station' ? 'bg-m3-primary-container text-m3-on-primary-container' : getSuggestionKind(tip) === 'line' ? 'bg-m3-secondary-container text-m3-on-secondary-container' : 'bg-m3-surface-container text-slate-500'}`}>
-                            {getSuggestionKind(tip) === 'station' ? '站点' : getSuggestionKind(tip) === 'line' ? '线路' : '地点'}
+                          <span className="shrink-0 rounded-full bg-m3-primary-container px-2 py-0.5 text-[9px] font-bold text-m3-on-primary-container">
+                            {tip.type === 'busstop' ? '站点' : '线路'}
                           </span>
-                          {(tip.isUserSubmitted || tip.type === 'userLine') && (
+                          {tip.type === 'busline' && tip.line.isUserSubmitted && (
                             <span className="px-2 py-0.5 rounded-full bg-m3-tertiary-container text-[8px] font-bold text-m3-on-tertiary-container border border-m3-outline/10 whitespace-nowrap">
                               用户
                             </span>
                           )}
                         </div>
-                        <span className="text-[10px] font-medium text-slate-500">{tip.district || tip.address}</span>
+                        <span className="text-[10px] font-medium text-slate-500">{tip.city}</span>
                       </button>
                     ))}
                   </motion.div>
@@ -6790,7 +6682,7 @@ export default function App() {
             </div>
 
             {/* Quick Actions Container - Material Design 3 (Stations and Basemap moved to bottom hub) */}
-            <div className={`mr-12 flex shrink-0 items-center gap-1.5 transition-opacity sm:mr-16 sm:gap-2 duration-300 ${isMobileSearchOpen ? 'opacity-0 md:opacity-100 pointer-events-none md:pointer-events-auto' : 'opacity-100'}`}>
+            <div className="flex min-h-11 w-full flex-wrap items-center justify-evenly gap-1 rounded-[1.25rem] border border-m3-outline-variant/40 bg-m3-surface/96 px-2 py-0.5 shadow-md backdrop-blur-xl pointer-events-auto md:mr-12 md:min-h-0 md:w-auto md:shrink-0 md:justify-start md:gap-2 md:border-0 md:bg-transparent md:p-0 md:shadow-none md:backdrop-blur-none md:pointer-events-none">
 
               {/* Custom Draw Mode Paintbrush FAB - hidden when showUserSubmittedData is disabled */}
               {showUserSubmittedData && (
@@ -6850,16 +6742,22 @@ export default function App() {
               )}
 
               <a href="/game"
-                className="pointer-events-auto inline-flex h-[42px] shrink-0 items-center justify-center gap-2 rounded-full bg-m3-primary px-3 text-[13px] font-extrabold text-white shadow-sm transition hover:bg-[#285489] active:scale-95 sm:px-4 sm:text-sm">
-                <Gamepad2 className="hidden h-4.5 w-4.5 min-[420px]:block" aria-hidden="true" />
+                className="pointer-events-auto inline-flex h-[42px] shrink-0 items-center justify-center gap-1.5 rounded-xl bg-m3-primary px-3 text-[12px] font-extrabold text-white transition hover:bg-[#285489] active:scale-95 md:gap-2 md:rounded-full md:px-4 md:text-sm md:shadow-sm">
+                <Gamepad2 className="h-4 w-4 md:h-4.5 md:w-4.5" aria-hidden="true" />
                 巴士猜线
               </a>
 
               {(timelineAvailable || viewportStats.lines > 0 || showTimeline) && !isSearching && !loading && !isDrawingMode && !showMinigameModal && (
-                <button type="button" aria-pressed={showTimeline} aria-label="时间轴" title="时间轴" onClick={() => void openTimeline()} className={`pointer-events-auto shrink-0 w-[42px] h-[42px] rounded-2xl border border-m3-outline-variant/40 shadow-sm flex items-center justify-center transition-all active:scale-95 ${showTimeline ? 'bg-m3-primary text-white' : 'bg-m3-surface/95 text-m3-primary'}`}>
-                  <Clock className="w-4.5 h-4.5" />
+                <button type="button" aria-pressed={showTimeline} aria-label="时间轴" title="时间轴" onClick={() => void openTimeline()}
+                  className={`pointer-events-auto flex min-h-[42px] shrink-0 items-center justify-center gap-1.5 rounded-xl px-2.5 text-xs font-bold md:w-[42px] md:rounded-2xl md:border md:border-m3-outline-variant/40 md:p-0 md:shadow-sm ${showTimeline ? 'bg-m3-primary text-white' : 'text-m3-primary md:bg-m3-surface/95'}`}>
+                  <Clock className="h-4.5 w-4.5" />
+                  <span className="md:hidden">时间轴</span>
                 </button>
               )}
+              <button type="button" onClick={() => { setSettingsTab('general'); setShowSettings(true); }}
+                className="flex min-h-[42px] items-center gap-1.5 rounded-xl px-2.5 text-xs font-bold text-m3-primary md:hidden">
+                <Settings className="h-4.5 w-4.5" aria-hidden="true" /> 设置
+              </button>
             </div>
           </div>
         )}
@@ -8060,6 +7958,7 @@ export default function App() {
           accessToken={gameAccessToken}
           authLoading={gameAuthLoading}
           hideTrigger={isAnswering}
+          triggerClassName="hidden md:block"
           open={showSettings}
           tab={settingsTab}
           onTabChange={setSettingsTab}
@@ -8554,7 +8453,7 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 20 }}
-              className={`fixed bottom-[76px] left-4 right-4 md:top-[80px] md:bottom-auto md:left-4 md:right-auto ${topCard === 'stop' ? 'z-[55]' : 'z-[45]'} pointer-events-auto`}
+              className={`fixed bottom-[var(--busline-dock-clearance)] left-4 right-4 md:top-[80px] md:bottom-auto md:left-4 md:right-auto ${topCard === 'stop' ? 'z-[55]' : 'z-[45]'} pointer-events-auto`}
               onPointerDown={() => setTopCard('stop')}
             >
               <div className="backdrop-blur-xl bg-m3-surface/98 border border-m3-outline-variant/40 p-3.5 md:p-5 rounded-[1.75rem] shadow-xl w-full md:w-[340px] md:max-h-[calc(100vh-200px)] overflow-hidden flex flex-col relative select-none">
@@ -8659,6 +8558,11 @@ export default function App() {
                       <div 
                         key={line + idx}
                         onClick={() => {
+                          const savedLine = selectedStop?.buslineSearchLines?.get(line) as BusLine | undefined;
+                          if (savedLine) {
+                            selectBuslineSearchResult({ type: 'busline', name: line, city: savedLine.city, line: savedLine });
+                            return;
+                          }
                           void handleManualSearch({ name: line, type: 'busline', routeId: viewportRoute?.id,
                             sourceCity: viewportRoute?.city || (selectedStop?.key?.startsWith('tile:') ? selectedStop.city : undefined) });
                         }}
@@ -8725,7 +8629,7 @@ export default function App() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 20 }}
-              className="fixed bottom-[76px] left-4 right-4 md:top-[80px] md:bottom-auto md:left-4 md:right-auto z-[70] pointer-events-auto md:w-[340px]"
+              className="fixed bottom-[var(--busline-dock-clearance)] left-4 right-4 md:top-[80px] md:bottom-auto md:left-4 md:right-auto z-[70] pointer-events-auto md:w-[340px]"
             >
               <div className="backdrop-blur-xl bg-m3-surface/98 border border-m3-outline-variant/40 p-4 rounded-[1.75rem] shadow-2xl max-h-[calc(100vh-140px)] overflow-hidden flex flex-col relative select-none">
                 <button 
@@ -8791,7 +8695,7 @@ export default function App() {
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
               onPointerDown={() => setTopCard('line')}
-              className={`fixed ${(selectedStop || selectedSegmentLines) ? 'bottom-[200px]' : 'bottom-[76px]'} md:bottom-auto left-4 right-4 md:top-20 md:left-4 ${topCard === 'line' ? 'z-[55]' : 'z-[45]'} md:w-64 pointer-events-auto md:h-[calc(100vh-200px)]`}
+              className={`fixed ${(selectedStop || selectedSegmentLines) ? 'bottom-[calc(var(--busline-dock-clearance)+7.75rem)]' : 'bottom-[var(--busline-dock-clearance)]'} md:bottom-auto left-4 right-4 md:top-20 md:left-4 ${topCard === 'line' ? 'z-[55]' : 'z-[45]'} md:w-64 pointer-events-auto md:h-[calc(100vh-200px)]`}
             >
               <div className="backdrop-blur-xl bg-m3-surface/98 border border-m3-outline-variant/40 rounded-[1.75rem] shadow-xl h-[100px] md:h-full flex flex-col overflow-hidden relative">
                 <button 
@@ -8869,7 +8773,7 @@ export default function App() {
                               lines: [],
                               city: currentCity
                             });
-                            const details = await fetchStopDetails(stop.name, [stop.location.lng, stop.location.lat], (window as any).AMap, currentCity);
+                            const details = await fetchStopDetails(stop.name, [stop.location.lng, stop.location.lat], (window as any).AMap, activeBusLine.city || currentCity, activeBusLine.buslineOnly ? activeBusLine : undefined);
                             if (details) {
                               setSelectedStop({ ...details, city: currentCity });
                             } else {
@@ -8903,7 +8807,7 @@ export default function App() {
           <button 
             type="button"
             onClick={handleLocate}
-            className="fixed bottom-22 sm:bottom-6 right-4 sm:right-6 z-30 backdrop-blur-xl border border-m3-outline-variant/40 bg-m3-surface/95 text-slate-700 hover:text-m3-primary hover:bg-m3-surface-container-high w-11 h-11 sm:w-12 sm:h-12 rounded-full shadow-[0_6px_20px_rgba(28,47,39,0.15)] flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 group pointer-events-auto"
+            className="fixed bottom-[calc(var(--busline-dock-clearance)+1.75rem)] md:bottom-6 right-4 md:right-6 z-30 backdrop-blur-xl border border-m3-outline-variant/40 bg-m3-surface/95 text-slate-700 hover:text-m3-primary hover:bg-m3-surface-container-high w-11 h-11 sm:w-12 sm:h-12 rounded-full shadow-[0_6px_20px_rgba(28,47,39,0.15)] flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95 group pointer-events-auto"
             title="定位当前位置"
           >
             <Navigation className="w-5 h-5 transition-transform group-hover:scale-110 text-m3-primary fill-current" />
@@ -8930,7 +8834,7 @@ export default function App() {
 
       </main>
 
-      {!isAnswering && <footer className="fixed bottom-2 right-4 sm:bottom-3 sm:right-6 z-10 pointer-events-none flex flex-col items-end gap-1.5">
+      {!isAnswering && <footer className="fixed bottom-[var(--busline-dock-clearance)] right-4 md:bottom-3 md:right-6 z-10 pointer-events-none flex flex-col items-end gap-1.5">
         <p className="max-w-[70vw] text-right text-[10px] leading-snug text-slate-600 bg-m3-surface/85 rounded px-1.5 py-0.5">
           公交线路数据来源：高德地图开放平台 · 仅供参考
         </p>

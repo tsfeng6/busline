@@ -357,7 +357,7 @@ export function BusPlanner({ onClose, hidden, disabled, showDetails, currentCity
   };
   if (hidden) return null;
   return <motion.aside initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} transition={{ type: 'spring', damping: 26, stiffness: 260 }}
-    aria-label="公交路线规划" className="fixed inset-x-3 bottom-[max(.75rem,env(safe-area-inset-bottom))] sm:inset-x-auto sm:left-4 sm:top-20 sm:bottom-auto z-[75] sm:w-[400px] max-h-[52dvh] sm:max-h-[calc(100dvh-9rem)] flex flex-col gap-2 pointer-events-none">
+    aria-label="公交路线规划" className="fixed inset-x-3 bottom-[var(--busline-dock-clearance)] md:inset-x-auto md:left-4 md:top-20 md:bottom-auto z-[75] md:w-[400px] max-h-[52dvh] md:max-h-[calc(100dvh-9rem)] flex flex-col gap-2 pointer-events-none">
     <div className={`pointer-events-auto rounded-2xl bg-m3-surface border border-m3-outline-variant/50 shadow-lg ${mobileSection !== 'edit' && picking === null ? 'hidden sm:block' : ''}`}>
     <div className="flex justify-between items-center gap-2 px-4 py-2 border-b border-m3-outline-variant/30">
       <h2 className="text-sm font-black text-m3-primary flex items-center gap-2"><Bus className="w-4 h-4" />公交线路规划 Beta</h2>
