@@ -460,7 +460,7 @@ test('contest labels are exclusive and only valid for their mode', async () => {
   assert.equal(contestRules('line', ['special']).multiplier, 1);
   assert.equal(contestRules('line', ['niche']).multiplier, 1.5);
   assert.equal(contestRules('line', ['unusual']).multiplier, 2);
-  assert.equal(contestRules('line', ['unlimited']).multiplier, 2.5);
+  assert.equal(contestRules('line', ['unlimited']).multiplier, 2.25);
   assert.equal(contestRules('line', []).showBasemap, true);
   assert.equal(contestRules('line', ['network-only']).showBasemap, false);
   assert.equal(contestRules('line', ['network-only']).multiplier, 1);

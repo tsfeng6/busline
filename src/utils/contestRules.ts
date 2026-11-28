@@ -42,7 +42,7 @@ export function contestTagGroups(mode: GameMode): { label: string; tags: Tag[] }
       { id: 'special', label: '加入至微型线路', factor: 2 },
       { id: 'niche', label: '加入至小众线路', factor: 3 },
       { id: 'unusual', label: '加入至古怪线路', factor: 4 },
-      { id: 'unlimited', label: '无限制', factor: 5 },
+      { id: 'unlimited', label: '无限制', factor: 4.5 },
     ] : [
       { id: 'medium-stops', label: '加入中型站', factor: 2 },
       { id: 'all-stops', label: '加入小站', factor: 3 },
