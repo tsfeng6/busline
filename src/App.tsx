@@ -9156,6 +9156,14 @@ export default function App() {
                       <dt className="text-slate-600">总用时</dt>
                       <dd className="font-black tabular-nums text-slate-900">{formatGameTime(Math.floor(gameElapsedMs / 1000))}</dd>
                     </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-600">答对题数</dt>
+                      <dd className="font-black tabular-nums text-slate-900">{gameHistory.filter(item => item.isCorrect).length} 题</dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-600">已用提示</dt>
+                      <dd className="font-black tabular-nums text-slate-900">{gameHintLimit - gameHints.remaining} 次</dd>
+                    </div>
                     <div className="space-y-2">
                       <dt className="text-slate-600">本局标签</dt>
                       <dd className="flex flex-wrap gap-1.5">
