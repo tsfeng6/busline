@@ -26,9 +26,9 @@ Production 环境变量（不得使用 `VITE_` 前缀）：
 
 ## 北京实时公交试点
 
-试点覆盖 F28 和 F86 主线的四个行驶方向。点开线路后，启用「实时公交」即可查看车辆。页面可见时约每 20 秒更新一次，超过 90 秒的车辆位置会移除。
+试点的网页入口已移除。以下是 F28 和 F86 主线四个行驶方向的网关接口记录。
 
-在 EdgeOne 设置 `BEIJING_REALTIME_FEED_URL` 为已获网站展示授权的 HTTPS JSON 数据源地址。数据源需要 Bearer 认证时，把密钥置于 `BEIJING_REALTIME_FEED_TOKEN`。两项均为服务端变量。数据源尚未配置时，网页会显示「试点尚未接入数据」。
+网关通过 EdgeOne 服务端变量 `BEIJING_REALTIME_FEED_URL` 读取获网站展示授权的 HTTPS JSON 数据源。数据源需要 Bearer 认证时，网关使用 `BEIJING_REALTIME_FEED_TOKEN`。数据源未配置时，接口返回 `unconfigured`。
 
 对接层把数据方的线路方向 ID 映射到巴士线路图的 ID，并把坐标转换到高德底图使用的 GCJ‑02。以下字段为网关所需的数据格式：
 
