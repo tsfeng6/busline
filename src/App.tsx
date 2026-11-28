@@ -31,6 +31,8 @@ import { discoverStationLines, expandSavedStationCoverage, segmentGridKeys, type
 import { joinLineSegments } from './utils/mapPerformance';
 import { getSuggestionKind, rankSearchSuggestions } from './utils/searchSuggestions';
 import { BusPlanner } from './components/BusPlanner';
+import { BeijingRealtime } from './components/BeijingRealtime';
+import { isBeijingPilotRoute } from './utils/beijingRealtime';
 import { pickPlannerMapSelection } from './utils/plannerMapSelection';
 import { isLocalBusLine, plannerTransferMarkers, type BusPlan, type PlannerMapSelection, type PlannerPoint } from './utils/busPlanner';
 import { TimelineBar } from './components/TimelineBar';
@@ -1263,6 +1265,9 @@ export default function App() {
   const [showToolbox, setShowToolbox] = useState(false);
   const [mapInstance, setMapInstance] = useState<any>(null);
   const [activeBusLine, setActiveBusLine] = useState<any | null>(null);
+  const activeRouteId = String(activeBusLine?.id ?? '');
+  const beijingPilotRoute = !activeBusLine?.isUserSubmitted && /^(北京|北京市)$/.test(activeBusLine?.city ?? '')
+    && isBeijingPilotRoute(activeRouteId) ? activeRouteId : null;
   const [topCard, setTopCard] = useState<'stop' | 'line'>('stop');
 
   const reviewItem = gameHistory[reviewIndex];
@@ -8845,6 +8850,8 @@ export default function App() {
                   <span className="text-[10px] md:text-xs text-slate-500 font-medium truncate">
                     {parseLineInfo(activeBusLine.name).start !== '-' ? `${parseLineInfo(activeBusLine.name).start} - ${parseLineInfo(activeBusLine.name).end}` : '环线 / 方向未知'}
                   </span>
+                  {beijingPilotRoute && (gatewayBase || ADMIN_GATEWAY_URL) && <BeijingRealtime
+                    key={beijingPilotRoute} route={beijingPilotRoute} gateway={gatewayBase || ADMIN_GATEWAY_URL} map={mapInstance} />}
                 </div>
                 <div className="flex-1 overflow-x-auto md:overflow-x-hidden md:overflow-y-auto custom-scrollbar p-0 md:p-4 md:pr-2 flex flex-row md:flex-col items-center md:items-stretch snap-x snap-mandatory mt-1 md:mt-0">
                   <div className="relative flex flex-row md:flex-col items-center md:items-stretch md:pl-1 h-full md:h-auto w-max md:w-auto px-4 md:px-0">

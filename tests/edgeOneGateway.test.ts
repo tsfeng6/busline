@@ -23,6 +23,43 @@ const sample=()=>({schemaVersion:1,city:'北京市',scope:'city',coverage:'obser
  stops:[{id:'s',name:'站',address:'6路',location:{lng:116.123456789123,lat:39.987654321098}}],
  lines:[{id:'l',name:'6路',city:'北京市',path:[[116.123456789123,39.987654321098],[116.2,39.2]],via_stops:[]}]}) as any;
 
+test('Beijing pilot separates directions, removes stale positions and shares one feed request', async () => {
+ const {store} = fixture();
+ const pilotEnv = { BEIJING_REALTIME_FEED_URL: 'https://operator.example/positions', BEIJING_REALTIME_FEED_TOKEN: 'test-feed-token' };
+ const now = Date.now();
+ const position = { routeId: '110100015388', id: 'operator-vehicle-1', lng: 116.16, lat: 39.75, observedAt: now - 5000 };
+ let calls = 0;
+ const upstream: typeof fetch = async (input, init) => {
+   calls++;
+   assert.equal(String(input), pilotEnv.BEIJING_REALTIME_FEED_URL);
+   assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer test-feed-token');
+   assert.equal(init?.redirect, 'error');
+   return Response.json({ source: '测试公交运营方', positions: [
+     { ...position, lng: 116.11, observedAt: now - 10000 },
+     { ...position, plate: 'raw-plate', deviceId: 'private-device-id' },
+     { ...position, routeId: '110100016246', lng: 116.23 },
+     { ...position, id: 'stale', observedAt: now - 91_000 },
+     { ...position, id: 'future', observedAt: now + 30_000 },
+     { ...position, id: 'invalid', lng: 0 },
+   ] });
+ };
+ const request = (routeId: string, config = pilotEnv) =>
+   handleEdgeOneGateway(new Request('https://gateway.example/transit/realtime/beijing?routeId=' + routeId), config, store, upstream);
+ assert.equal((await request('unknown')).status, 404);
+ const disabled = await request('110100015388', { BEIJING_REALTIME_FEED_URL: '', BEIJING_REALTIME_FEED_TOKEN: '' });
+ assert.deepEqual(await disabled.json(), { state: 'unconfigured' });
+ assert.equal(calls, 0);
+ const [first, opposite, empty] = await Promise.all(['110100015388', '110100016246', '900000220963'].map(async route => (await request(route)).json()));
+ assert.equal(calls, 1);
+ assert.equal(first.source, '测试公交运营方');
+ assert.equal(first.vehicles.length, 1);
+ assert.deepEqual(first.vehicles[0], { id: first.vehicles[0].id, lng: 116.16, lat: 39.75, observedAt: now - 5000 });
+ assert.match(first.vehicles[0].id, /^[a-f0-9]{20}$/);
+ assert.equal(opposite.vehicles[0].lng, 116.23);
+ assert.notEqual(opposite.vehicles[0].id, first.vehicles[0].id);
+ assert.deepEqual(empty.vehicles, []);
+});
+
 test('Cocomap credentials reach only the provider and its REST results work with search callers', async () => {
  const {store,data} = fixture();
  const key = 'sk_coco_example';

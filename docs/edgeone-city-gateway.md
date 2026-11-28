@@ -24,6 +24,26 @@ Production 环境变量（不得使用 `VITE_` 前缀）：
 
 保存变量后重新部署。新增函数必须在构建部署中显示，只有前端部署成功不代表后端可用。
 
+## 北京实时公交试点
+
+试点覆盖 F28 和 F86 主线的四个行驶方向。点开线路后，启用「实时公交」即可查看车辆。页面可见时约每 20 秒更新一次，超过 90 秒的车辆位置会移除。
+
+在 EdgeOne 设置 `BEIJING_REALTIME_FEED_URL` 为已获网站展示授权的 HTTPS JSON 数据源地址。数据源需要 Bearer 认证时，把密钥置于 `BEIJING_REALTIME_FEED_TOKEN`。两项均为服务端变量。数据源尚未配置时，网页会显示「试点尚未接入数据」。
+
+对接层把数据方的线路方向 ID 映射到巴士线路图的 ID，并把坐标转换到高德底图使用的 GCJ‑02。以下字段为网关所需的数据格式：
+
+| 字段 | 含义 |
+|---|---|
+| `source` | 页面显示的数据来源名称 |
+| `positions[].routeId` | F28 `110100015388`（社科大良乡 → 周庄村南）、`110100016246`（反向），F86 `900000220963`（官道西 → 悦都新苑）、`900000220962`（反向） |
+| `positions[].id` | 数据方的车辆标识，用于合并同一车辆的多条记录 |
+| `positions[].lng`、`positions[].lat` | GCJ‑02 经度、纬度，均为数字 |
+| `positions[].observedAt` | 数据方实际测得车辆位置的 Unix 时间戳，单位毫秒 |
+
+网关只返回当前线路方向的有效位置、定位时间、临时标识和来源名称。对接前可向[车来了交通数据合作](https://www.chelaile.net.cn/web/aboutus)确认线路覆盖、刷新频率、署名和网页展示条件。
+
+调研参考了 [chelaile-api-collect](https://github.com/afterglowsdev/chelaile-api-collect) 的公开说明。该仓库采用 [MIT 许可](https://github.com/afterglowsdev/chelaile-api-collect/blob/main/LICENSE)。此实现独立编写，未引入该仓库的代码、资源或非官方 H5 签名和解密逻辑。运营数据的授权与署名依数据提供方协议执行。
+
 ## 切换步骤
 
 1. 保持网站 DNS、GitHub Pages 和旧 Worker 不变，先部署新函数。

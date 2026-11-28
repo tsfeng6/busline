@@ -7,6 +7,8 @@ import { getGameHint, isGameHintComplete } from '../../src/utils/gameHint';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { cityDataKey } from '../../src/utils/cityDataset';
 import { COCOMAP_API_PATHS, isCocomapKey } from '../../src/utils/cocomap';
+import { isBeijingPilotRoute } from '../../src/utils/beijingRealtime';
+import { readBeijingPilot } from './beijingRealtime';
 import { MAX_CITY_BYTES, CITY_CHUNK_BYTES, CITY_UPLOAD_FORMAT, CITY_RECORD_FORMAT } from '../../src/utils/cityTransfer';
 
 export interface UploadStore {
@@ -529,6 +531,12 @@ export async function handleEdgeOneGateway(request:Request,env:Env,store:UploadS
     if(path==='/health'&&request.method==='GET')return json({service:'busline-city-gateway',platform:'edgeone',version:1,
       configured:!!env.GITHUB_DISPATCH_TOKEN&&(env.CALLBACK_SECRET?.length||0)>=32&&(env.RATE_LIMIT_SALT?.length||0)>=16});
     if(request.method==='OPTIONS')return new Response(null,{status:204,headers:{...cors,'Access-Control-Allow-Methods':'GET,POST,PUT,DELETE,OPTIONS','Access-Control-Allow-Headers':'Content-Type,Authorization,x-admin-session,x-city-upload-token','Access-Control-Max-Age':'600'}});
+    if (path === '/transit/realtime/beijing') {
+      if (request.method !== 'GET') return json({ state: 'unavailable' }, 405);
+      const route = new URL(request.url).searchParams.get('routeId') ?? '';
+      if (!isBeijingPilotRoute(route)) return json({ state: 'unavailable' }, 404);
+      return json(await readBeijingPilot(route, env.BEIJING_REALTIME_FEED_URL, env.BEIJING_REALTIME_FEED_TOKEN ?? '', transport));
+    }
     if (path === '/amap/cocomap') {
       if (request.method !== 'POST') return json({ info: 'COCOMAP_INVALID_REQUEST' }, 405);
       if (!allowed.includes(origin)) return json({ info: 'COCOMAP_FORBIDDEN' }, 403);
